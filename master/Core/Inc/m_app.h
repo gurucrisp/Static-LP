@@ -1,0 +1,104 @@
+/**
+  * @file    m_app.h
+  * @brief   Master core, part 7: the application. Owns the settings, the fault log, the UI and the keys, and connects them to the world through plain data: raw key levels and the slave's
+  *          latest status in, a 4 x 20 text frame out. PURE LOGIC (the flash is MFlash_t), so the whole thing runs on the PC; master_monitor.c supplies the hardware.
+  *          Release 0.9.4: it displays, configures AND now tells the slave what to do through the $M frame (m_ctl.h): run / stop, the Set Voltage, the Max Correction and the clear counter. It still never drives a contactor.
+  */
+#ifndef M_APP_H
+#define M_APP_H
+#include <stdint.h>
+#include "m_ui.h"
+#include "m_ctl.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* flash pages (STM32G070, 128 KB, 2 KB pages). The old firmware keeps its settings in the last page, 0x0801F800: these are below it and never touch it. */
+#define MAPP_PAGE_SETTINGS_A   0x0801F000UL
+#define MAPP_PAGE_SETTINGS_B   0x0801E800UL
+#define MAPP_PAGE_CALIB_A      0x0801E000UL      /* the load-current calibration */
+#define MAPP_PAGE_CALIB_B      0x0801D800UL
+#define MAPP_PAGE_LOG_A        0x0801D000UL
+#define MAPP_PAGE_LOG_B        0x0801C800UL
+
+/* LOAD CURRENT, from the master CT. The glue gives the average ADC count (12 bit, times 16). current = gain * (counts - zero) * 0.213 dA per count. The defaults reproduce the original firmware
+ * (65.25 / 766, minus 3 A), so nothing changes until a calibration is made: ZERO from Set-Mode "Calibration" = Yes (output off, no load), SPAN from the Load Calibration page (MENU, MENU, MENU in
+ * Run-Mode) with the clamp-meter reading typed in while the load runs. Stored in flash; Factory Reset keeps it. */
+#define MAPP_CT_DA_PER_COUNT_X1000   213U      /* nominal tenths of an amp per ADC count: 65.25 / 766 / 4 A */
+#define MAPP_CT_ZERO_DEFAULT_X16     (141U * 16U)   /* the original firmware's 3 A offset, in counts */
+#define MAPP_CT_GAIN_DEFAULT         1000U     /* x1000 */
+#define MAPP_CT_MIN_CAL_DA           20U       /* the span calibration needs at least 2.0 A of load (spec) */
+typedef struct { uint16_t zero_x16, gain_x1000; uint8_t from_flash; } MCal_t;
+
+/* the output counts as "at the set voltage" within this many tenths of a volt of it (2.0 V) */
+#define MAPP_BAND_DV   20
+
+typedef struct
+{
+    uint8_t  have;               /* a valid $S frame within the link timeout                         */
+    uint16_t vin_dv, vout_dv;    /* tenths of a volt                                                  */
+    uint16_t freq_chz;           /* hundredths of a hertz, 0 = unknown                                */
+    uint8_t  state;              /* the slave's state: 0 stopped, 1 starting, 2 running, 3 fault       */
+    uint8_t  fault;              /* the slave's fault code, 0 = none                                  */
+    uint8_t  link_ok;            /* the slave's frames are arriving                                    */
+    uint16_t load_da;            /* the master CT, tenths of an amp                                    */
+    uint8_t  load_ok;            /* the CT was read (otherwise the load is shown as --.-)              */
+    uint16_t ct_x16;             /* the CT: average ADC count times 16. With ct_raw = 1 the application computes the load from this and its calibration, and load_da / load_ok are ignored */
+    uint8_t  ct_raw;
+    uint8_t  e_valid;            /* $E frames are arriving (the slave runs the master-control config)  */
+    uint8_t  in_band;            /* $E IN_BAND, from a fresh $E                                        */
+    uint8_t  heat;               /* the slave's OVERHEAT flag (not available yet: 0)                   */
+    uint8_t  ct_peak;            /* the CT reached full scale (not measured yet: 0)                    */
+    uint8_t  clr_echo;           /* $E: the clear counter the slave last saw                           */
+    uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
+    uint16_t win_lo_dv, win_hi_dv, vout_max_dv;   /* the slave's input window and output guard, tenths of a volt */
+} MAppData_t;
+
+typedef struct
+{
+    const MFlash_t *fl;
+    MStore_t     sstore;
+    MSettings_t  settings;       /* the live settings                                                 */
+    MLog_t       log;
+    MUI_t        ui;
+    MKeys_t      keys;
+    MFaults_t    eng;                  /* the fault and restart engine: it decides run, the clear pulses, the contactor and the buzzer */
+    MFOut_t      eout;
+    MCtlOut_t    ctl_out;              /* the content of the next $M frame                                    */
+    MLimits_t    lim;                  /* the slave's limits, from its $H frame                               */
+    MStore_t     cstore;               /* the calibration record                                              */
+    MCal_t       cal;
+    uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
+    uint8_t      lim_set;
+    uint8_t      ctl_valid;            /* $M may be sent: the slave was heard ($E), or its $S frames have been arriving for 3 s */
+    uint8_t      have_seen;
+    uint32_t     t_first_have, m_sent;
+    char         status[21];           /* what the unit is waiting for, for the Run screen */
+    MAppData_t   last;                 /* the latest data, for the diagnostics page */
+    uint8_t      no_cuts;              /* TEST: the master applies no voltage limits (see MApp_SetTestNoCuts)  */
+    struct { int32_t ema; int32_t shown; uint8_t init; } f_vin, f_vout, f_load;    /* the display filters */
+    uint8_t      settings_from_flash;   /* 1 = the settings were read from flash, 0 = the defaults are in use */
+    uint32_t     save_failures;
+} MApp_t;
+
+void    MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t page_set_a, uint32_t page_set_b, uint32_t page_log_a, uint32_t page_log_b, uint32_t now_ms);
+/* call every few ms: raw key levels (1 = pressed) and the slave's latest data; fills the frame to draw */
+void    MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);
+uint8_t MApp_SetModeOpen(const MApp_t *a);      /* the output must be off while this is 1 */
+const MCtlOut_t *MApp_Control(const MApp_t *a); /* the content of the $M frame to send to the slave (the caller sends it every 100 ms, and at once when it changes) */
+/* TEST ONLY: 1 = the master's own voltage faults (I/P LV, I/P HV, O/P LV, O/P HV) and the input check before a start are OFF: the engine is given limits of 1 to 999 V instead of the Set-Mode values.
+ * The overload, heat, inrush, power-stage, mains, link and flip rules are unchanged. Never ship with this on. */
+void    MApp_SetTestNoCuts(MApp_t *a, uint8_t on);
+/* the load-current calibration lives in two flash pages of its own; call once after MApp_Init to enable it (it also turns on Set-Mode "Calibration") */
+void    MApp_InitCal(MApp_t *a, uint32_t page_a, uint32_t page_b);
+void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
+uint8_t MApp_ShowsDiag(const MApp_t *a);
+void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */
+uint8_t MApp_ControlValid(const MApp_t *a);     /* 1 once the slave has been heard ($E) and the clear counter synced: only then is $M sent */
+const MFOut_t *MApp_Engine(const MApp_t *a);    /* contactors, buzzer, faults: what the glue must drive */
+uint8_t MApp_ShowsMonitor(const MApp_t *a);     /* the app wants the monitor diagnostics drawn instead of the frame */
+
+#ifdef __cplusplus
+}
+#endif
+#endif

@@ -1,0 +1,598 @@
+/**
+  ******************************************************************************
+  * @file    master_monitor.c
+  * @brief   Master bring-up monitor. See master_monitor.h.
+  ******************************************************************************
+  */
+
+#include <stdio.h>
+#include <string.h>
+#include "master_monitor.h"
+#include "lcd.h"
+#include "link_v2.h"
+
+MasterMon_t g_mon;
+static LinkV2Rx_t s_l2rx;       /* a second receiver for the version 2 frames ($E, $H); $S still goes through the version 1 one */
+
+static LinkRx_t  s_lrx;
+static uint32_t  s_fps_count;
+static uint32_t  s_fps_window_start_ms;
+
+/* ========================================================================= */
+/* Frame bookkeeping (no hardware)                                           */
+/* ========================================================================= */
+
+void Mon_Reset(void)
+{
+    memset(&g_mon, 0, sizeof g_mon);
+    LinkRx_Init(&s_lrx);
+    LinkV2Rx_Init(&s_l2rx);
+    s_fps_count = 0U;
+    s_fps_window_start_ms = 0U;
+}
+
+static void on_frame(const LinkStatus_t *st, uint32_t now_ms)
+{
+    /* Count missing frames from gaps in the sequence number - but only while
+     * the link was alive. After a silent spell (longer than the link timeout)
+     * the slave has probably restarted and its counter began again at 0, so
+     * just re-synchronise. A jump of more than 100 is treated the same way. */
+    if (g_mon.have_seq &&
+        ((uint32_t)(now_ms - g_mon.t_last_ms) < MON_LINK_TIMEOUT_MS))
+    {
+        uint8_t gap = (uint8_t)(st->seq - g_mon.last_seq - 1U);
+        if (gap <= 100U)
+        {
+            g_mon.lost += gap;
+        }
+    }
+    g_mon.last_seq   = st->seq;
+    g_mon.have_seq   = 1U;
+    g_mon.last       = *st;
+    g_mon.have_frame = 1U;
+    g_mon.t_last_ms  = now_ms;
+    s_fps_count++;
+}
+
+void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
+                      uint32_t *rd, uint32_t wr, uint32_t now_ms)
+{
+    LinkStatus_t st;
+    uint32_t     r    = *rd;
+    uint32_t     mask = ring_size - 1U;
+
+    while (r != wr)
+    {
+        uint8_t b = ring[r];
+        r = (r + 1U) & mask;
+        g_mon.bytes_rx++;
+        if (LinkRx_Feed(&s_lrx, b, &st))
+        {
+            on_frame(&st, now_ms);
+        }
+        {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
+            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_t_ms = now_ms; }
+            else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; }
+        }
+    }
+    *rd = r;
+    g_mon.frames_ok  = s_lrx.frames_ok;
+    g_mon.frames_bad = s_lrx.frames_bad;
+    g_mon.overflows  = s_lrx.overflows;
+}
+
+void Mon_Tick(uint32_t now_ms)
+{
+    if ((uint32_t)(now_ms - s_fps_window_start_ms) >= 1000U)
+    {
+        g_mon.fps = s_fps_count;
+        s_fps_count = 0U;
+        s_fps_window_start_ms = now_ms;
+    }
+}
+
+/* ========================================================================= */
+/* Screen composition (no hardware)                                          */
+/* ========================================================================= */
+
+static void put_text(char *row, uint32_t col, const char *s)
+{
+    while ((*s != '\0') && (col < MON_LCD_COLS))
+    {
+        row[col++] = *s++;
+    }
+}
+
+static uint32_t cap99(uint32_t v)
+{
+    return (v > 99U) ? 99U : v;
+}
+
+void Mon_Compose(const MasterMon_t *m, uint32_t now_ms,
+                 char rows[MON_LCD_ROWS][MON_LCD_COLS + 1U])
+{
+    char     tmp[40];
+    uint32_t r;
+    int      linked = (m->have_frame != 0U) &&
+                      ((uint32_t)(now_ms - m->t_last_ms) < MON_LINK_TIMEOUT_MS);
+
+    for (r = 0U; r < MON_LCD_ROWS; r++)
+    {
+        memset(rows[r], ' ', MON_LCD_COLS);
+        rows[r][MON_LCD_COLS] = '\0';
+    }
+
+    if (linked)
+    {
+        const LinkStatus_t *s = &m->last;
+
+        if ((s->state != 0U) || (s->fault != 0U))
+        {
+            /* The slave's power stage reports something: show it instead of the
+             * calibration flag. state: 1 starting, 2 running, 3 fault;
+             * fault: slave_ctrl.h CF_* code (e.g. 1 break, 2 FLT, 8 ZC lost). */
+            const char *sn = (s->state == 1U) ? "START" : ((s->state == 2U) ? "RUN" :
+                             ((s->state == 3U) ? "FAULT" : "?"));
+            (void)snprintf(tmp, sizeof tmp, "SLAVE %c %-5s F%02u", s->phase, sn,
+                           (unsigned)((s->fault > 99U) ? 99U : s->fault));
+        }
+        else
+        {
+            (void)snprintf(tmp, sizeof tmp, "SLAVE %c LINK OK %s", s->phase,
+                           ((s->flags & LINK_FLAG_CALIBRATED) != 0U) ? "CAL" : "RAW");
+        }
+        put_text(rows[0], 0U, tmp);
+
+        if ((s->flags & LINK_FLAG_MEAS_VALID) != 0U)
+        {
+            (void)snprintf(tmp, sizeof tmp, "Vin  %u.%u V",
+                           (unsigned)(s->vin_dv / 10U), (unsigned)(s->vin_dv % 10U));
+            put_text(rows[1], 0U, tmp);
+            (void)snprintf(tmp, sizeof tmp, "Vout %u.%u V",
+                           (unsigned)(s->vout_dv / 10U), (unsigned)(s->vout_dv % 10U));
+            put_text(rows[2], 0U, tmp);
+        }
+        else
+        {
+            put_text(rows[1], 0U, "Vin  --- V");
+            put_text(rows[2], 0U, "Vout --- V");
+        }
+        /* bench diagnostics: F<idle>/<running> = FLT pin falling edges while the converter was NOT running / running;
+         * K<idle>/<running> = break-input events. Shown only once something has been seen. */
+        if ((s->diag & 0x03FFU) != 0U)
+        {
+            (void)snprintf(tmp, sizeof tmp, "F%u/%u", (unsigned)(s->diag & 31U), (unsigned)((s->diag >> 5) & 31U));
+            put_text(rows[1], 13U, tmp);
+        }
+        if ((s->diag & 0xFC00U) != 0U)
+        {
+            (void)snprintf(tmp, sizeof tmp, "K%u/%u", (unsigned)((s->diag >> 10) & 7U), (unsigned)((s->diag >> 13) & 7U));
+            put_text(rows[2], 13U, tmp);
+        }
+        if ((s->flags & LINK_FLAG_CLIP_IN) != 0U)  put_text(rows[1], 15U, "CLIP");
+        if ((s->flags & LINK_FLAG_CLIP_OUT) != 0U) put_text(rows[2], 15U, "CLIP");
+
+        if ((s->flags & LINK_FLAG_FREQ_VALID) != 0U)
+        {
+            (void)snprintf(tmp, sizeof tmp, "%u.%02uHz",
+                           (unsigned)(s->freq_chz / 100U), (unsigned)(s->freq_chz % 100U));
+        }
+        else
+        {
+            (void)snprintf(tmp, sizeof tmp, "--.--Hz");
+        }
+        put_text(rows[3], 0U, tmp);
+        if (((s->diag2 & 0x4000U) != 0U) && ((s->diag2 & 0x8000U) == 0U))
+        {
+            /* passive converter-mapping check: M<agree>/<disagree> (see slave_ctrl.h; replaces the B / f statistics) */
+            (void)snprintf(tmp, sizeof tmp, " M%u/%u L%u", (unsigned)(s->diag2 & 127U), (unsigned)((s->diag2 >> 7) & 127U),
+                           (unsigned)cap99(m->lost));
+        }
+        else
+        {
+            (void)snprintf(tmp, sizeof tmp, " L%u B%u f%u",
+                           (unsigned)cap99(m->lost), (unsigned)cap99(m->frames_bad),
+                           (unsigned)((m->fps > 999U) ? 999U : m->fps));
+        }
+        put_text(rows[3], 7U, tmp);
+
+        if (((s->diag2 & 0xF000U) == 0x1000U) && (((now_ms / 2000U) & 1U) != 0U))
+        {
+            /* stage 3 regulator state (slave SlaveCtrl_RegWord): every other 2 s row 3 shows   BOOST 462t / BUCK 310t / FREEZE, plus " CAP" when the correction sits at the cap.
+             * diag2 bit 11 = boost, bit 10 = at the cap, bits 9..0 = the effective on-time in ticks / 4. The fault and wait pages below replace this row again. */
+            const uint32_t eff = (uint32_t)(s->diag2 & 0x03FFU) * 4U;
+            uint32_t       k;
+            if (eff == 0U) (void)snprintf(tmp, sizeof tmp, "FREEZE");
+            else           (void)snprintf(tmp, sizeof tmp, "%s %ut%s", ((s->diag2 & 0x0800U) != 0U) ? "BOOST" : "BUCK", (unsigned)eff, ((s->diag2 & 0x0400U) != 0U) ? " CAP" : "");
+            for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';
+            put_text(rows[3], 0U, tmp);
+        }
+        else if (((s->diag2 & 0xE000U) == 0x2000U) && (((now_ms / 2000U) & 1U) != 0U))
+        {
+            /* transformer-connection check (slave SLAVE_TF_CHECK): every other 2 s row 3 shows   TF OK +3.2V / TF FLIP -3.0V / TF ? +0.2V
+             * diag2 bits 12..11 = verdict (1 OK, 2 flipped, 3 inconclusive), bits 10..0 = (Vout - Vin) in 0.1 V, two's complement. The fault and
+             * wait pages below replace this row again. */
+            int32_t        dv  = (int32_t)(s->diag2 & 0x07FFU);
+            const uint32_t vd  = (uint32_t)((s->diag2 >> 11) & 3U);
+            uint32_t       k, a;
+            if ((dv & 0x0400) != 0) dv -= 0x0800;
+            a = (uint32_t)((dv < 0) ? -dv : dv);
+            (void)snprintf(tmp, sizeof tmp, "TF %s %c%u.%uV", (vd == 1U) ? "OK" : ((vd == 2U) ? "FLIP" : "?"),
+                           (dv < 0) ? '-' : '+', (unsigned)(a / 10U), (unsigned)(a % 10U));
+            for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';
+            put_text(rows[3], 0U, tmp);
+        }
+
+        if ((s->state == 3U) && ((s->flags & 0x8000U) != 0U))
+        {
+            /* Slave in FAULT: row 3 shows the fault CONTEXT instead of the link counters:
+             *   @<state> M:<zero-cross mode> FLT:<level> BK:<level>      (H = high/idle, L = low/asserted)
+             * state: SYNC / CONV (converter) / INVS (inverter at zero duty) / UNSH (shunts opening) / RUN / RSHT (shunts closing),
+             * mode: B both edges, F falling edges, U unknown. */
+            const uint8_t ctx = (uint8_t)(s->flags >> 8);
+            const uint8_t st  = (uint8_t)(ctx & 0x07U);
+            const char *sn = (st == 1U) ? "SYNC" : ((st == 2U) ? "CONV" : ((st == 3U) ? "INVS" :
+                             ((st == 4U) ? "UNSH" : ((st == 5U) ? "RUN" : ((st == 6U) ? "RSHT" : "?")))));
+            const uint8_t md = (uint8_t)((ctx >> 3) & 0x03U);
+            (void)snprintf(tmp, sizeof tmp, "@%-4s M:%c FLT:%c BK:%c", sn,
+                           (md == 1U) ? 'B' : ((md == 2U) ? 'F' : 'U'),
+                           ((ctx & 0x20U) != 0U) ? 'L' : 'H',
+                           ((ctx & 0x40U) != 0U) ? 'L' : 'H');
+            put_text(rows[3], 0U, tmp);
+
+            /* Every other 2 s the same row shows WHERE in the mains half-cycle the last running FLT / break event hit:
+             *   dt=<ms since the last zero-cross event> D<+|-|0> <ON|off>
+             * D+ / D- = the positive / negative half diagonal was energised at that moment, D0 = none. dt about 0.05 ms = at turn-on,
+             * about 9.7 ms = at turn-off, anything else = in the middle of the half-cycle (or noise). */
+            if (((s->diag2 & 0x8000U) != 0U) && (((now_ms / 2000U) & 1U) != 0U))
+            {
+                const uint32_t us  = (uint32_t)(s->diag2 & 0x03FFU) * 16U;
+                const char     pol = ((s->diag2 & 0x0400U) != 0U) ? '+' : (((s->diag2 & 0x0800U) != 0U) ? '-' : '0');
+                uint32_t       k;
+                (void)snprintf(tmp, sizeof tmp, "dt=%u.%02ums D%c %s", (unsigned)(us / 1000U), (unsigned)((us % 1000U) / 10U),
+                               pol, (pol != '0') ? "ON" : "off");
+                for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';
+                put_text(rows[3], 0U, tmp);
+            }
+        }
+        else if ((s->state == 1U) && ((s->flags & 0x8000U) != 0U))
+        {
+            /* Slave waiting in SYNC: row 3 lists what it is waiting for (letters shown = NOT met yet):
+             *   Z zero-cross pattern   V input voltage window   M measurement   F FLT low
+             *   B break input low (also a FLOATING one)         O output voltage too high
+             *   R relays not yet settled in the SHORTED (bypass) state
+             * "WAIT: -" = nothing is missing, it is about to start. */
+            const uint8_t wc = (uint8_t)(s->flags >> 8);
+            static const char letters[7] = { 'Z', 'V', 'M', 'F', 'B', 'O', 'R' };
+            uint32_t k, n;
+            (void)snprintf(tmp, sizeof tmp, "WAIT:");
+            n = 5U;
+            for (k = 0U; k < 7U; k++)
+            {
+                if (((wc >> k) & 1U) != 0U) { tmp[n++] = ' '; tmp[n++] = letters[k]; }
+            }
+            if (n == 5U) { tmp[n++] = ' '; tmp[n++] = '-'; }
+            tmp[n] = '\0';
+            for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';     /* the wait text is shorter than the normal row */
+            put_text(rows[3], 0U, tmp);
+        }
+    }
+    else
+    {
+        put_text(rows[0], 0U, "SLAVE R NO LINK");
+        put_text(rows[1], 0U, "Vin  --- V");
+        put_text(rows[2], 0U, "Vout --- V");
+        /* Bytes arriving but no valid frame = baud / format / noise problem;
+         * no bytes at all = wiring or the optocouplers. */
+        (void)snprintf(tmp, sizeof tmp, "rx %lu B%u E%u",
+                       (unsigned long)(m->bytes_rx % 1000000UL),
+                       (unsigned)cap99(m->frames_bad), (unsigned)cap99(m->uart_errors));
+        put_text(rows[3], 0U, tmp);
+    }
+}
+
+/* ========================================================================= */
+/* Changed-characters-only LCD writer (no hardware: the write is a callback) */
+/* ========================================================================= */
+
+static const uint8_t k_row_addr[MON_LCD_ROWS] = { 0x80U, 0xC0U, 0x94U, 0xD4U };   /* same as lcd.c */
+
+void MonLcd_Init(MonLcd_t *l)
+{
+    uint32_t r;
+    for (r = 0U; r < MON_LCD_ROWS; r++)
+    {
+        memset(l->have[r], ' ', MON_LCD_COLS);     /* LCD_Init() clears the display */
+        l->have[r][MON_LCD_COLS] = '\0';
+    }
+    l->cur_row = -1;
+    l->cur_col = -1;
+    l->cursor  = 0U;
+}
+
+uint32_t MonLcd_Step(MonLcd_t *l, const char want[MON_LCD_ROWS][MON_LCD_COLS + 1U],
+                     MonLcdWriteFn write)
+{
+    uint32_t cells = MON_LCD_ROWS * MON_LCD_COLS;
+    uint32_t n;
+
+    for (n = 0U; n < cells; n++)
+    {
+        uint32_t idx = (l->cursor + n) % cells;
+        uint32_t row = idx / MON_LCD_COLS;
+        uint32_t col = idx % MON_LCD_COLS;
+
+        if (want[row][col] != l->have[row][col])
+        {
+            uint32_t written = 0U;
+
+            if (((int32_t)row != l->cur_row) || ((int32_t)col != l->cur_col))
+            {
+                write(0U, (uint8_t)(k_row_addr[row] + col));      /* set DDRAM address */
+                written++;
+            }
+            write(1U, (uint8_t)want[row][col]);
+            written++;
+
+            l->have[row][col] = want[row][col];
+            l->cursor         = (idx + 1U) % cells;
+            l->cur_row        = (int32_t)row;
+            l->cur_col        = (int32_t)col + 1;
+            if (l->cur_col >= (int32_t)MON_LCD_COLS)
+            {
+                l->cur_row = -1;                  /* wrapped past the row end: position unknown */
+                l->cur_col = -1;
+            }
+            return written;
+        }
+    }
+    return 0U;
+}
+
+/* ========================================================================= */
+/* Hardware part (not built for the PC-side tests)                           */
+/* ========================================================================= */
+#ifndef MON_HOST_TEST
+
+extern UART_HandleTypeDef huart1;
+extern DMA_HandleTypeDef  hdma_usart1_rx;
+
+static volatile uint8_t s_rx[MON_RXBUF_SIZE];
+
+/* Free-running CPU-clock counter built from SysTick: 62.5 ns resolution at
+ * 16 MHz, independent of every timer the old firmware uses. Differences are
+ * exact modulo 2^32. */
+static uint32_t cyc_now(void)
+{
+    uint32_t ms, v;
+    uint32_t per_ms = SystemCoreClock / 1000U;
+    do
+    {
+        ms = HAL_GetTick();
+        v  = SysTick->VAL;
+    } while (ms != HAL_GetTick());
+    return (ms * per_ms) + ((per_ms - 1U) - v);
+}
+
+static void delay_us(uint32_t us)
+{
+    uint32_t t0 = cyc_now();
+    uint32_t n  = us * (SystemCoreClock / 1000000U);
+    while ((uint32_t)(cyc_now() - t0) < n) { }
+}
+
+/* ---- fast LCD byte write: pins as in lcd.h (RS PB4, EN PB5, D4..D7 PD0..PD3) ---- */
+static void lcd_nibble(uint8_t n)
+{
+    uint32_t set = 0U, rst = 0U;
+    if ((n & 1U) != 0U) set |= LCD_D4_PIN; else rst |= LCD_D4_PIN;
+    if ((n & 2U) != 0U) set |= LCD_D5_PIN; else rst |= LCD_D5_PIN;
+    if ((n & 4U) != 0U) set |= LCD_D6_PIN; else rst |= LCD_D6_PIN;
+    if ((n & 8U) != 0U) set |= LCD_D7_PIN; else rst |= LCD_D7_PIN;
+    GPIOD->BSRR = set | (rst << 16);
+}
+
+static void lcd_pulse(void)
+{
+    GPIOB->BSRR = (uint32_t)LCD_EN_PIN;
+    delay_us(2U);
+    GPIOB->BSRR = ((uint32_t)LCD_EN_PIN) << 16;
+    delay_us(2U);
+}
+
+static void lcd_byte(uint8_t rs, uint8_t v)
+{
+    if (rs != 0U) GPIOB->BSRR = (uint32_t)LCD_RS_PIN;
+    else          GPIOB->BSRR = ((uint32_t)LCD_RS_PIN) << 16;
+    lcd_nibble((uint8_t)(v >> 4));
+    lcd_pulse();
+    lcd_nibble((uint8_t)(v & 0x0FU));
+    lcd_pulse();
+    delay_us(45U);                         /* HD44780 needs ~37 us per command/data byte */
+}
+
+/* ---- receive ---- */
+static uint32_t s_rd;
+
+static void rx_start(void)
+{
+    /* The original code leaves this DMA channel in NORMAL mode. Switch it to
+     * CIRCULAR and start it by hand: no interrupts, no HAL receive state. */
+    hdma_usart1_rx.Init.Mode = DMA_CIRCULAR;
+    if (HAL_DMA_DeInit(&hdma_usart1_rx) != HAL_OK) Error_Handler();
+    if (HAL_DMA_Init(&hdma_usart1_rx)   != HAL_OK) Error_Handler();
+    if (HAL_DMA_Start(&hdma_usart1_rx, (uint32_t)&huart1.Instance->RDR,
+                      (uint32_t)s_rx, MON_RXBUF_SIZE) != HAL_OK)
+    {
+        Error_Handler();
+    }
+    SET_BIT(huart1.Instance->CR3, USART_CR3_DMAR);      /* USART RX -> DMA requests */
+    s_rd = 0U;
+}
+
+static void rx_service(void)
+{
+    static uint32_t last_us_cyc;
+    static uint8_t  have_last;
+    uint32_t now_cyc = cyc_now();
+    uint32_t wr, isr;
+
+    /* How long did the loop go without polling? (must stay far below 12.8 ms) */
+    if (have_last)
+    {
+        uint32_t gap_us = (uint32_t)(now_cyc - last_us_cyc) / (SystemCoreClock / 1000000U);
+        if (gap_us > g_mon.max_poll_gap_us) g_mon.max_poll_gap_us = gap_us;
+    }
+    last_us_cyc = now_cyc;
+    have_last   = 1U;
+
+    /* Overrun / framing / noise: clear the flags so reception never stalls. */
+    isr = huart1.Instance->ISR;
+    if ((isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE)) != 0U)
+    {
+        huart1.Instance->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
+        g_mon.uart_errors++;
+    }
+
+    /* Bytes the DMA has written so far: ring size minus the transfers left. */
+    wr = (MON_RXBUF_SIZE - hdma_usart1_rx.Instance->CNDTR) & (MON_RXBUF_SIZE - 1U);
+    Mon_ProcessBytes(s_rx, MON_RXBUF_SIZE, &s_rd, wr, HAL_GetTick());
+    Mon_Tick(HAL_GetTick());
+}
+
+void MasterMonitor_Run(void)
+{
+    static char want[MON_LCD_ROWS][MON_LCD_COLS + 1U];
+    MonLcd_t    lcd;
+    uint32_t    t_compose = 0U;
+
+    /* The monitor never switches a contactor: force them to the OFF level
+     * (RESET opens them in the original firmware) and leave them there. */
+    HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);
+
+    Mon_Reset();
+    MonLcd_Init(&lcd);
+    Mon_Compose(&g_mon, HAL_GetTick(), want);
+
+    rx_start();
+
+    for (;;)
+    {
+        rx_service();
+
+        if ((uint32_t)(HAL_GetTick() - t_compose) >= MON_COMPOSE_PERIOD_MS)
+        {
+            t_compose = HAL_GetTick();
+            Mon_Compose(&g_mon, t_compose, want);
+        }
+
+        (void)MonLcd_Step(&lcd, want, lcd_byte);     /* at most ~60-120 us */
+    }
+}
+
+
+#if (MASTER_APP_MODE == 1)
+#include "m_app.h"
+#include "m_board.h"
+#include "m_flash_g0.h"
+#include "link_v2.h"
+
+extern uint32_t ADC_Read(uint32_t channel);       /* the original firmware's single-sample ADC read (main.c) */
+
+/* The CT, R phase: the average of MASTER_CT_SAMPLES readings (12 bit), times 16, for the application's calibration (zero and gain, in flash). */
+static uint16_t ct_read_x16(void)
+{
+    uint32_t sum = 0U, i;
+    for (i = 0U; i < MASTER_CT_SAMPLES; i++) sum += ADC_Read(ADC_CHANNEL_0);
+    return (uint16_t)((sum * 16U) / MASTER_CT_SAMPLES);
+}
+
+static uint8_t key_down(GPIO_TypeDef *port, uint16_t pin) { return (HAL_GPIO_ReadPin(port, pin) == GPIO_PIN_RESET) ? 1U : 0U; }     /* active low */
+
+/* The application: Run-Mode screens, Set-Mode, settings in flash, the fault log. It shares everything of the monitor (the receive path, the LCD writer) and, like it, NEVER drives a contactor. */
+void MasterApp_Run(void)
+{
+    static MApp_t app;
+    static char   want[MON_LCD_ROWS][MON_LCD_COLS + 1U];
+    MonLcd_t      lcd;
+    uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
+    uint16_t      ct_x16 = 0U;
+    uint8_t       seq_tx = 0U, have_last = 0U;
+    MCtlOut_t     last;
+
+    HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);
+    Mon_Reset();
+    MonLcd_Init(&lcd);
+    last.run = 0U; last.clr = 0U; last.setv_dv = 0U; last.maxc_dv = 0U;
+    MApp_Init(&app, MFlashG0_Iface(), MAPP_PAGE_SETTINGS_A, MAPP_PAGE_SETTINGS_B, MAPP_PAGE_LOG_A, MAPP_PAGE_LOG_B, HAL_GetTick());
+    MApp_InitCal(&app, MAPP_PAGE_CALIB_A, MAPP_PAGE_CALIB_B);
+    MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
+    rx_start();
+#if (MASTER_TEST_NO_VOLTAGE_CUTS != 0)
+    MUI_Notify(&app.ui, "TEST: NO V CUTS", "Not For Field Use", HAL_GetTick());                  /* every start of a build with the voltage cuts removed says so */
+#endif
+    if (MFlashG0_ImageEnd() > MFLASHG0_LOW) MUI_Notify(&app.ui, "Flash Full", "Settings Not Saved", HAL_GetTick());     /* the program reaches the storage pages: saving is refused, see MASTER_UI.md */
+
+    for (;;)
+    {
+        uint32_t now;
+        rx_service();
+        now = HAL_GetTick();
+        if ((uint32_t)(now - t_step) >= 10U)
+        {
+            MAppData_t d;
+            t_step = now;
+            Mon_Tick(now);
+            d.have     = (uint8_t)((g_mon.have_frame != 0U) && ((uint32_t)(now - g_mon.t_last_ms) < MON_LINK_TIMEOUT_MS));
+            d.vin_dv   = g_mon.last.vin_dv;
+            d.vout_dv  = g_mon.last.vout_dv;
+            d.freq_chz = g_mon.last.freq_chz;
+            d.state    = g_mon.last.state;
+            d.fault    = (uint8_t)g_mon.last.fault;
+            d.link_ok  = d.have;
+            {   /* the slave's version 2 data: $E must be fresh (the slave sends one every 100 ms) */
+                uint8_t e_fresh = (uint8_t)((g_mon.e_valid != 0U) && ((uint32_t)(now - g_mon.e_t_ms) < MON_LINK_TIMEOUT_MS));
+                d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr;
+                d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
+                d.heat = 0U; d.ct_peak = 0U;
+                d.h_valid = g_mon.h_valid; d.win_lo_dv = g_mon.h_win_lo_dv; d.win_hi_dv = g_mon.h_win_hi_dv; d.vout_max_dv = g_mon.h_vout_max_dv;
+            }
+            if ((uint32_t)(now - t_ct) >= 200U)
+            {   /* the load current, every 200 ms (the averaging takes a few milliseconds: the receive DMA ring has 12.8 ms and the slave's frames come every 10 ms, so nothing is lost) */
+                t_ct = now; ct_x16 = ct_read_x16();
+            }
+            d.ct_x16 = ct_x16; d.ct_raw = (uint8_t)(t_ct != 0U); d.load_da = 0U; d.load_ok = 0U;
+            MApp_Step(&app, key_down(MKEY_MENU_PORT, MKEY_MENU_PIN), key_down(MKEY_START_PORT, MKEY_START_PIN), key_down(MKEY_STOP_PORT, MKEY_STOP_PIN),
+                      key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);
+            if (MApp_ShowsMonitor(&app) != 0U) Mon_Compose(&g_mon, now, want);       /* the monitor diagnostics, one MENU press away */
+            if (MApp_ShowsDiag(&app) != 0U) MApp_Diag(&app, now, want);               /* the control diagnostics, two MENU presses away */
+            {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction or the clear counter changes (Set-Mode = run 0 = the slave stops its PWM) */
+                const MCtlOut_t *c = MApp_Control(&app);
+                if ((MApp_ControlValid(&app) != 0U) && ((have_last == 0U) || (c->run != last.run) || (c->clr != last.clr) || (c->setv_dv != last.setv_dv) || (c->maxc_dv != last.maxc_dv) || ((uint32_t)(now - t_tx) >= 100U)))
+                {
+                    LinkM_t m; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
+                    m.seq = seq_tx++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv;
+                    n = LinkV2_BuildM(b, sizeof b, &m);
+                    if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);      /* about 0.6 ms at 500 kbaud; the receive DMA keeps running */
+                    MApp_NoteFrameSent(&app); t_tx = now; last = *c; have_last = 1U;
+                }
+            }
+            {   const MFOut_t *eo = MApp_Engine(&app);
+#if (MASTER_DRIVE_CONTACTORS == 1)
+                /* closed only while the engine says ON; opened by every trip, Set-Mode, STOP and a lost link. PA10..PA12 high = closed (as in the original firmware). */
+                HAL_GPIO_WritePin(GPIOA, CONT_1_Pin, (eo->contactor[0] != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(GPIOA, CONT_2_Pin, (eo->contactor[1] != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(GPIOA, CONT_3_Pin, (eo->contactor[2] != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, (eo->buzzer != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);          /* the buzzer: PB14 high = on */
+#else
+                HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);                   /* test mode: never closed */
+                (void)eo;
+#endif
+            }
+        }
+        (void)MonLcd_Step(&lcd, want, lcd_byte);        /* at most ~60-120 us */
+    }
+}
+#endif /* MASTER_APP_MODE */
+
+#endif /* MON_HOST_TEST */

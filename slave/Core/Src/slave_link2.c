@@ -1,0 +1,144 @@
+/**
+  ******************************************************************************
+  * @file    slave_link2.c
+  * @brief   The slave's side of link version 2. See slave_link2.h. Pure logic: no HAL.
+  ******************************************************************************
+  */
+#include "slave_link2.h"
+
+static SL2_Hooks_t  s_hk;
+static LinkV2Rx_t   s_rx;
+static SL2_Stats_t  s_st;
+
+static uint32_t s_e_next;            /* when the next $E is due                         */
+static uint8_t  s_e_seq;
+static uint32_t s_h_next;            /* when the next boot $H is due                    */
+static uint8_t  s_h_boot_left;
+static uint8_t  s_h_pending;         /* a HELLO asked for one                           */
+static LinkR_t  s_rq[SL2_R_QUEUE];   /* responses waiting to be sent, oldest first      */
+static uint8_t  s_rq_n;
+static uint8_t  s_last_id;           /* the id of the last $K handled; 0 = none yet      */
+static LinkR_t  s_last_resp;         /* what it was answered with, so a retry gets the same answer */
+
+/* wrap-safe "now has reached t" for a free-running 32-bit millisecond counter */
+static uint8_t reached(uint32_t now, uint32_t t) { return (((int32_t)(now - t)) >= 0) ? 1U : 0U; }
+
+static void push_r(uint8_t id, uint8_t status, int32_t value)
+{
+    if (s_rq_n >= SL2_R_QUEUE) { s_st.r_dropped++; return; }
+    s_rq[s_rq_n].id = id; s_rq[s_rq_n].status = status; s_rq[s_rq_n].value = value;
+    s_rq_n++;
+}
+
+void SL2_Init(const SL2_Hooks_t *hooks, uint32_t now_ms)
+{
+    uint32_t i;
+    uint8_t *p = (uint8_t *)&s_st;
+    s_hk = *hooks;
+    LinkV2Rx_Init(&s_rx);
+    for (i = 0U; i < (uint32_t)sizeof(s_st); i++) p[i] = 0U;
+    s_e_next = now_ms + SL2_E_PERIOD_MS;
+    s_e_seq = 0U;
+    s_h_next = now_ms;                       /* the first hello at once, then every 100 ms */
+    s_h_boot_left = (uint8_t)SL2_H_BOOT_COUNT;
+    s_h_pending = 0U;
+    s_rq_n = 0U;
+    s_last_id = 0U;
+    s_last_resp.id = 0U; s_last_resp.status = 0U; s_last_resp.value = 0;
+}
+
+static void handle_k(const LinkK_t *k)
+{
+    s_st.k_ok++;
+    if ((k->id == s_last_id) && (s_last_id != 0U))
+    {   /* the master's retry: answer again with the SAME answer, execute nothing */
+        s_st.k_repeat++;
+        push_r(s_last_resp.id, s_last_resp.status, s_last_resp.value);
+        return;
+    }
+    {
+        uint8_t status = LINKV2_ST_UNKNOWN_CMD;      /* every command except HELLO is not in this firmware version */
+        int32_t value = 0;
+        if (k->cmd == LINKCMD_HELLO) { s_h_pending = 1U; status = LINKV2_ST_OK; }
+        s_last_id = k->id;
+        s_last_resp.id = k->id; s_last_resp.status = status; s_last_resp.value = value;
+        push_r(k->id, status, value);
+    }
+}
+
+void SL2_Rx(uint8_t byte, uint32_t now_ms)
+{
+    LinkV2Frame_t f;
+    int32_t t = LinkV2Rx_Feed(&s_rx, byte, &f);
+    if (t == (int32_t)LINKV2_M)
+    {
+        s_st.m_ok++;
+        if (s_hk.on_control != 0) s_hk.on_control(&f.u.m, now_ms);
+    }
+    else if (t == (int32_t)LINKV2_K)
+    {
+        handle_k(&f.u.k);
+    }
+    s_st.rx_bad = s_rx.frames_bad;
+    s_st.rx_unknown = s_rx.frames_unknown;
+}
+
+static uint8_t send(const char *frame, int32_t n)
+{
+    uint8_t ok = 0U;
+    if ((n > 0) && (s_hk.tx != 0)) ok = s_hk.tx(frame, (uint32_t)n);
+    if (ok == 0U) s_st.tx_dropped++;
+    return ok;
+}
+
+void SL2_Service(uint32_t now_ms)
+{
+    char    b[LINKV2_MAX_LEN + 8U];
+    int32_t n;
+
+    /* 1. responses first: a command is answered as soon as the queue has room */
+    while (s_rq_n > 0U)
+    {
+        n = LinkV2_BuildR(b, sizeof b, &s_rq[0]);
+        if ((n > 0) && (s_hk.tx != 0) && (s_hk.tx(b, (uint32_t)n) != 0U))
+        {
+            uint8_t i;
+            s_st.r_sent++;
+            for (i = 1U; i < s_rq_n; i++) s_rq[i - 1U] = s_rq[i];
+            s_rq_n--;
+        }
+        else if (n <= 0) { uint8_t i; for (i = 1U; i < s_rq_n; i++) s_rq[i - 1U] = s_rq[i]; s_rq_n--; }   /* unbuildable: drop it */
+        else { s_st.tx_dropped++; break; }           /* no room now: try again on the next pass */
+    }
+
+    /* 2. hello: three at start, and whenever a HELLO asked for one */
+    if (((s_h_boot_left > 0U) && reached(now_ms, s_h_next)) || (s_h_pending != 0U))
+    {
+        LinkH_t h;
+        h.proto = (uint8_t)LINKV2_PROTO_VERSION; h.fw = 0U; h.vin_min_dv = 0U; h.vin_max_dv = 0U; h.rst = 0U; h.tuned = 0U; h.vout_max_dv = 0U;
+        if (s_hk.fill_h != 0) s_hk.fill_h(&h);
+        h.proto = (uint8_t)LINKV2_PROTO_VERSION;
+        n = LinkV2_BuildH(b, sizeof b, &h);
+        if (send(b, n) != 0U)
+        {
+            s_st.h_sent++;
+            if (s_h_pending != 0U) s_h_pending = 0U;
+            else { s_h_boot_left--; s_h_next = now_ms + SL2_H_PERIOD_MS; }
+        }
+    }
+
+    /* 3. extended status every 100 ms; its seq counts every attempt, so a gap shows */
+    if (reached(now_ms, s_e_next))
+    {
+        LinkE_t e;
+        e.seq = s_e_seq; e.setv_dv = 0U; e.flags2 = 0U; e.clr = 0U; e.reach_lo_dv = 0U; e.reach_hi_dv = 0U;
+        if (s_hk.fill_e != 0) s_hk.fill_e(&e);
+        e.seq = s_e_seq;
+        s_e_seq++;
+        s_e_next = now_ms + SL2_E_PERIOD_MS;
+        n = LinkV2_BuildE(b, sizeof b, &e);
+        if (send(b, n) != 0U) s_st.e_sent++;
+    }
+}
+
+const SL2_Stats_t *SL2_Stats(void) { return &s_st; }

@@ -1,0 +1,447 @@
+/** @file m_ui.c  @brief Screens and key logic. See m_ui.h. All texts are in this file, in tables, so they can be adjusted in one place. */
+#include "m_ui.h"
+
+typedef char Frame_t[MUI_ROWS][MUI_COLS + 1U];
+
+/* ---------------------------------------------------------------------------------------------------- text helpers */
+static void f_clear(Frame_t f) { uint32_t r, c; for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) f[r][c] = ' '; f[r][MUI_COLS] = '\0'; } }
+static void f_put(Frame_t f, uint32_t row, uint32_t col, const char *s) { while ((*s != '\0') && (col < MUI_COLS)) f[row][col++] = *s++; }
+static uint32_t slen(const char *s) { uint32_t n = 0U; while (s[n] != '\0') n++; return n; }
+static void f_center(Frame_t f, uint32_t row, const char *s) { uint32_t n = slen(s); if (n > MUI_COLS) n = MUI_COLS; f_put(f, row, (MUI_COLS - n) / 2U, s); }
+static void f_put_right(Frame_t f, uint32_t row, const char *s) { uint32_t n = slen(s); if (n < MUI_COLS) f_put(f, row, MUI_COLS - n, s); else f_put(f, row, 0U, s); }
+
+/* a number with `digits` digits, zero padded, into out; returns the length */
+static uint32_t fmt_zero(char *out, uint32_t v, uint32_t digits)
+{
+    uint32_t i; for (i = 0U; i < digits; i++) { out[digits - 1U - i] = (char)('0' + (v % 10U)); v /= 10U; }
+    out[digits] = '\0'; return digits;
+}
+/* whole volts: a right-aligned integer of width w, "---" when there is no reading */
+static void fmt_int(char *out, uint32_t v, uint32_t w, uint8_t ok)
+{
+    char tmp[8]; uint32_t n = 0U, i, pad; v = (v + 5U) / 10U;
+    if (ok == 0U) { for (i = 0U; i < w; i++) out[i] = ' '; for (i = 0U; (i < 3U) && (i < w); i++) out[w - 1U - i] = '-'; out[w] = '\0'; return; }
+    if (v == 0U) { tmp[n++] = '0'; }
+    while ((v > 0U) && (n < 7U)) { tmp[n++] = (char)('0' + (v % 10U)); v /= 10U; }
+    pad = (n < w) ? (w - n) : 0U;
+    for (i = 0U; i < pad; i++) out[i] = ' ';
+    for (i = 0U; (i < n) && ((pad + i) < w); i++) out[pad + i] = tmp[n - 1U - i];
+    out[pad + ((n < w) ? n : w)] = '\0';
+}
+static void int_put(Frame_t f, uint32_t row, uint32_t col, uint32_t v, uint32_t w, uint8_t ok) { char b[10]; fmt_int(b, v, w, ok); f_put(f, row, col, b); }
+
+/* tenths: "230.0", width w, right aligned with spaces; v == 0 and !ok gives dashes */
+static void fmt_tenths(char *out, uint32_t v, uint32_t w, uint8_t ok)
+{
+    char tmp[12]; uint32_t n = 0U, i, ip = v / 10U, fp = v % 10U, pad;
+    if (ok == 0U)
+    {   /* no reading: "--.-" right aligned */
+        static const char D[] = "--.-"; uint32_t dl = 4U;
+        for (i = 0U; i < w; i++) out[i] = ' ';
+        for (i = 0U; i < dl && i < w; i++) out[w - dl + i] = D[i];
+        out[w] = '\0'; return;
+    }
+    { char d[8]; uint32_t k = 0U; if (ip == 0U) d[k++] = '0'; while (ip > 0U) { d[k++] = (char)('0' + (ip % 10U)); ip /= 10U; } while (k > 0U) tmp[n++] = d[--k]; }
+    tmp[n++] = '.'; tmp[n++] = (char)('0' + fp); tmp[n] = '\0';
+    pad = (n < w) ? (w - n) : 0U;
+    for (i = 0U; i < pad; i++) out[i] = ' ';
+    for (i = 0U; i < n && (pad + i) < w; i++) out[pad + i] = tmp[i];
+    out[pad + n] = '\0';
+}
+static void tenths_put(Frame_t f, uint32_t row, uint32_t col, uint32_t v, uint32_t w, uint8_t ok) { char b[12]; fmt_tenths(b, v, w, ok); f_put(f, row, col, b); }
+
+static void msg_set(MUI_t *u, const char *l1, const char *l2, uint32_t now, uint8_t to_run)
+{
+    uint32_t i;
+    for (i = 0U; i < MUI_COLS; i++) { u->msg[0][i] = (i < slen(l1)) ? l1[i] : '\0'; u->msg[1][i] = (i < slen(l2)) ? l2[i] : '\0'; }
+    u->msg[0][MUI_COLS] = '\0'; u->msg[1][MUI_COLS] = '\0';
+    u->msg_on = 1U; u->t_msg = now; u->return_to_run = to_run;
+}
+
+/* ---------------------------------------------------------------------------------------------------- fault texts */
+static const char *full_text(uint8_t type)
+{
+    switch (type)
+    {
+    case MLOG_T_IP_LV: return "Input LV";            case MLOG_T_IP_HV: return "Input HV";
+    case MLOG_T_OP_LV: return "Output LV";           case MLOG_T_OP_HV: return "Output HV";
+    case MLOG_T_OVERLOAD: return "Overload";         case MLOG_T_HEAT: return "Heat";
+    case MLOG_T_FLIP: return "Transformer Flip";     case MLOG_T_INRUSH: return "Inrush";
+    case MLOG_T_PHASE_SEQ: return "Phase Sequence";  case MLOG_T_MAINS: return "Mains Unstable";
+    case MLOG_T_POWER_STAGE: return "Power Stage Fault"; case MLOG_T_RETUNE: return "Re-tune Required";
+    case MLOG_T_LINK_LOST: return "Slave Link Lost"; default: return "";
+    }
+}
+/* the short text after "R : " in three-phase: at most 16 characters */
+static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
+{
+    const char *s = "";
+    switch (type)
+    {
+    case MLOG_T_IP_LV: s = "IP LV Appear"; break;   case MLOG_T_IP_HV: s = "IP HV Appear"; break;
+    case MLOG_T_OP_LV: s = "OP LV Appear"; break;   case MLOG_T_OP_HV: s = "OP HV Appear"; break;
+    case MLOG_T_OVERLOAD: s = "OL Appear"; break;   case MLOG_T_HEAT: s = "Heat Appear"; break;
+    case MLOG_T_FLIP: s = "TRF Flip"; break;        case MLOG_T_INRUSH: s = "INRUSH"; break;
+    case MLOG_T_PHASE_SEQ: s = (seq == 2U) ? "PH SEQ SAME" : "PH SEQ REVERSE"; break;
+    case MLOG_T_RETUNE: s = "RETUNE REQ"; break;    case MLOG_T_LINK_LOST: s = "LINK LOST"; break;
+    case MLOG_T_MAINS: case MLOG_T_POWER_STAGE:
+    {   uint32_t n = 0U; const char *p = (type == MLOG_T_MAINS) ? "MAINS F" : "PS F"; while (p[n] != '\0') { o[n] = p[n]; n++; }
+        o[n++] = (char)('0' + ((code / 10U) % 10U)); o[n++] = (char)('0' + (code % 10U)); o[n] = '\0'; return; }
+    default: s = "OK"; break;
+    }
+    { uint32_t n = 0U; while (s[n] != '\0') { o[n] = s[n]; n++; } o[n] = '\0'; }
+}
+static const char *mode_text(uint8_t m) { return (m == (uint8_t)M_MODE_INDUSTRIAL) ? "Industrial" : ((m == (uint8_t)M_MODE_DOMESTIC) ? "Domestic" : "Single Phase"); }
+
+/* ---------------------------------------------------------------------------------------------------- Set-Mode items */
+typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN } MKind_t;
+typedef struct { uint8_t id; const char *name; uint8_t kind, digits; char unit; } MItem_t;
+#define N_ITEMS 22U
+static const MItem_t ITEMS[N_ITEMS] =
+{
+    {  1, "Mode",                K_MODE,    0U, ' ' }, {  2, "Calibration",         K_YN,   0U, ' ' }, {  3, "Set Voltage",         K_NUM,  3U, 'V' },
+    {  4, "Max Correction",      K_NUM,     3U, 'V' }, {  5, "I/P LV",              K_NUM,  3U, 'V' }, {  6, "I/P HV",              K_NUM,  3U, 'V' },
+    {  7, "O/P LV",              K_NUM,     3U, 'V' }, {  8, "O/P HV",              K_NUM,  3U, 'V' }, {  9, "Volt Cut Delay",      K_NUM,  2U, 's' },
+    { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' },
+    { 13, "Phase Sequence",      K_YN,      0U, ' ' }, { 14, "Display Scroll",      K_YN,   0U, ' ' }, { 15, "Scroll Time",         K_NUM,  2U, 's' },
+    { 16, "Password",            K_NUM,     3U, ' ' }, { 17, "Restart Mode",        K_AUTOMAN, 0U, ' ' }, { 18, "Restart Time",     K_NUM,  3U, 's' },
+    { 19, "Re-tune",             K_YN,      0U, ' ' }, { 20, "Clear Fault Log",     K_YN,   0U, ' ' }, { 21, "Discard Changes",     K_YN,   0U, ' ' },
+    { 22, "Factory Reset",       K_YN,      0U, ' ' }
+};
+
+static uint8_t is_action(uint8_t id) { return (id == 2U) || (id == 19U) || (id == 20U) || (id == 21U) || (id == 22U); }
+static uint8_t visible(const MSettings_t *w, uint8_t id)
+{
+    switch (id)
+    {
+    case 13: return (uint8_t)(w->mode == (uint8_t)M_MODE_INDUSTRIAL);                         /* Phase Sequence: Industrial only */
+    case 14: return (uint8_t)(w->mode != (uint8_t)M_MODE_SINGLE);                             /* Display Scroll: three-phase only */
+    case 15: return (uint8_t)((w->mode != (uint8_t)M_MODE_SINGLE) && (w->scroll != 0U));      /* Scroll Time: only if scrolling */
+    case 18: return (uint8_t)(w->restart_auto != 0U);                                         /* Restart Time: Auto only */
+    default: return 1U;
+    }
+}
+static const MItem_t *item_of(uint8_t id) { uint32_t i; for (i = 0U; i < N_ITEMS; i++) if (ITEMS[i].id == id) return &ITEMS[i]; return &ITEMS[0]; }
+
+static uint16_t item_get(const MSettings_t *s, uint8_t id)
+{
+    switch (id)
+    {
+    case 1: return s->mode;   case 3: return s->set_v;  case 4: return s->maxcorr_v; case 5: return s->ip_lv; case 6: return s->ip_hv; case 7: return s->op_lv; case 8: return s->op_hv;
+    case 9: return s->volt_cut_delay; case 10: return s->ovl_current; case 11: return s->ovl_cut_delay; case 12: return s->heat_delay; case 13: return s->phase_seq; case 14: return s->scroll;
+    case 15: return s->scroll_time; case 16: return s->password; case 17: return s->restart_auto; case 18: return s->restart_time; default: return 0U;
+    }
+}
+static void item_set(MSettings_t *s, uint8_t id, uint16_t v)
+{
+    switch (id)
+    {
+    case 1: s->mode = (uint8_t)v; break;   case 3: s->set_v = v; break;  case 4: s->maxcorr_v = v; break; case 5: s->ip_lv = v; break; case 6: s->ip_hv = v; break; case 7: s->op_lv = v; break; case 8: s->op_hv = v; break;
+    case 9: s->volt_cut_delay = (uint8_t)v; break; case 10: s->ovl_current = v; break; case 11: s->ovl_cut_delay = (uint8_t)v; break; case 12: s->heat_delay = (uint8_t)v; break;
+    case 13: s->phase_seq = (uint8_t)v; break; case 14: s->scroll = (uint8_t)v; break; case 15: s->scroll_time = (uint8_t)v; break; case 16: s->password = v; break;
+    case 17: s->restart_auto = (uint8_t)v; break; case 18: s->restart_time = v; break; default: break;
+    }
+}
+static uint8_t item_of_error(MSErr_t e)
+{
+    switch (e)
+    {
+    case MS_BAD_MODE: return 1U; case MS_BAD_SET_V: return 3U; case MS_BAD_MAXCORR: return 4U; case MS_BAD_IP_LV: return 5U; case MS_BAD_IP_HV: return 6U; case MS_BAD_OP_LV: return 7U; case MS_BAD_OP_HV: return 8U;
+    case MS_BAD_VOLT_DELAY: return 9U; case MS_BAD_OVL_CURRENT: return 10U; case MS_BAD_OVL_DELAY: return 11U; case MS_BAD_HEAT_DELAY: return 12U; case MS_BAD_SCROLL_TIME: return 15U;
+    case MS_BAD_PASSWORD: return 16U; case MS_BAD_RESTART_TIME: return 18U; default: return 1U;
+    }
+}
+
+static uint8_t first_item(const MUI_t *u) { uint8_t i; for (i = 1U; i <= N_ITEMS; i++) if (visible(&u->work, i)) return i; return 1U; }
+static uint8_t next_item(const MUI_t *u, uint8_t from) { uint8_t i = from, n; for (n = 0U; n < N_ITEMS; n++) { i = (uint8_t)((i % N_ITEMS) + 1U); if (visible(&u->work, i)) return i; } return from; }
+
+static void enter_item(MUI_t *u, uint8_t id)
+{
+    u->item = id; u->cursor = 0U; u->yn = 0U;
+    u->ed_backup = item_get(&u->work, id);
+}
+
+static void open_set(MUI_t *u, uint32_t now)
+{
+    u->work = *u->live; u->screen = (uint8_t)MUI_SET; u->t_key = now; u->msg_on = 0U;
+    enter_item(u, first_item(u));
+}
+
+/* ---------------------------------------------------------------------------------------------------- init, keys */
+void MUI_Init(MUI_t *u, MSettings_t *live, MLog_t *log, uint32_t now)
+{
+    uint8_t *p = (uint8_t *)u; uint32_t i;
+    for (i = 0U; i < (uint32_t)sizeof(*u); i++) p[i] = 0U;
+    u->live = live; u->log = log; u->screen = (uint8_t)MUI_SPLASH; u->t0 = now; u->t_key = now; u->t_page = now;
+}
+void MUI_SetLimits(MUI_t *u, const MLimits_t *lim) { u->lim = lim; }
+void MUI_SetFeatures(MUI_t *u, uint8_t feat) { u->features = feat; }
+uint8_t MUI_SetModeOpen(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_SET) || (u->screen == (uint8_t)MUI_PW)); }
+uint8_t MUI_Take(MUI_t *u, uint8_t req) { if ((u->req & req) != 0U) { u->req = (uint8_t)(u->req & ~req); return 1U; } return 0U; }
+void MUI_Notify(MUI_t *u, const char *l1, const char *l2, uint32_t now) { msg_set(u, l1, l2, now, 0U); }
+uint16_t MUI_CalValue(const MUI_t *u) { return u->cal_val; }
+uint8_t MUI_ShowsCal(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U) && (u->msg_on == 0U)); }
+uint8_t MUI_ShowsDiag(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 2U) && (u->msg_on == 0U)); }
+uint8_t MUI_ShowsMonitor(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 1U) && (u->msg_on == 0U)); }
+
+static void leave_set_saved(MUI_t *u, uint32_t now)
+{
+    MSErr_t e = MS_Validate(&u->work, u->lim);
+    if (e != MS_OK)
+    {
+        enter_item(u, item_of_error(e));
+        msg_set(u, "Invalid Value", item_of(u->item)->name, now, 0U);
+        return;
+    }
+    *u->live = u->work; u->req |= MUI_REQ_SAVE;
+    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
+    msg_set(u, "Settings", "Saved", now, 1U);
+}
+static void leave_set_discard(MUI_t *u, uint32_t now, const char *l1, const char *l2)
+{
+    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
+    msg_set(u, l1, l2, now, 1U);
+}
+
+static void digit_inc(MUI_t *u, const MItem_t *it)
+{
+    uint16_t v = item_get(&u->work, it->id), place = 1U, d; uint32_t k;
+    for (k = 0U; k + 1U + u->cursor < it->digits; k++) place = (uint16_t)(place * 10U);
+    d = (uint16_t)((v / place) % 10U);
+    if (d == 9U) v = (uint16_t)(v - 9U * place); else v = (uint16_t)(v + place);
+    item_set(&u->work, it->id, v);
+}
+
+static uint8_t is_last_item(const MUI_t *u) { return (uint8_t)(next_item(u, u->item) <= u->item); }     /* the next visible item would wrap round to the first */
+
+static void set_commit(MUI_t *u, uint32_t now)
+{
+    const MItem_t *it = item_of(u->item);
+    if (is_action(it->id))
+    {
+        uint8_t yes = u->yn;
+        if (yes != 0U)
+        {
+            if (it->id == 2U) { if ((u->features & MUI_FEAT_CALIBRATE) != 0U) { u->req |= MUI_REQ_CALIBRATE; msg_set(u, "Calibration", "Requested", now, 0U); } else msg_set(u, "Calibration", "Not Available", now, 0U); }
+            else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
+            else if (it->id == 20U) { u->req |= MUI_REQ_CLEAR_LOG; msg_set(u, "Fault Log", "Cleared", now, 0U); }
+            else if (it->id == 21U) { leave_set_discard(u, now, "Changes", "Discarded"); return; }
+            else if (it->id == 22U) { MS_Defaults(&u->work); }
+        }
+        if (is_last_item(u)) { leave_set_saved(u, now); return; }          /* one round is complete: leave Set-Mode (saving), do not start again */
+        enter_item(u, next_item(u, u->item));
+        return;
+    }
+    {   /* Refuse an edit only if THE EDIT caused the violation: with the item put back the set must have been valid. A violation that was already there (the slave's window or guard is
+         * tighter than a default) must not trap the user on this item: the check when leaving Set-Mode sends them to it. */
+        MSettings_t before = u->work; MSErr_t after, was;
+        item_set(&before, it->id, u->ed_backup);
+        after = MS_Validate(&u->work, u->lim); was = MS_Validate(&before, u->lim);
+        if ((after != MS_OK) && (was == MS_OK)) { item_set(&u->work, it->id, u->ed_backup); msg_set(u, "Invalid Value", it->name, now, 0U); return; }     /* put it back, stay on the item */
+        if (is_last_item(u)) { leave_set_saved(u, now); return; }
+        enter_item(u, next_item(u, u->item));
+    }
+}
+
+void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
+{
+    if (ev == MK_NONE) return;
+    if (u->screen == (uint8_t)MUI_SPLASH) return;
+    u->t_key = now; u->t_blink = now;
+    if (u->msg_on != 0U)
+    {   /* a key dismisses a message (the combination is still honoured below) */
+        if (ev != MK_COMBO) { u->msg_on = 0U; if (u->return_to_run != 0U) u->screen = (uint8_t)MUI_RUN; return; }
+        u->msg_on = 0U;
+    }
+    switch (u->screen)
+    {
+    case MUI_RUN:
+        if (ev == MK_COMBO)
+        {
+            if (u->live->password != 0U) { u->screen = (uint8_t)MUI_PW; u->pw[0] = u->pw[1] = u->pw[2] = 0U; u->cursor = 0U; }
+            else open_set(u, now);
+        }
+        else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U)) u->req |= MUI_REQ_CAL_SAVE;      /* on the calibration page LOG saves */
+        else if (ev == MK_LOG_SHORT) { u->screen = (uint8_t)MUI_LOG; u->log_idx = 0U; }
+        else if (ev == MK_MENU_SHORT)
+        {
+            if (u->live->mode == (uint8_t)M_MODE_SINGLE) { u->page = (uint8_t)((u->page + 1U) % 4U); if (u->page == 3U) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */     /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
+            else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
+        }
+        else if ((ev == MK_START) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
+        {
+            static const uint16_t PLACE[4] = { 1000U, 100U, 10U, 1U };
+            uint16_t p = PLACE[u->cal_cursor & 3U], d = (uint16_t)((u->cal_val / p) % 10U);
+            u->cal_val = (uint16_t)((d == 9U) ? (u->cal_val - 9U * p) : (u->cal_val + p));
+        }
+        else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U)) u->cal_cursor = (uint8_t)((u->cal_cursor + 1U) & 3U);
+        else if (ev == MK_START) u->req |= MUI_REQ_START;
+        else if (ev == MK_STOP) u->req |= MUI_REQ_STOP;
+        break;
+    case MUI_LOG:
+        if (ev == MK_START) { if ((uint16_t)(u->log_idx + 1U) < MLog_Count(u->log)) u->log_idx++; }               /* older */
+        else if (ev == MK_STOP) { if (u->log_idx > 0U) u->log_idx--; }                                           /* newer */
+        else if ((ev == MK_LOG_SHORT) || (ev == MK_MENU_SHORT) || (ev == MK_COMBO)) u->screen = (uint8_t)MUI_RUN;
+        break;
+    case MUI_PW:
+        if (ev == MK_START) u->pw[u->cursor] = (uint8_t)((u->pw[u->cursor] + 1U) % 10U);
+        else if (ev == MK_STOP) u->cursor = (uint8_t)((u->cursor + 1U) % 3U);
+        else if (ev == MK_COMBO) u->screen = (uint8_t)MUI_RUN;
+        else if (ev == MK_MENU_SHORT)
+        {
+            uint16_t typed = (uint16_t)(u->pw[0] * 100U + u->pw[1] * 10U + u->pw[2]);
+            if (typed == u->live->password) open_set(u, now);
+            else { u->screen = (uint8_t)MUI_RUN; msg_set(u, "Wrong Password", "", now, 1U); }
+        }
+        break;
+    case MUI_SET:
+    {
+        const MItem_t *it = item_of(u->item);
+        if (ev == MK_COMBO) leave_set_saved(u, now);
+        else if (ev == MK_MENU_SHORT) set_commit(u, now);
+        else if (ev == MK_START)
+        {
+            if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
+            else if (it->kind == (uint8_t)K_MODE) { item_set(&u->work, 1U, (uint16_t)((u->work.mode + 1U) % 3U)); }
+            else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
+            else digit_inc(u, it);
+        }
+        else if (ev == MK_STOP) { if (it->kind == (uint8_t)K_NUM) u->cursor = (uint8_t)((u->cursor + 1U) % it->digits); }
+        break;
+    }
+    default: break;
+    }
+}
+
+/* ---------------------------------------------------------------------------------------------------- the frame */
+static uint8_t blink_on(const MUI_t *u, uint32_t now);
+static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t now)
+{
+    uint8_t p; (void)now;
+    if (u->live->mode == (uint8_t)M_MODE_SINGLE)
+    {
+        uint8_t ok = d->have[0];
+        if (u->page == 3U)
+        {   /* LOAD CALIBRATION: the reading, and the meter value being typed. START edits the digit, STOP moves the cursor, LOG saves, MENU leaves. */
+            char v[8]; uint32_t c;
+            if (u->cal_init != 0U) { ((MUI_t *)u)->cal_val = (d->load_da[0] > 1999U) ? 1999U : d->load_da[0]; ((MUI_t *)u)->cal_init = 0U; }
+            f_center(f, 0U, "Load Calibration");
+            f_put(f, 1U, 0U, "Reading"); tenths_put(f, 1U, 11U, d->load_da[0], 6U, (uint8_t)(ok && d->load_ok[0])); f_put(f, 1U, 18U, "A");
+            f_put(f, 2U, 0U, "Actual");
+            v[0] = (char)('0' + ((u->cal_val / 1000U) % 10U)); v[1] = (char)('0' + ((u->cal_val / 100U) % 10U)); v[2] = (char)('0' + ((u->cal_val / 10U) % 10U)); v[3] = '.'; v[4] = (char)('0' + (u->cal_val % 10U)); v[5] = '\0';
+            c = (u->cal_cursor == 3U) ? 4U : u->cal_cursor;                           /* the digit's place in the text: 0 1 2 . 4 */
+            if (blink_on(u, now) == 0U) v[c] = '_';
+            f_put(f, 2U, 11U, v); f_put(f, 2U, 18U, "A");
+            f_put(f, 3U, 0U, "LOG=Save  MENU=Next");
+            return;
+        }
+        if (u->page != 0U) return;                                                  /* the monitor and diagnostics pages: the app draws them */
+        f_put(f, 0U, 0U, "O/P Voltage"); int_put(f, 0U, 12U, d->vout_dv[0], 6U, ok); f_put(f, 0U, 19U, "V");
+        f_put(f, 1U, 0U, "I/P Voltage"); int_put(f, 1U, 12U, d->vin_dv[0], 6U, ok); f_put(f, 1U, 19U, "V");
+        f_put(f, 2U, 0U, "Load"); tenths_put(f, 2U, 5U, d->load_da[0], 5U, (uint8_t)(ok && d->load_ok[0])); f_put(f, 2U, 10U, "A");
+        tenths_put(f, 2U, 12U, d->freq_chz / 10U, 6U, (uint8_t)(ok && d->freq_chz != 0U)); f_put(f, 2U, 18U, "Hz");
+        f_put(f, 3U, 0U, (d->fault[0] != 0U) ? full_text(d->fault[0]) : ((ok == 0U) ? "Slave Link Lost" : (d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"))));
+        return;
+    }
+    if (u->page == 0U)
+    {   /* per-phase output voltage and load */
+        static const char N[3] = { 'R', 'Y', 'B' };
+        for (p = 0U; p < 3U; p++)
+        {
+            char c[3] = { N[p], ':', '\0' }; f_put(f, p, 0U, c);
+            int_put(f, p, 3U, d->vout_dv[p], 4U, d->have[p]); f_put(f, p, 7U, "V");
+            tenths_put(f, p, 12U, d->load_da[p], 5U, (uint8_t)(d->have[p] && d->load_ok[p])); f_put(f, p, 17U, "A");
+        }
+        f_put(f, 3U, 0U, d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"));
+    }
+    else if (u->page == 1U)
+    {   /* phase-to-phase and frequency */
+        static const char *L[3] = { "R-Y", "Y-B", "B-R" };
+        for (p = 0U; p < 3U; p++) { f_put(f, p, 0U, L[p]); f_put(f, p, 4U, ":"); int_put(f, p, 6U, d->vll_dv[p], 5U, (uint8_t)(d->vll_dv[p] != 0U)); f_put(f, p, 12U, "V"); }
+        f_put(f, 3U, 0U, "Freq"); tenths_put(f, 3U, 6U, d->freq_chz / 10U, 6U, (uint8_t)(d->freq_chz != 0U)); f_put(f, 3U, 13U, "Hz");
+    }
+    else
+    {   /* status */
+        static const char N[3] = { 'R', 'Y', 'B' };
+        for (p = 0U; p < 3U; p++)
+        {
+            char c[5] = { N[p], ' ', ':', ' ', '\0' }; char s[20]; f_put(f, p, 0U, c);
+            if (d->have[p] == 0U && d->fault[p] == 0U) f_put(f, p, 4U, "---");
+            else { short_text(s, d->fault[p], d->fcode[p], d->seq_state); f_put(f, p, 4U, s); }
+        }
+        f_put(f, 3U, 0U, mode_text(u->live->mode)); f_put_right(f, 3U, d->out_on ? "ON" : "OFF");
+    }
+}
+
+static void render_log(const MUI_t *u, Frame_t f)
+{
+    MLogRec_t r; uint16_t n = MLog_Count(u->log);
+    if (n == 0U) { f_put(f, 0U, 0U, "Fault Log"); f_put(f, 1U, 0U, "No Faults"); return; }
+    if (MLog_Get(u->log, u->log_idx, &r) != 0) { f_put(f, 0U, 0U, "Fault Log"); f_put(f, 1U, 0U, "Unreadable"); return; }
+    {   char b[12]; uint32_t c = 0U; static const char P[4] = { 'R', 'Y', 'B', '*' };
+        f_put(f, 0U, 0U, "Fault Log "); fmt_zero(b, u->log_idx, 2U); f_put(f, 0U, 10U, b); f_put(f, 0U, 12U, "/"); fmt_zero(b, (uint32_t)(n - 1U), 2U); f_put(f, 0U, 13U, b);
+        { char pc[3] = { P[r.phase & 3U], ' ', '\0' }; f_put(f, 1U, 0U, pc);
+          if ((r.type == MLOG_T_MAINS) || (r.type == MLOG_T_POWER_STAGE))
+          {   char cd[6]; f_put(f, 1U, 2U, (r.type == MLOG_T_MAINS) ? "Mains Unstable" : "Power Stage"); cd[0] = 'F'; cd[1] = (char)('0' + ((r.slave_code / 10U) % 10U)); cd[2] = (char)('0' + (r.slave_code % 10U)); cd[3] = '\0'; f_put_right(f, 1U, cd); }
+          else f_put(f, 1U, 2U, full_text(r.type)); }
+        f_put(f, 2U, 0U, "I"); int_put(f, 2U, 1U, r.vin_dv, 4U, 1U); f_put(f, 2U, 6U, "O"); int_put(f, 2U, 7U, r.vout_dv, 4U, 1U);
+        { uint32_t h = r.run_min / 60U, m = r.run_min % 60U; uint32_t k, n2 = 0U; char t[16];
+          f_put(f, 3U, 0U, "L"); tenths_put(f, 3U, 1U, r.load_da, 5U, 1U);
+          { char d[12]; uint32_t q = h; if (q == 0U) d[n2++] = '0'; while (q > 0U) { d[n2++] = (char)('0' + (q % 10U)); q /= 10U; } for (k = 0U; k < n2; k++) t[k] = d[n2 - 1U - k]; }
+          t[n2++] = 'h'; t[n2++] = (char)('0' + (m / 10U)); t[n2++] = (char)('0' + (m % 10U)); t[n2++] = 'm'; t[n2] = '\0'; f_put_right(f, 3U, t); }
+        (void)c; }
+}
+
+static uint8_t blink_on(const MUI_t *u, uint32_t now) { return (uint8_t)((((uint32_t)(now - u->t_blink)) / MUI_BLINK_MS) % 2U == 0U); }
+
+static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
+{
+    const MItem_t *it = item_of(u->item); char v[24]; uint32_t n = 0U, i;
+    f_center(f, 0U, "Set Mode");
+    f_center(f, 1U, it->name);
+    if (is_action(it->id)) { const char *y = (u->yn != 0U) ? "Yes" : "No"; for (i = 0U; y[i] != '\0'; i++) v[n++] = y[i]; v[n] = '\0'; f_center(f, 2U, v); return; }
+    if (it->kind == (uint8_t)K_MODE) { f_center(f, 2U, mode_text(u->work.mode)); return; }
+    if (it->kind == (uint8_t)K_YN) { f_center(f, 2U, (item_get(&u->work, it->id) != 0U) ? "Yes" : "No"); return; }
+    if (it->kind == (uint8_t)K_AUTOMAN) { f_center(f, 2U, (u->work.restart_auto != 0U) ? "Auto" : "Manual"); return; }
+    {   char z[8]; fmt_zero(z, item_get(&u->work, it->id), it->digits);
+        for (i = 0U; z[i] != '\0'; i++) v[n++] = z[i];
+        if (it->unit != ' ') { v[n++] = ' '; v[n++] = it->unit; }
+        if ((it->id == 4U) && (u->work.maxcorr_v == 0U)) { const char *ns = " Not Set"; for (i = 0U; ns[i] != '\0'; i++) v[n++] = ns[i]; }
+        v[n] = '\0'; f_center(f, 2U, v);
+        if (blink_on(u, now) != 0U) f_put(f, 3U, ((MUI_COLS - n) / 2U) + u->cursor, "_");        /* a blinking underscore under the digit being edited */
+    }
+}
+
+void MUI_Tick(MUI_t *u, const MUIRun_t *d, uint32_t now, Frame_t out)
+{
+    /* timers */
+    if ((u->screen == (uint8_t)MUI_SPLASH) && ((uint32_t)(now - u->t0) >= MUI_SPLASH_MS)) { u->screen = (uint8_t)MUI_RUN; u->t_page = now; u->t_key = now; }
+    if ((u->msg_on != 0U) && ((uint32_t)(now - u->t_msg) >= MUI_MSG_MS)) { u->msg_on = 0U; if (u->return_to_run != 0U) u->screen = (uint8_t)MUI_RUN; }
+    if (((u->screen == (uint8_t)MUI_SET) || (u->screen == (uint8_t)MUI_PW)) && ((uint32_t)(now - u->t_key) >= MUI_SET_IDLE_MS))
+        leave_set_discard(u, now, "Timeout -", "Not Saved");
+    if ((u->screen == (uint8_t)MUI_LOG) && ((uint32_t)(now - u->t_key) >= MUI_SET_IDLE_MS)) u->screen = (uint8_t)MUI_RUN;
+    if (u->screen == (uint8_t)MUI_RUN)
+    {
+        uint8_t shown = 0U, p;
+        for (p = 0U; p < 3U; p++) if (d->fault[p] != 0U && MF_Rank(d->fault[p]) >= MF_Rank(shown)) shown = d->fault[p];
+        if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = 2U; u->t_page = now; }    /* a new fault jumps to the status page */
+        u->prev_shown = shown;
+        if ((u->live->mode != (uint8_t)M_MODE_SINGLE) && (u->live->scroll != 0U) && ((uint32_t)(now - u->t_page) >= ((uint32_t)u->live->scroll_time * 1000UL)))
+        { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
+    }
+    /* the frame */
+    f_clear(out);
+    if (u->msg_on != 0U) { f_center(out, 1U, u->msg[0]); f_center(out, 2U, u->msg[1]); return; }
+    switch (u->screen)
+    {
+    case MUI_SPLASH: f_put(out, 0U, 0U, "Welcome"); f_put(out, 1U, 0U, "Static Voltage"); f_put(out, 2U, 0U, mode_text(u->live->mode)); f_put(out, 3U, 0U, "Wait..."); break;
+    case MUI_RUN:    render_run(u, d, out, now); break;
+    case MUI_LOG:    render_log(u, out); break;
+    case MUI_PW:
+    {   char b[4]; f_center(out, 0U, "Enter Password"); b[0] = (char)('0' + u->pw[0]); b[1] = (char)('0' + u->pw[1]); b[2] = (char)('0' + u->pw[2]); b[3] = '\0'; f_center(out, 2U, b);
+        if (blink_on(u, now) != 0U) f_put(out, 3U, 8U + u->cursor, "_");
+        break; }
+    case MUI_SET:    render_set(u, out, now); break;
+    default: break;
+    }
+}

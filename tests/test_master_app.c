@@ -1,0 +1,411 @@
+/* End-to-end tests of the master application (m_app): raw key levels with real timing, settings that survive a restart, a failed save, a damaged flash, and the slave's data on the screen. */
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include "m_app.h"
+
+static int g_checks, g_fail;
+#define CHECK(c, ...) do { g_checks++; if (!(c)) { g_fail++; printf("  FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+static uint8_t fm[8 * MFLASH_PAGE]; static int fail_prog;
+static int f_read(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &fm[a], n); return 0; }
+static int f_prog(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (fail_prog) return 9; for (i = 0U; i < n; i++) fm[a + i] &= b[i]; return 0; }
+static int f_erase(uint32_t a) { if (fail_prog) return 9; memset(&fm[a], 0xFF, MFLASH_PAGE); return 0; }
+static const MFlash_t FL = { f_read, f_prog, f_erase };
+/* the four pages used here: settings at 0 and 1, log at 2 and 3 */
+#define SA 0U
+#define SB MFLASH_PAGE
+#define LA (2U * MFLASH_PAGE)
+#define LB (3U * MFLASH_PAGE)
+
+static uint8_t last_clr; static uint32_t clr_at;   /* the slave model: it clears its fault 200 ms after the clear counter changes */
+static MApp_t A; static MAppData_t D; static uint32_t T; static char F[4][21]; static uint8_t K[4];
+static void boot(void) { MApp_Init(&A, &FL, SA, SB, LA, LB, T); memset(K, 0, sizeof K); }
+static void fresh(void) { memset(fm, 0xFF, sizeof fm); fail_prog = 0; memset(&D, 0, sizeof D); D.have = 1U; D.link_ok = 1U; D.vin_dv = 2015U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.in_band = 1U; D.load_ok = 1U; D.load_da = 123U; D.clr_echo = 0U; T = 50000U; last_clr = 0U; clr_at = 0U; boot(); }
+static void run(uint32_t ms)
+{
+    uint32_t e = T + ms;
+    while (T < e)
+    {
+        MApp_Step(&A, K[0], K[1], K[2], K[3], &D, T, F);
+        if (MApp_Control(&A)->clr != last_clr) { last_clr = MApp_Control(&A)->clr; clr_at = T + 200U; }
+        if ((clr_at != 0U) && ((int32_t)(T - clr_at) >= 0)) { clr_at = 0U; D.fault = 0U; if (D.state == 3U) D.state = 2U; D.clr_echo = last_clr; }
+        T += 5U;
+    }
+}
+static void tap(int key, uint32_t down_ms) { K[key] = 1U; run(down_ms); K[key] = 0U; run(120U); }      /* 0 MENU, 1 START, 2 STOP, 3 LOG */
+static void combo(void) { K[0] = K[3] = 1U; run(2150U); K[0] = K[3] = 0U; run(200U); }
+static const char *row(int r) { static char b[4][22]; int n; strcpy(b[r], F[r]); n = (int)strlen(b[r]); while (n > 0 && b[r][n - 1] == ' ') b[r][--n] = '\0'; return b[r]; }
+static int crow_ok(int r, const char *txt) { char b[24]; int n = (int)strlen(txt), i, c = (20 - n) / 2; for (i = 0; i < c; i++) b[i] = ' '; strcpy(&b[c], txt); return strcmp(row(r), b) == 0; }
+#define CROW(r, txt) CHECK(crow_ok(r, txt), "row %d is '%s' (expected '%s' centred)", r, row(r), txt)
+#define ROW(r, txt) CHECK(strcmp(row(r), txt) == 0, "row %d is '%s' (expected '%s')", r, row(r), txt)
+static void to_run(void) { run(MUI_SPLASH_MS + 200U); }
+
+static void t_boot_and_set(void)
+{
+    fresh();
+    CHECK(!A.settings_from_flash && A.settings.set_v == 230U, "a blank flash: the defaults are in use");
+    run(100U); ROW(0, "Welcome"); ROW(3, "Wait...");
+    to_run(); ROW(0, "O/P Voltage    230 V"); ROW(3, "Start in 02 s");
+    CHECK(!MApp_SetModeOpen(&A), "Run-Mode: Set-Mode is closed");
+    combo(); CROW(0, "Set Mode"); CROW(1, "Mode");
+    CHECK(MApp_SetModeOpen(&A), "MENU+LOG held for 2 s opens Set-Mode with real key timing: the output must be held off");
+    tap(0, 100U); tap(0, 100U); CROW(1, "Set Voltage");
+    tap(1, 100U); tap(1, 100U); CROW(2, "430 V"); tap(2, 100U); tap(2, 100U); tap(2, 100U);
+    /* cursor is back on the hundreds: 430 is out of range; step it back to 2 and use the tens */
+    tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U);       /* hundreds 4 -> 2: 8 presses wrap past 9, 0, 1 */
+    CROW(2, "230 V");
+    tap(2, 100U); tap(1, 100U); CROW(2, "240 V");
+    tap(0, 100U); CROW(1, "Max Correction");
+    combo(); CROW(1, "Settings"); CROW(2, "Saved");
+    CHECK(A.settings.set_v == 240U && A.settings_from_flash && !MApp_SetModeOpen(&A), "MENU+LOG again saves: set voltage 240 is live and in flash");
+    run(1700U); ROW(0, "O/P Voltage    230 V");
+    /* a restart: the settings are still there */
+    boot(); CHECK(A.settings_from_flash && A.settings.set_v == 240U, "after a restart the set voltage is 240 V again, read from flash");
+    printf("  boot and Set-Mode with raw key timing: open, edit, save, restart, still there\n");
+}
+
+static void t_persist(void)
+{
+    int i; MSettings_t want;
+    fresh();
+    for (i = 0; i < 5; i++)
+    {
+        to_run(); combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); tap(0, 100U); combo();
+        want = A.settings;
+        boot(); CHECK(A.settings_from_flash && A.settings.set_v == want.set_v && A.settings.set_v == (uint16_t)(230U + 10U * (uint16_t)(i + 1)) , "save %d: after a restart the set voltage is %u (read %u)", i + 1, (unsigned)(230U + 10U * (unsigned)(i + 1)), (unsigned)A.settings.set_v);
+        /* keep it valid: the limits must stay above it; relax O/P HV and I/P HV as it rises */
+        A.settings.op_hv = 295U; A.settings.ip_hv = 299U; (void)MS_Save(&A.sstore, &A.settings);
+    }
+    printf("  five saves in a row, each read back after a restart (the two slots alternate)\n");
+}
+
+static void t_failures(void)
+{
+    uint8_t keep[8 * MFLASH_PAGE]; uint32_t b;
+    fresh(); to_run(); combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); tap(0, 100U); combo();
+    CHECK(A.settings.set_v == 240U && A.settings_from_flash, "a first good save: 240 V");
+    memcpy(keep, fm, sizeof fm);
+    /* a save that fails */
+    run(1700U); combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); tap(0, 100U);
+    fail_prog = 1; combo(); CROW(1, "Save Failed"); CROW(2, "Flash Error");
+    CHECK(A.save_failures == 1U, "a failed save is reported on the screen and counted");
+    fail_prog = 0; run(1700U); boot();
+    CHECK(A.settings_from_flash && A.settings.set_v == 240U, "and after a restart the previous good settings are intact (240 V, not the 250 V that failed)");
+    /* damaged flash: flip every single bit of the newest record in turn: the defaults or the older record, never a wrong value */
+    { uint32_t wrong = 0U, tot = 0U; MApp_t t;
+      for (b = 0U; b < 64U * 8U; b++)
+      {
+          memcpy(fm, keep, sizeof fm); fm[SA + b / 8U] ^= (uint8_t)(1U << (b % 8U)); fm[SB + b / 8U] ^= 0U;
+          MApp_Init(&t, &FL, SA, SB, LA, LB, T); tot++;
+          if (t.settings_from_flash && t.settings.set_v != 240U) wrong++;
+          if (MS_Validate(&t.settings, 0) != MS_OK) wrong++;
+      }
+      CHECK(wrong == 0U, "%u single-bit corruptions of the stored settings: never a wrong value, never an invalid set (%u wrong)", (unsigned)tot, (unsigned)wrong); }
+    memcpy(fm, keep, sizeof fm); memset(&fm[SA], 0x00, 64U); memset(&fm[SB], 0x00, 64U);
+    boot(); CHECK(!A.settings_from_flash && A.settings.set_v == 230U, "both slots destroyed: the defaults are used and the unit still works");
+    to_run(); ROW(0, "O/P Voltage    230 V");
+    combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); tap(0, 100U); fail_prog = 0; combo();
+    CHECK(A.settings_from_flash && A.save_failures == 0U, "and the next save works (the page is erased first)");
+    printf("  failures: a failed save leaves the old settings, 512 bit flips never give a wrong value, a destroyed flash gives defaults and recovers\n");
+}
+
+static void t_data(void)
+{
+    static const struct { uint8_t code, state; const char *text; } F_[] = { { 8, 3, "Mains Unstable" }, { 2, 3, "Inrush" }, { 7, 3, "Power Stage Fault" }, { 17, 3, "Transformer Flip" }, { 6, 3, "Output HV" }, { 19, 3, "Re-tune Required" } };
+    unsigned i;
+    fresh(); to_run();
+    ROW(0, "O/P Voltage    230 V"); ROW(1, "I/P Voltage    202 V"); ROW(2, "Load  12.3A   50.0Hz"); ROW(3, "Start in 02 s");
+    CHECK(1, "the output is OFF until the engine has started the slave and IN_BAND has held for the Restart Time");
+    run(9000U); ROW(3, "Output ON");
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "then the contactor is closed: 'Output ON' now means the contactor");
+    D.load_ok = 0U; run(200U); ROW(2, "Load  --.-A   50.0Hz"); D.load_ok = 1U; run(200U);
+    D.have = 0U; D.link_ok = 0U; run(200U); ROW(0, "O/P Voltage    --- V"); ROW(3, "Slave Link Lost");
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U, "a lost link opens the contactor at once");
+    /* every slave fault code, shown while the unit is not yet running (the display never hides what the slave reports) */
+    for (i = 0U; i < sizeof F_ / sizeof F_[0]; i++) { fresh(); to_run(); D.fault = F_[i].code; D.state = F_[i].state; run(200U); ROW(3, F_[i].text); }
+    fresh(); to_run(); D.fault = 9U; D.vin_dv = 1700U; D.state = 3U; run(200U); ROW(3, "Input LV");
+    fresh(); to_run(); D.fault = 9U; D.vin_dv = 2900U; D.state = 3U; run(200U); ROW(3, "Input HV");
+    fresh(); to_run(); run(200U);
+    /* MENU toggles the monitor diagnostics */
+    tap(0, 100U); CHECK(MApp_ShowsMonitor(&A), "MENU in single-phase Run-Mode switches to the monitor diagnostics");
+    tap(0, 100U); CHECK(!MApp_ShowsMonitor(&A), "and back");
+    printf("  slave data on the screen: voltages, load, the contactor state, every fault code, no link\n");
+}
+
+static void t_log(void)
+{
+    MLogRec_t r; int i;
+    fresh(); to_run();
+    for (i = 0; i < 3; i++) { r.type = (uint8_t)(1 + i); r.phase = 0U; r.slave_code = 0U; r.vin_dv = 2000U; r.vout_dv = 2300U; r.load_da = 100U; r.run_min = (uint32_t)(60 * (i + 1)); MLog_Append(&A.log, &r); }
+    tap(3, 100U); ROW(0, "Fault Log 00/02"); ROW(1, "R Output LV");
+    CHECK(strstr(row(3), "3h00m") != NULL, "the log opens with LOG: the newest is 00 (%s)", row(3));
+    tap(3, 100U); CHECK(strstr(row(0), "O/P") != NULL, "LOG closes it");
+    /* Clear Fault Log through Set-Mode */
+    combo(); { int n; for (n = 0; n < 40 && A.ui.item != 20U; n++) { tap(0, 100U); run(1600U); } }
+    CROW(1, "Clear Fault Log"); tap(1, 100U); CROW(2, "Yes"); tap(0, 100U);
+    CHECK(MLog_Count(&A.log) == 0U, "Clear Fault Log = Yes empties the log (%u left)", (unsigned)MLog_Count(&A.log));
+    boot(); CHECK(MLog_Count(&A.log) == 0U, "and it stays empty after a restart");
+    printf("  fault log: opened by LOG, newest first, cleared from Set-Mode, stays cleared\n");
+}
+
+static void t_setmode_isolation(void)
+{
+    fresh(); to_run(); combo(); CHECK(MApp_SetModeOpen(&A), "open");
+    /* while Set-Mode is open, START and STOP must not leak anywhere: there is no output here, so the only observable is that they edit and the screen stays in Set-Mode */
+    tap(1, 100U); tap(2, 100U); CHECK(MApp_SetModeOpen(&A), "START and STOP in Set-Mode stay in Set-Mode");
+    run(30500U); CHECK(!MApp_SetModeOpen(&A), "30 s with no key: closed, nothing saved");
+    boot(); CHECK(!A.settings_from_flash, "nothing was written to flash");
+    printf("  Set-Mode isolation: idle exit writes nothing\n");
+}
+
+static void t_slave_control(void)
+{
+    const MCtlOut_t *c; uint32_t k; int opened_in_step = 0;
+    /* Auto: the unit is told to run after the Restart Time (5 s) */
+    fresh(); c = MApp_Control(&A); to_run(); CHECK(c->run == 0U, "Auto: not yet at the end of the splash (3.2 s)"); run(2000U);
+    CHECK(c->run == 1U && c->setv_dv == 2300U && c->maxc_dv == 0U, "Auto: after the splash and the 5 s on-delay the slave is told run = 1, Set Voltage 2300, Max Correction 0 (run %u, setv %u)", (unsigned)c->run, (unsigned)c->setv_dv);
+    /* Set-Mode: run = 0 in the SAME step that opens it */
+    fresh(); to_run(); run(2100U); CHECK(MApp_Control(&A)->run == 1U, "running");
+    K[0] = K[3] = 1U;
+    for (k = 0U; k < 600U && !MApp_SetModeOpen(&A); k++) { MApp_Step(&A, K[0], K[1], K[2], K[3], &D, T, F); T += 5U; if (MApp_SetModeOpen(&A)) opened_in_step = (MApp_Control(&A)->run == 0U); }
+    CHECK(MApp_SetModeOpen(&A) && opened_in_step, "the very step that opens Set-Mode already has run = 0: the slave stops its PWM and trips the output");
+    K[0] = K[3] = 0U; run(300U);
+    run(20000U); CHECK(MApp_Control(&A)->run == 0U, "and run stays 0 while Set-Mode is open (20 s later)");
+    /* a new Set Voltage reaches the slave after saving, not while it is only being edited */
+    tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U);                                   /* Set Voltage 230 -> 240 in the working copy */
+    CHECK(MApp_Control(&A)->setv_dv == 2300U, "while editing, the slave still gets the OLD set voltage (2300)");
+    combo(); run(300U);
+    CHECK(!MApp_SetModeOpen(&A) && A.settings.set_v == 240U && MApp_Control(&A)->setv_dv == 2400U, "after saving, the slave is told 2400 (the Set Voltage 240 V)");
+    CHECK(MApp_Control(&A)->run == 0U, "and run is still 0: leaving Set-Mode (Auto) waits the Restart Time");
+    run(3500U); CHECK(MApp_Control(&A)->run == 0U, "about 4 s after leaving: not yet");
+    run(1600U); CHECK(MApp_Control(&A)->run == 1U && MApp_Control(&A)->setv_dv == 2400U, "after the Restart Time: run = 1 with the new set voltage");
+    /* Max Correction */
+    combo(); tap(0, 100U); tap(0, 100U); tap(0, 100U);                                         /* Max Correction */
+    tap(2, 100U); tap(2, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U);   /* 005 V */
+    combo(); run(300U); CHECK(A.settings.maxcorr_v == 5U && MApp_Control(&A)->maxc_dv == 50U, "Max Correction 5 V is sent as 50 (%u)", (unsigned)MApp_Control(&A)->maxc_dv);
+    /* a discarded edit never reaches the slave */
+    fresh(); to_run(); combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); run(31000U);
+    CHECK(!MApp_SetModeOpen(&A) && MApp_Control(&A)->setv_dv == 2300U, "an edit abandoned by the 30 s timeout is never sent (still 2300)");
+    /* START and STOP in Run-Mode */
+    fresh(); to_run(); run(2100U); CHECK(MApp_Control(&A)->run == 1U, "running"); tap(2, 100U); CHECK(MApp_Control(&A)->run == 0U, "STOP in Run-Mode: run = 0");
+    run(30000U); CHECK(MApp_Control(&A)->run == 0U, "and it stays 0");
+    tap(1, 100U); CHECK(MApp_Control(&A)->run == 1U, "START: run = 1");
+    /* a slave fault: Auto changes the counter every Restart Time */
+    { uint8_t c0; run(600U); c0 = MApp_Control(&A)->clr; D.state = 3U; D.fault = 8U; run(7000U); CHECK(MApp_Control(&A)->clr != c0 && MApp_Control(&A)->run == 1U, "a slave fault in Auto: the clear counter changes after the Restart Time, run stays 1"); D.state = 2U; D.fault = 0U; }
+    /* Manual */
+    fresh(); A.settings.restart_auto = 0U; MF_Init(&A.eng, &A.settings, T); run(MUI_SPLASH_MS + 10000U);
+    CHECK(MApp_Control(&A)->run == 0U, "Manual: the slave is not started by itself");
+    tap(1, 100U); CHECK(MApp_Control(&A)->run == 1U, "START in Manual starts it");
+    printf("  telling the slave: run at once and stop at once, Set-Mode = run 0 in the same step, settings sent after saving, a discarded edit never sent, START/STOP, fault clearing\n");
+}
+
+static void t_engine_inputs(void)
+{
+    MLogRec_t r;
+    /* the clear counter starts from the slave's own: nothing is sent before the slave has been heard, and a master restart never looks like a "clear" */
+    fresh(); D.e_valid = 0U; run(2000U);
+    CHECK(MApp_ControlValid(&A) == 0U, "before any $E from the slave, no $M may be sent (the counter is not in step yet)");
+    D.e_valid = 1U; D.clr_echo = 7U; run(100U);
+    CHECK(MApp_ControlValid(&A) == 1U && MApp_Control(&A)->clr == 7U, "after the first $E the counter is the slave's own (7), not 0 (got %u)", (unsigned)MApp_Control(&A)->clr);
+    /* the slave's own limits (its $H): Set-Mode refuses what the slave could never reach */
+    fresh(); D.h_valid = 1U; D.win_lo_dv = 1500U; D.win_hi_dv = 2500U; D.vout_max_dv = 2400U; run(200U);
+    to_run(); combo(); CHECK(MApp_SetModeOpen(&A), "Set-Mode open");
+    combo(); run(100U);
+    CHECK(MApp_SetModeOpen(&A) && strstr(row(1), "Invalid Value") != NULL, "the default I/P HV 280 V is above the slave's window (250 V) and O/P HV 250 V is above its guard (240 V): leaving is refused (%s / %s)", row(1), row(2));
+    /* the load from the master CT: 120 A against 99 A for the 10 s Overload Cut Delay trips the output; START only */
+    fresh(); to_run(); run(9000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running with the contactor closed");
+    D.load_da = 1200U; run(9000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "9 s of overload is not yet a trip");
+    run(1500U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Overload") == 0, "after the 10 s Overload Cut Delay the contactor opens and the screen says Overload (%s)", row(3));
+    CHECK(MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_OVERLOAD && r.load_da == 1200U, "it is logged with the load: 120.0 A");
+    D.load_da = 100U; run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && MApp_Control(&A)->run == 0U, "overload is START only: a minute later nothing has restarted it, even in Auto");
+    tap(1, 100U); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "START restarts it");
+    printf("  engine inputs: the slave's clear counter, the slave's limits in Set-Mode, the CT load causing an Overload trip that waits for START\n");
+}
+
+static void t_status_and_diag(void)
+{
+    /* the status row says what the unit is waiting for, so it is never a mystery why nothing starts */
+    fresh(); run(MUI_SPLASH_MS + 200U); ROW(3, "Start in 02 s");
+    run(1000U); ROW(3, "Start in 01 s");
+    run(1900U); CHECK(strcmp(row(3), "At Setpoint...") == 0 || strcmp(row(3), "Output ON") == 0, "after the on-delay the output is at the set voltage and the contactor follows 1 s later (%s)", row(3));
+    run(2000U); ROW(3, "Output ON");
+    fresh(); A.settings.restart_auto = 0U; MF_Init(&A.eng, &A.settings, T); run(MUI_SPLASH_MS + 5000U); ROW(3, "Press START");
+    tap(1, 100U); run(300U); CHECK(strcmp(row(3), "At Setpoint...") == 0, "after START the output is at the set voltage: the contactor closes within a second (%s)", row(3));
+    run(1500U); ROW(3, "Output ON");
+    /* rising: the screen shows the set voltage and where the output is */
+    fresh(); D.vout_dv = 2000U; D.state = 1U; D.in_band = 0U; run(MUI_SPLASH_MS + 6000U); ROW(3, "To 230 V (200)");
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U, "while the output is 30 V below the set voltage the contactor stays open");
+    D.vout_dv = 2250U; D.state = 2U; run(500U); ROW(3, "To 230 V (225)");
+    D.vout_dv = 2290U; D.in_band = 1U; run(500U); CHECK(strcmp(row(3), "At Setpoint...") == 0, "within 2 V of the set voltage: at setpoint (%s)", row(3));
+    run(1200U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && strcmp(row(3), "Output ON") == 0, "and 1 s later the contactor closes (%s)", row(3));
+    /* a slave whose $E is not understood: $M still goes out after 3 s of $S, and the screen says so */
+    fresh(); D.e_valid = 0U; D.in_band = 0U; run(2800U);
+    CHECK(MApp_ControlValid(&A) == 0U, "no $E and only 2.8 s of $S: $M is not sent yet");
+    run(500U); CHECK(MApp_ControlValid(&A) == 1U, "after 3 s of $S frames $M may be sent even without an $E");
+    run(5000U); CHECK(MApp_Control(&A)->run == 1U, "the unit is started anyway");
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "and the contactor closes without any $E: the master's own reading of the output (230 V = the set voltage) is enough");
+    fresh(); D.have = 0U; D.link_ok = 0U; D.e_valid = 0U; run(10000U); CHECK(MApp_ControlValid(&A) == 0U, "never heard from the slave at all: nothing is sent");
+    /* the diagnostics page */
+    fresh(); run(MUI_SPLASH_MS + 6000U); tap(0, 100U); tap(0, 100U);
+    CHECK(MApp_ShowsDiag(&A), "two MENU presses show the control diagnostics");
+    MApp_NoteFrameSent(&A); MApp_NoteFrameSent(&A); MApp_Diag(&A, T, F);
+    CHECK(strncmp(F[0], "S:Y E:Y H:N M:00002", 19) == 0, "row 0: heard from the slave and the frames sent ('%s')", row(0));
+    CHECK(strncmp(F[1], "U:STARTING run:1 c:", 19) == 0 || strncmp(F[1], "U:ON run:1 c:", 13) == 0, "row 1: the unit state and run level ('%s')", row(1));
+    CHECK(strncmp(F[2], "Vin 202 180-280", 15) == 0, "row 2: the input voltage and the limits ('%s')", row(2));
+    CHECK(strncmp(F[3], "Slv st:2 F:00 inb:1", 19) == 0, "row 3: the slave's state, fault code and IN_BAND ('%s')", row(3));
+    printf("  status text and diagnostics: the countdown, Press START, No $E, the 3 s rule, the diagnostics page\n");
+}
+
+static void t_display_stability(void)
+{
+    uint32_t k, changes = 0U; char prev[21], prev1[21];
+    /* a reading that straddles a rounding boundary (230.4 / 230.7 V, alternating every 20 ms) must not make the last digit flicker */
+    fresh(); to_run(); run(3000U); strcpy(prev, row(0)); strcpy(prev1, row(1));
+    for (k = 0U; k < 3000U; k++) { D.vout_dv = (uint16_t)((k & 1U) ? 2307U : 2304U); D.vin_dv = (uint16_t)((k & 1U) ? 2154U : 2157U); run(20U); if (strcmp(row(0), prev) != 0) { changes++; strcpy(prev, row(0)); } }
+    CHECK(changes <= 1U, "a reading alternating across the rounding boundary for 60 s changes the shown O/P voltage at most once (%u changes)", (unsigned)changes);
+    { uint32_t ch1 = 0U; for (k = 0U; k < 3000U; k++) { D.vin_dv = (uint16_t)((k & 1U) ? 2154U : 2157U); run(20U); if (strcmp(row(1), prev1) != 0) { ch1++; strcpy(prev1, row(1)); } } CHECK(ch1 <= 1U, "and the I/P voltage the same (%u changes)", (unsigned)ch1); }
+    /* random noise of +-0.6 V around 230.5: still steady */
+    { uint32_t seed = 7U, ch = 0U; fresh(); to_run(); run(3000U); strcpy(prev, row(0));
+      for (k = 0U; k < 6000U; k++) { seed = seed * 1664525U + 1013904223U; D.vout_dv = (uint16_t)(2305 + (int)((seed >> 12) % 13U) - 6); run(10U); if (strcmp(row(0), prev) != 0) { ch++; strcpy(prev, row(0)); } }
+      CHECK(ch <= 2U, "random noise of +-0.6 V around 230.5 V for 60 s: the shown value changes at most twice (%u)", (unsigned)ch); }
+    /* a real step is followed at once; a slow drift is followed too */
+    fresh(); to_run(); run(3000U); D.vout_dv = 2400U; run(300U); ROW(0, "O/P Voltage    240 V");
+    D.vout_dv = 2312U; run(10000U); ROW(0, "O/P Voltage    231 V");
+    D.vout_dv = 2380U; run(100U); ROW(0, "O/P Voltage    238 V");
+    CHECK(1, "a step of 5 V or more shows at once; a 1.2 V change shows within seconds");
+    /* the load current too: +-0.2 A of noise on 12.3 A */
+    { uint32_t seed = 9U, ch = 0U; fresh(); to_run(); run(3000U); strcpy(prev, row(2));
+      for (k = 0U; k < 6000U; k++) { seed = seed * 1664525U + 1013904223U; D.load_da = (uint16_t)(123 + (int)((seed >> 12) % 5U) - 2); run(10U); if (strcmp(row(2), prev) != 0) { ch++; strcpy(prev, row(2)); } }
+      CHECK(ch <= 2U, "the load shows steady with +-0.2 A of noise (%u changes in 60 s)", (unsigned)ch); }
+    /* no reading: dashes, and the filter restarts from the next reading */
+    fresh(); to_run(); run(1000U); D.have = 0U; D.link_ok = 0U; run(300U); ROW(0, "O/P Voltage    --- V");
+    D.have = 1U; D.link_ok = 1U; D.vout_dv = 2500U; run(100U); ROW(0, "O/P Voltage    250 V");
+    printf("  display stability: no flicker across a rounding boundary or with noise, steps followed at once, whole volts, dashes\n");
+}
+
+static void t_no_cuts(void)
+{
+    /* TEST switch: the master applies no voltage limits */
+    fresh(); MApp_SetTestNoCuts(&A, 0U); D.vin_dv = 1200U; run(MUI_SPLASH_MS + 20000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && MApp_Control(&A)->run == 0U, "standard: 120 V in (the I/P LV is 180 V): the unit does not start");
+    fresh(); MApp_SetTestNoCuts(&A, 1U); D.vin_dv = 1200U; run(MUI_SPLASH_MS + 14000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "test switch on: it starts and the contactor closes at 120 V");
+    D.vin_dv = 3500U; D.vout_dv = 3200U; run(30000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "350 V in and 320 V out for 30 s: no trip, nothing logged");
+    D.vin_dv = 500U; D.vout_dv = 500U; run(30000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "50 V in and out for 30 s: no trip either (no I/P LV, no O/P LV)");
+    D.load_da = 1200U; run(11000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && MLog_Count(&A.log) == 1U, "but an overload still trips: only the VOLTAGE cuts are off");
+    fresh(); MApp_SetTestNoCuts(&A, 1U); run(MUI_SPLASH_MS + 7000U); MApp_Diag(&A, T, F); CHECK(strstr(F[2], "NOCUT") != NULL, "the diagnostics page says NOCUT ('%s')", F[2]);
+    printf("  test switch: no voltage cuts in the master (start, high and low input and output), overload still trips\n");
+}
+
+#define CALA (4U * MFLASH_PAGE)
+#define CALB (5U * MFLASH_PAGE)
+static void fresh_cal(void) { fresh(); MApp_InitCal(&A, CALA, CALB); D.ct_raw = 1U; D.ct_x16 = (uint16_t)(141U * 16U); }
+static int load_shows(const char *s) { return strstr(row(2), s) != NULL; }
+
+static void t_load_calibration(void)
+{
+    uint32_t C;
+    /* the DEFAULTS reproduce the original firmware: counts -> amps = (counts / 4) * 65.25 / 766, minus 3 A */
+    fresh_cal(); to_run();
+    for (C = 160U; C <= 3000U; C += 140U)
+    {
+        double old = ((double)(C >> 2) * 65.25 / 766.0 - 3.0) * 10.0, got;
+        if (old < 0.0) old = 0.0;
+        D.ct_x16 = (uint16_t)(C * 16U); run(300U);                 /* what the application computes from this CT count, through its screen's filter */
+        got = (double)A.last.ct_x16 / 16.0;                         /* the count it was given */
+        got = (got - 141.0) * 0.213; if (got < 0.0) got = 0.0; if (got > 600.0) got = 600.0;
+        CHECK(got - old < 3.0 && old - got < 3.0, "defaults: %u counts: the original firmware %.1f dA, the new formula %.1f dA (within 0.3 A)", (unsigned)C, old, got);
+    }
+    /* YOUR CASE: the old scale shows 3.0 A while the clamp meter says 6.6 A (282 counts) */
+    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(282U * 16U); run(3000U);
+    CHECK(load_shows("3.0"), "uncalibrated: the screen shows 3.0 A ('%s')", row(2));
+    /* ZERO: Set-Mode, Calibration = Yes, with no load (the CT reads 141 counts, as the original firmware assumed) */
+    D.ct_x16 = (uint16_t)(141U * 16U); combo(); tap(0, 100U); tap(1, 100U); ROW(1, "    Calibration"); tap(0, 100U);
+    CHECK(A.cal.zero_x16 == 141U * 16U && A.cal.from_flash, "Set-Mode, Calibration = Yes: the zero is taken from the CT now (141 counts)");
+    ROW(1, "      Zero Set");
+    run(2000U); combo(); run(400U);                                    /* leave Set-Mode */
+    /* SPAN: the Load Calibration page, MENU x3; the load runs at 6.6 A (the CT reads 282 counts) */
+    D.ct_x16 = (uint16_t)(282U * 16U); run(15000U);
+    tap(0, 100U); tap(0, 100U); tap(0, 100U); CHECK(MUI_ShowsCal(&A.ui), "MENU x3 opens the Load Calibration page");
+    run(1500U); CHECK(strstr(row(1), "3.0") != NULL, "it shows the reading, 3.0 A (%s)", row(1));
+    tap(1, 100U); tap(1, 100U); tap(1, 100U);                          /* 3.0 -> 6.0 A (the units) */
+    tap(2, 100U); { int i; for (i = 0; i < 6; i++) tap(1, 100U); }     /* the tenths: 6.6 A */
+    CHECK(MUI_CalValue(&A.ui) == 66U, "6.6 A typed in");
+    tap(3, 100U);                                                      /* LOG: save */
+    ROW(1, "     Calibrated");
+    CHECK(A.cal.gain_x1000 >= 2190U && A.cal.gain_x1000 <= 2206U, "the gain is 2.198: 6.6 A / 3.003 A (stored %u)", (unsigned)A.cal.gain_x1000);
+    tap(0, 100U); run(6000U);
+    CHECK(load_shows("6.6") || load_shows("6.5") || load_shows("6.7"), "calibrated: the screen shows 6.5 to 6.7 A at the same CT reading ('%s')", row(2));
+    /* it survives a restart */
+    { uint16_t z = A.cal.zero_x16, g = A.cal.gain_x1000; boot(); MApp_InitCal(&A, CALA, CALB); D.ct_raw = 1U; D.ct_x16 = (uint16_t)(282U * 16U);
+      CHECK(A.cal.from_flash && A.cal.zero_x16 == z && A.cal.gain_x1000 == g, "after a restart the calibration is read back from flash (zero %u, gain %u)", (unsigned)A.cal.zero_x16, (unsigned)A.cal.gain_x1000);
+      to_run(); run(4000U); CHECK(load_shows("6.6") || load_shows("6.5") || load_shows("6.7"), "and the display is right straight away ('%s')", row(2)); }
+    /* the checks of the spec: a load below 2.0 A is refused, so is a value outside 2.0 to 180.0 A, so is a gain that no CT could give */
+    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(141U * 16U + 40U * 16U); run(1500U);        /* 40 counts above the zero = 0.85 A nominal */
+    tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(3, 100U); ROW(1, "    Load Too Low"); CHECK(A.cal.gain_x1000 == 1000U, "a load below 2.0 A: 'Load Too Low', nothing changed");
+    run(2000U); D.ct_x16 = (uint16_t)(141U * 16U + 300U * 16U); run(1500U);                    /* 6.4 A nominal */
+    A.ui.cal_val = 15U; tap(3, 100U); CHECK(strstr(row(1), "Enter") != NULL && A.cal.gain_x1000 == 1000U, "a typed value below 2.0 A is refused (%s)", row(1));
+    run(2000U); A.ui.cal_val = 1900U; tap(3, 100U); CHECK(strstr(row(1), "Enter") != NULL && A.cal.gain_x1000 == 1000U, "and one above 180.0 A (%s)", row(1));
+    run(2000U); A.ui.cal_val = 1800U; tap(3, 100U); CHECK(strstr(row(1), "Out Of Range") != NULL && A.cal.gain_x1000 == 1000U, "a 180 A entry against 6.4 A on the CT (a gain of 28) is 'Out Of Range' (%s)", row(1));
+    /* the zero is refused while there is a load: the CT reads far above any zero */
+    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(900U * 16U); run(500U); combo(); tap(0, 100U); tap(1, 100U); tap(0, 100U);
+    ROW(1, "   Load Not Zero"); CHECK(A.cal.zero_x16 == 141U * 16U, "Set-Mode Calibration with the CT reading 900 counts: 'Load Not Zero', the zero is unchanged");
+    /* a failed save leaves the old calibration */
+    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(282U * 16U); run(1500U); tap(0, 100U); tap(0, 100U); tap(0, 100U); A.ui.cal_val = 66U; fail_prog = 1; tap(3, 100U); fail_prog = 0;
+    ROW(1, "    Save Failed"); CHECK(A.cal.gain_x1000 == 1000U, "a failed flash write: the gain is back to the old value");
+    /* Factory Reset keeps the calibration (a separate record) */
+    printf("  load calibration: defaults equal the original firmware, your 3.0 A -> 6.6 A case, zero and span, flash, the 2.0 A and range checks\n");
+}
+
+static uint32_t rs = 5150U;
+static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
+
+static void t_fuzz(void)
+{
+    uint32_t round, k, bad_frame = 0U, bad_set = 0U, bad_boot = 0U;
+    for (round = 0U; round < 30U; round++)
+    {
+        fresh(); to_run();
+        for (k = 0U; k < 120000U; k++)
+        {
+            uint32_t r = rnd() % 1000U; int q, c;
+            if (r < 6U) K[rnd() % 4U] ^= 1U;
+            if (r == 7U) { K[0] = K[3] = 1U; }
+            if (r == 8U) { K[0] = K[3] = 0U; }
+            if (r == 9U) { D.have = (uint8_t)(rnd() & 1U); D.link_ok = D.have; D.state = (uint8_t)(rnd() % 4U); D.fault = (uint8_t)(rnd() % 25U); D.vin_dv = (uint16_t)(rnd() % 4000U); D.vout_dv = (uint16_t)(rnd() % 4000U); D.freq_chz = (uint16_t)(rnd() % 6500U); }
+            if (r == 10U) fail_prog = (int)(rnd() % 6U == 0U);
+            if (r == 11U) { uint32_t pos = rnd() % (4U * MFLASH_PAGE); fm[pos] ^= (uint8_t)(1U << (rnd() % 8U)); }
+            if (r == 12U && (rnd() % 50U) == 0U) { boot(); if (MS_Validate(&A.settings, 0) != MS_OK) bad_boot++; }
+            MApp_Step(&A, K[0], K[1], K[2], K[3], &D, T, F); T += 5U + (rnd() % 20U);
+            for (q = 0; q < 4; q++) { if (strlen(F[q]) != 20U) bad_frame++; for (c = 0; c < 20; c++) if (F[q][c] < 32 || F[q][c] > 126) bad_frame++; }
+            if (MS_Validate(&A.settings, 0) != MS_OK) bad_set++;
+        }
+    }
+    CHECK(bad_frame == 0U, "3.6 million random steps with random keys, data, failed saves and flash bit flips: every frame is well formed (%u bad)", (unsigned)bad_frame);
+    CHECK(bad_set == 0U && bad_boot == 0U, "the live settings are always valid, also after a restart from a damaged flash (%u / %u bad)", (unsigned)bad_set, (unsigned)bad_boot);
+    printf("  app fuzz: 3.6 million random steps with failures and bit flips: frames well formed, settings always valid\n");
+}
+
+int main(void)
+{
+    t_boot_and_set();
+    t_persist();
+    t_failures();
+    t_data();
+    t_log();
+    t_setmode_isolation();
+    t_slave_control();
+    t_engine_inputs();
+    t_status_and_diag();
+    t_display_stability();
+    t_load_calibration();
+    t_no_cuts();
+    t_fuzz();
+    printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
+    return g_fail ? 1 : 0;
+}

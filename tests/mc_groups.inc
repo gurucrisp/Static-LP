@@ -1,0 +1,508 @@
+#ifdef TEST_MC
+/* ================================================================================================================================================================
+ * MASTER CONTROL (roadmap step 3; decisions D1, D5, D9, D12): built with SLAVE_MASTER_CONTROL 1, SLAVE_LINK_V2 1, no autorun, stage 3 with the legacy relays.
+ * The "master" below is a few lines that call SlaveCtrl_OnControl() once per 100 ms exactly as the link would; the last group drives the controller through
+ * real frame bytes and the real link logic. */
+#include "slave_link2.h"
+#include "link_v2.h"
+
+static uint32_t mc_ms(void) { return (uint32_t)(sim_t / 1000ULL); }
+static void mc_world(uint64_t seed, float vin) { l3_world(seed, vin); }
+/* the master: one $M every 100 ms for `ms` milliseconds */
+static void mc_for(uint32_t ms, uint8_t run, uint16_t setv, uint8_t clr, uint16_t maxc)
+{
+    uint32_t k;
+    for (k = 0U; k < (ms / 100U); k++) { SlaveCtrl_OnControl(run, setv, clr, maxc, mc_ms()); run_for(100000); }
+}
+/* until RUN (or the timeout), sending run = 1; returns the milliseconds it took */
+static uint32_t mc_until_run(uint16_t setv, uint8_t clr, uint32_t timeout_ms)
+{
+    uint32_t k;
+    for (k = 0U; k < (timeout_ms / 100U); k++)
+    {
+        if (g_ctrl.state == CTRL_RUN) return k * 100U;
+        SlaveCtrl_OnControl(1U, setv, clr, 300U, mc_ms());
+        run_for(100000);
+    }
+    return timeout_ms;
+}
+static void mc_to_run_settled(uint64_t seed, float vin, uint16_t setv, uint8_t clr)
+{
+    uint32_t t;
+    mc_world(seed, vin);
+    t = mc_until_run(setv, clr, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN, "the unit reaches RUN under master control (state %d after %u ms)", g_ctrl.state, (unsigned)t);
+    mc_for(10000U, 1U, setv, clr, 300U);
+}
+
+static void t_mc_no_autorun(void)
+{
+    mc_world(220000000ULL, 225.0f);
+    run_for(5000000);
+    CHECK(g_ctrl.state == CTRL_OFF && n_energise == 0 && !is_running(), "no $M at all: the unit does not start (state %d, %d energisations)", g_ctrl.state, n_energise);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_LINK_LOST) != 0U, "after the 1 s timeout LINK_LOST is flagged (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_RUN_ACK) == 0U, "and run is not acknowledged");
+    CHECK(SlaveCtrl_SetvDv() == 0U && SlaveCtrl_ClrEcho() == 0U, "no set voltage and no clear counter accepted yet (setv %u, clr %u)", (unsigned)SlaveCtrl_SetvDv(), (unsigned)SlaveCtrl_ClrEcho());
+    mc_for(10000U, 0U, 2300U, 0U, 300U);                                     /* a master that says run = 0 */
+    CHECK(n_energise == 0 && g_ctrl.state == CTRL_OFF, "run = 0 for 10 s: still nothing energised (state %d)", g_ctrl.state);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_LINK_LOST) == 0U, "the link is alive again as soon as $M frames arrive");
+    CHECK(SlaveCtrl_SetvDv() == 2300U, "the set voltage is adopted while stopped (%u)", (unsigned)SlaveCtrl_SetvDv());
+    check_invariants("master control: no autorun");
+    printf("  master control: no autorun; LINK_LOST after 1 s; run = 0 keeps it off\n");
+}
+
+static void t_mc_run_in_band(void)
+{
+    uint16_t f2, f_entry; double v_entry; uint32_t t;
+    mc_world(221000000ULL, 225.0f);
+    t = mc_until_run(2300U, 5U, 40000U);
+    f_entry = SlaveCtrl_Flags2(); v_entry = (double)W.vout;
+    CHECK(g_ctrl.state == CTRL_RUN && v_entry < 227.5, "at the start of RUN the output is still about 225 V, 5 V from the set voltage (%.2f V, after %u ms)", v_entry, (unsigned)t);
+    CHECK((f_entry & LINKV2_FLAG_IN_BAND) == 0U && (f_entry & LINKV2_FLAG_RUN_ACK) != 0U, "IN_BAND is CLEAR while the output is 5 V from the set voltage, RUN_ACK is set (flags2 0x%04X)", (unsigned)f_entry);
+    mc_for(10000U, 1U, 2300U, 5U, 300U);
+    f2 = SlaveCtrl_Flags2();
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "running without a fault (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    CHECK((double)W.vout > 228.5 && (double)W.vout < 231.5, "regulating to the set voltage 230 V (%.2f V)", (double)W.vout);
+    CHECK((f2 & LINKV2_FLAG_RUN_ACK) != 0U && (f2 & LINKV2_FLAG_IN_BAND) != 0U, "RUN_ACK and IN_BAND are set (flags2 0x%04X)", (unsigned)f2);
+    CHECK((f2 & (LINKV2_FLAG_LINK_LOST | LINKV2_FLAG_FAULT_LATCHED)) == 0U, "no link loss and no latched fault");
+    CHECK(SlaveCtrl_SetvDv() == 2300U && SlaveCtrl_ClrEcho() == 5U, "the set voltage and the clear counter the master sent are echoed (%u, %u)", (unsigned)SlaveCtrl_SetvDv(), (unsigned)SlaveCtrl_ClrEcho());
+    CHECK(SlaveCtrl_MaxCorrDv() == 300U, "the Max Correction is stored (%u)", (unsigned)SlaveCtrl_MaxCorrDv());
+    mc_for(1000U, 1U, 2300U, 5U, 450U);
+    CHECK(SlaveCtrl_MaxCorrDv() == 450U, "and follows the master (%u)", (unsigned)SlaveCtrl_MaxCorrDv());
+    check_invariants("master control: run");
+    printf("  master control: run = 1 reaches RUN, regulates to the set voltage, RUN_ACK + IN_BAND, echoes\n");
+}
+
+static void t_mc_stop_restart(void)
+{
+    uint32_t t;
+    mc_to_run_settled(222000000ULL, 225.0f, 2300U, 1U);
+    mc_for(8000U, 0U, 2300U, 1U, 300U);
+    CHECK(g_ctrl.state == CTRL_OFF && !inv_enabled, "run = 0 stops it and releases everything (state %d, inverter %d)", g_ctrl.state, inv_enabled);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_RUN_ACK) == 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_IN_BAND) == 0U, "RUN_ACK and IN_BAND drop (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
+    CHECK(g_ctrl.fault == CF_NONE, "a stop is not a fault");
+    t = mc_until_run(2300U, 1U, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN, "run = 1 starts it again (state %d after %u ms)", g_ctrl.state, (unsigned)t);
+    check_invariants("master control: stop and restart");
+    printf("  master control: run = 0 stops, run = 1 starts again\n");
+}
+
+static void t_mc_fault_latches(void)
+{
+    int energised, k;
+    mc_to_run_settled(223000000ULL, 225.0f, 2300U, 5U);
+    energised = n_energise;
+    SlaveCtrl_OnFltIrq();
+    run_for(50000);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "a fault latches AT ONCE (state %d): no retry timer, no escalation count", g_ctrl.state);
+    CHECK(g_ctrl.fault == CF_FLT && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT && SlaveCtrl_LinkState() == 3U, "the fault code is reported (fault %d, link state %u)", g_ctrl.fault, (unsigned)SlaveCtrl_LinkState());
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_FAULT_LATCHED) != 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_IN_BAND) == 0U, "FAULT_LATCHED is set, IN_BAND is not (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
+    for (k = 0; k < 3; k++)
+    {   /* the master keeps saying run = 1 with the SAME clear counter: nothing happens, for a minute */
+        mc_for(20000U, 1U, 2300U, 5U, 300U);
+        CHECK(g_ctrl.state == CTRL_LATCHED && n_energise == energised, "20 s later (x%d): still latched, nothing energised again (state %d)", k + 1, g_ctrl.state);
+    }
+    check_invariants("master control: fault latches");
+    printf("  master control: a fault latches at once and stays latched for a minute while the master keeps saying run = 1\n");
+}
+
+static void t_mc_clear_counter(void)
+{
+    uint32_t t; int energised;
+    mc_to_run_settled(224000000ULL, 225.0f, 2300U, 5U);
+    SlaveCtrl_OnFltIrq(); run_for(50000);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "latched");
+    mc_for(2000U, 1U, 2300U, 5U, 300U);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "the SAME counter again is not a clear");
+    SlaveCtrl_OnControl(1U, 2300U, 6U, 300U, mc_ms());
+    CHECK(g_ctrl.state != CTRL_LATCHED && g_ctrl.fault == CF_NONE && (SlaveCtrl_Flags2() & LINKV2_FLAG_FAULT_LATCHED) == 0U, "a CHANGED counter clears it (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    CHECK(SlaveCtrl_ClrEcho() == 6U, "and is echoed (%u)", (unsigned)SlaveCtrl_ClrEcho());
+    t = mc_until_run(2300U, 6U, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN, "with run = 1 it starts again after the clear (state %d after %u ms)", g_ctrl.state, (unsigned)t);
+    /* a second fault: repeating the new counter does not clear it, the next change does, and run = 0 keeps it off */
+    mc_for(8000U, 1U, 2300U, 6U, 300U);
+    SlaveCtrl_OnFltIrq(); run_for(50000);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "latched again");
+    mc_for(3000U, 1U, 2300U, 6U, 300U);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "the counter the slave has already seen does not clear a NEW fault");
+    energised = n_energise;
+    SlaveCtrl_OnControl(0U, 2300U, 7U, 300U, mc_ms());
+    run_for(2000000);
+    CHECK(g_ctrl.state == CTRL_OFF && n_energise == energised, "clear with run = 0: cleared, and it stays OFF (state %d)", g_ctrl.state);
+    check_invariants("master control: clear counter");
+    printf("  master control: a changed clear counter clears; the same one does not; clear + run = 1 restarts, clear + run = 0 stays off\n");
+}
+
+static void t_mc_first_counter(void)
+{
+    mc_world(225500000ULL, 225.0f);
+    g_ctrl.state = CTRL_LATCHED; g_ctrl.fault = CF_FLT;                      /* white box: a slave that is latched and has seen no $M yet */
+    SlaveCtrl_OnControl(0U, 2300U, 7U, 300U, mc_ms());
+    CHECK(g_ctrl.state == CTRL_LATCHED && SlaveCtrl_ClrEcho() == 7U, "the FIRST counter is adopted and is not a clear (state %d)", g_ctrl.state);
+    SlaveCtrl_OnControl(0U, 2300U, 7U, 300U, mc_ms());
+    CHECK(g_ctrl.state == CTRL_LATCHED, "the same counter again: still latched");
+    SlaveCtrl_OnControl(0U, 2300U, 8U, 300U, mc_ms());
+    CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == CF_NONE, "a change clears it (state %d)", g_ctrl.state);
+    mc_to_run_settled(225000000ULL, 225.0f, 2300U, 7U);
+    CHECK(SlaveCtrl_ClrEcho() == 7U, "the first $M after a start only adopts its counter (7)");
+    SlaveCtrl_OnFltIrq(); run_for(50000);
+    mc_for(3000U, 1U, 2300U, 7U, 300U);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "a counter equal to the adopted one is not a clear");
+    SlaveCtrl_OnControl(1U, 2300U, 8U, 300U, mc_ms());
+    CHECK(g_ctrl.state != CTRL_LATCHED, "8 is");
+    printf("  master control: the first counter is only adopted, never a clear\n");
+}
+
+static void t_mc_link_loss(void)
+{
+    uint32_t t;
+    mc_to_run_settled(226000000ULL, 225.0f, 2300U, 2U);
+    run_for(1300000);                                                          /* the master goes silent */
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_LINK_LOST) != 0U, "LINK_LOST after 1.3 s of silence (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
+    CHECK(g_ctrl.state != CTRL_RUN && g_ctrl.state != CTRL_FAULT && g_ctrl.state != CTRL_LATCHED, "the unit has begun to stop, and it is not a fault (state %d)", g_ctrl.state);
+    run_for(6000000);
+    CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == CF_NONE && !inv_enabled, "a few seconds later it is OFF with no fault (state %d)", g_ctrl.state);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_RUN_ACK) == 0U, "RUN_ACK is gone");
+    t = mc_until_run(2300U, 2U, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN && (SlaveCtrl_Flags2() & LINKV2_FLAG_LINK_LOST) == 0U, "the frames return with run = 1: LINK_LOST clears and it runs again (state %d after %u ms)", g_ctrl.state, (unsigned)t);
+    /* a silence shorter than the timeout changes nothing */
+    run_for(900000);
+    CHECK(g_ctrl.state == CTRL_RUN && (SlaveCtrl_Flags2() & LINKV2_FLAG_LINK_LOST) == 0U, "0.9 s of silence is within the timeout: it keeps running");
+    check_invariants("master control: link loss");
+    printf("  master control: 1 s without $M stops it (no fault); frames back with run = 1 start it; 0.9 s of silence is tolerated\n");
+}
+
+static void t_mc_setv(void)
+{
+    uint32_t t;
+    mc_to_run_settled(227000000ULL, 225.0f, 2300U, 3U);
+    mc_for(6000U, 1U, 2400U, 3U, 300U);                                        /* the master changes the set voltage WHILE it runs */
+    CHECK(SlaveCtrl_SetvDv() == 2300U, "while energised the new set voltage is NOT adopted (echo %u)", (unsigned)SlaveCtrl_SetvDv());
+    CHECK((double)W.vout > 228.5 && (double)W.vout < 231.5, "and the output stays at 230 V (%.2f V)", (double)W.vout);
+    mc_for(8000U, 0U, 2400U, 3U, 300U);                                        /* stop, still sending 2400 */
+    CHECK(g_ctrl.state == CTRL_OFF && SlaveCtrl_SetvDv() == 2400U, "after the stop it is adopted, because the master repeats it (echo %u)", (unsigned)SlaveCtrl_SetvDv());
+    t = mc_until_run(2400U, 3U, 40000U);
+    mc_for(10000U, 1U, 2400U, 3U, 300U);
+    CHECK(g_ctrl.state == CTRL_RUN && (double)W.vout > 238.5 && (double)W.vout < 241.5, "the next start regulates to 240 V (%.2f V, RUN after %u ms)", (double)W.vout, (unsigned)t);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_IN_BAND) != 0U, "IN_BAND follows the NEW set voltage");
+    check_invariants("master control: set voltage");
+    printf("  master control: a new set voltage waits for the stop, then is adopted and regulated to\n");
+}
+
+static void t_mc_condition_fault(void)
+{
+    mc_to_run_settled(228000000ULL, 225.0f, 2300U, 1U);
+    W.vin = 100.0f; W.vout = 100.0f;                                           /* the mains leaves the slave's window: a CONDITION, not a hardware event */
+    mc_for(4000U, 1U, 2300U, 1U, 300U);
+    CHECK(g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_VIN_RANGE, "even a condition fault latches under master control (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    W.vin = 225.0f; W.vout = 225.0f;
+    mc_for(30000U, 1U, 2300U, 1U, 300U);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "and does NOT resume by itself when the mains returns (state %d)", g_ctrl.state);
+    SlaveCtrl_OnControl(1U, 2300U, 2U, 300U, mc_ms());
+    CHECK(mc_until_run(2300U, 2U, 40000U) < 40000U && g_ctrl.state == CTRL_RUN, "the master's clear restarts it (state %d)", g_ctrl.state);
+    printf("  master control: a condition fault (input out of the window) latches too and waits for the master\n");
+}
+
+/* ---- end to end: real frame bytes -> the real link logic -> the real controller; the frames that come back are parsed ---- */
+#define E2E_MAX 700
+static char     e2e_f[E2E_MAX][100]; static int e2e_n[E2E_MAX]; static int e2e_cnt;
+static uint32_t e2e_seq_m;
+static void    e2e_on_control(const LinkM_t *m, uint32_t now) { SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now); }
+static void    e2e_fill_e(LinkE_t *e) { e->setv_dv = SlaveCtrl_SetvDv(); e->flags2 = SlaveCtrl_Flags2(); e->clr = SlaveCtrl_ClrEcho(); e->reach_lo_dv = 0U; e->reach_hi_dv = 0U; }
+static void    e2e_fill_h(LinkH_t *h) { h->fw = SLAVE_FW_VERSION; h->vin_min_dv = (uint16_t)(CTRL_VIN_MIN_V * 10.0f); h->vin_max_dv = (uint16_t)(CTRL_VIN_MAX_V * 10.0f); h->rst = 0U; h->tuned = 1U; h->vout_max_dv = (uint16_t)(CTRL_VOUT_MAX_V * 10.0f); }
+static uint8_t e2e_tx(const char *f, uint32_t n) { if (e2e_cnt >= E2E_MAX) return 0U; memcpy(e2e_f[e2e_cnt], f, n); e2e_n[e2e_cnt] = (int)n; e2e_cnt++; return 1U; }
+static void    e2e_bytes(const char *s, uint32_t n) { uint32_t i; for (i = 0U; i < n; i++) SL2_Rx((uint8_t)s[i], mc_ms()); }
+static void    e2e_step(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 5U; k++) { run_for(5000); SL2_Service(mc_ms()); } }
+static void    e2e_master(uint8_t run, uint16_t setv, uint8_t clr, uint16_t maxc, int corrupt)
+{
+    LinkM_t m; char b[96]; int32_t n;
+    m.seq = (uint8_t)e2e_seq_m++; m.run = run; m.setv_dv = setv; m.clr = clr; m.maxc_dv = maxc;
+    n = LinkV2_BuildM(b, sizeof b, &m);
+    if (corrupt) b[n - 4] = (char)((b[n - 4] == '0') ? '1' : '0');
+    e2e_bytes(b, (uint32_t)n);
+    e2e_step(100);
+}
+/* a corrupted run = 0 frame: its checksum digit is wrong, so it must be dropped. It arrives IN ADDITION to the valid frames: replacing them would (rightly) trip the link timeout. */
+static void    e2e_inject_bad_stop(void)
+{
+    LinkM_t m; char b[96]; int32_t n;
+    m.seq = 0U; m.run = 0U; m.setv_dv = 2300U; m.clr = 4U; m.maxc_dv = 300U;
+    n = LinkV2_BuildM(b, sizeof b, &m);
+    b[n - 4] = (char)((b[n - 4] == '0') ? '1' : '0');
+    e2e_bytes(b, (uint32_t)n);
+}
+static int e2e_last_e(LinkE_t *out) { int i; LinkV2Frame_t f; for (i = e2e_cnt - 1; i >= 0; i--) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_E) { *out = f.u.e; return 1; } return 0; }
+static int e2e_count(LinkV2Type_t t) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < e2e_cnt; i++) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == t) c++; return c; }
+
+static void t_mc_end_to_end(void)
+{
+    static const SL2_Hooks_t HK = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx };
+    LinkE_t e; LinkV2Frame_t f; int k, i, ok;
+    mc_world(229000000ULL, 225.0f);
+    e2e_cnt = 0; e2e_seq_m = 0U;
+    SL2_Init(&HK, mc_ms());
+    e2e_step(1500);                                                           /* no master yet */
+    CHECK(e2e_count(LINKV2_H) == 3, "three hellos at start (%d)", e2e_count(LINKV2_H));
+    CHECK(e2e_last_e(&e) && (e.flags2 & LINKV2_FLAG_LINK_LOST) != 0U && e.setv_dv == 0U, "with no master, $E says LINK_LOST and no set voltage");
+    for (i = 0; i < e2e_cnt; i++) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_H) { CHECK(f.u.h.proto == 2U && f.u.h.fw == SLAVE_FW_VERSION && f.u.h.vin_min_dv == (uint16_t)(CTRL_VIN_MIN_V * 10.0f), "the hello carries protocol 2, the firmware version and the input window"); break; }
+    for (k = 0; (k < 400) && (g_ctrl.state != CTRL_RUN); k++) e2e_master(1U, 2300U, 4U, 300U, 0);
+    CHECK(g_ctrl.state == CTRL_RUN, "$M frames as BYTES start the unit (state %d after %d frames)", g_ctrl.state, k);
+    for (k = 0; k < 100; k++) e2e_master(1U, 2300U, 4U, 300U, 0);
+    CHECK(e2e_last_e(&e) && (e.flags2 & (LINKV2_FLAG_RUN_ACK | LINKV2_FLAG_IN_BAND)) == (LINKV2_FLAG_RUN_ACK | LINKV2_FLAG_IN_BAND) && e.setv_dv == 2300U && e.clr == 4U, "$E reports RUN_ACK + IN_BAND, the set voltage and the counter (flags2 0x%04X, setv %u, clr %u)", (unsigned)e.flags2, (unsigned)e.setv_dv, (unsigned)e.clr);
+    /* a corrupted $M with run = 0 is ignored: the unit keeps running */
+    for (k = 0; k < 20; k++) { e2e_inject_bad_stop(); e2e_master(1U, 2300U, 4U, 300U, 0); }
+    CHECK(g_ctrl.state == CTRL_RUN && SL2_Stats()->rx_bad >= 20U, "20 corrupted run = 0 frames arriving beside the valid ones are dropped and counted, the unit keeps running (state %d, rx_bad %u)", g_ctrl.state, (unsigned)SL2_Stats()->rx_bad);
+    /* commands */
+    {   LinkK_t kk; char b[96]; int32_t n; int h0 = e2e_count(LINKV2_H), r0 = e2e_count(LINKV2_R);
+        memset(&kk, 0, sizeof kk); kk.id = 9U; kk.cmd = LINKCMD_HELLO; n = LinkV2_BuildK(b, sizeof b, &kk); e2e_bytes(b, (uint32_t)n); e2e_step(100);
+        CHECK(e2e_count(LINKV2_H) == h0 + 1 && e2e_count(LINKV2_R) == r0 + 1, "HELLO is answered with a response and a hello");
+        e2e_bytes(b, (uint32_t)n); e2e_step(100);                              /* the master's retry, same id */
+        CHECK(e2e_count(LINKV2_H) == h0 + 1 && e2e_count(LINKV2_R) == r0 + 2, "the retry is answered again but the hello is not sent twice");
+        kk.id = 10U; kk.cmd = LINKCMD_TUNE; n = LinkV2_BuildK(b, sizeof b, &kk); e2e_bytes(b, (uint32_t)n); e2e_step(100);
+        ok = 0; for (i = e2e_cnt - 1; i >= 0; i--) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == 10U) { ok = (f.u.r.status == LINKV2_ST_UNKNOWN_CMD); break; }
+        CHECK(ok, "TUNE is answered UNKNOWN_CMD in this firmware version"); }
+    /* a fault, seen in $E, and the clear counter as bytes */
+    SlaveCtrl_OnFltIrq();
+    for (k = 0; k < 10; k++) e2e_master(1U, 2300U, 4U, 300U, 0);
+    CHECK(e2e_last_e(&e) && (e.flags2 & LINKV2_FLAG_FAULT_LATCHED) != 0U && (e.flags2 & LINKV2_FLAG_IN_BAND) == 0U, "$E shows FAULT_LATCHED after a trip (flags2 0x%04X)", (unsigned)e.flags2);
+    for (k = 0; (k < 400) && (g_ctrl.state != CTRL_RUN); k++) e2e_master(1U, 2300U, 5U, 300U, 0);
+    CHECK(g_ctrl.state == CTRL_RUN && e2e_last_e(&e) && e.clr == 5U, "clear counter 5 as bytes clears the latch and the unit runs again (state %d)", g_ctrl.state);
+    /* run = 0 as bytes stops it */
+    for (k = 0; k < 80; k++) e2e_master(0U, 2300U, 5U, 300U, 0);
+    CHECK(g_ctrl.state == CTRL_OFF && e2e_last_e(&e) && (e.flags2 & LINKV2_FLAG_RUN_ACK) == 0U, "run = 0 as bytes stops it (state %d)", g_ctrl.state);
+    /* the $E seq: every number in order with no gap while the queue had room */
+    {   int prev = -1, gaps = 0; for (i = 0; i < e2e_cnt; i++) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_E) { if (prev >= 0 && f.u.e.seq != (uint8_t)(prev + 1)) gaps++; prev = f.u.e.seq; }
+        CHECK(gaps == 0 && e2e_count(LINKV2_E) > 100, "%d $E frames in order with no gap (%d gaps)", e2e_count(LINKV2_E), gaps); }
+    check_invariants("master control: end to end");
+    printf("  master control, end to end: bytes in, the real link logic and controller, frames out: start, in band, a corrupted stop dropped, HELLO and a retry, UNKNOWN_CMD, a latched fault, a clear, a stop\n");
+}
+/* ---- the REAL master logic (m_ctl) against the REAL slave controller: what the master sends in $M frames, as bytes, is all the slave gets ---- */
+#include "m_ctl.h"
+static MCtl_t mm_c; static MSettings_t mm_s; static uint32_t mm_seq; static int mm_clr_changes; static uint8_t mm_last_clr;
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx };
+static void mm_start(uint8_t restart_auto)
+{
+    mc_world(230000000ULL, 225.0f);
+    e2e_cnt = 0; SL2_Init(&HK2, mc_ms());
+    MS_Defaults(&mm_s); mm_s.restart_auto = restart_auto; mm_s.restart_time = 5U; MCtl_Init(&mm_c); mm_seq = 0U; mm_clr_changes = 0; mm_last_clr = 0U;
+}
+/* one master tick of 100 ms: decide, send the $M as bytes, let the slave run */
+static MCtlOut_t mm_tick(uint8_t setmode, uint8_t start, uint8_t stop)
+{
+    MCtlOut_t o; LinkM_t m; char b[96]; int32_t n;
+    uint8_t sf = (uint8_t)((SlaveCtrl_LinkState() == 3U) || (SlaveCtrl_FaultCode() != 0U));
+    MCtl_Step(&mm_c, &mm_s, setmode, start, stop, 1U, sf, mc_ms(), &o);
+    m.seq = (uint8_t)mm_seq++; m.run = o.run; m.setv_dv = o.setv_dv; m.clr = o.clr; m.maxc_dv = o.maxc_dv;
+    n = LinkV2_BuildM(b, sizeof b, &m);
+    if (n > 0) e2e_bytes(b, (uint32_t)n);
+    e2e_step(100);
+    if (o.clr != mm_last_clr) { mm_clr_changes++; mm_last_clr = o.clr; }
+    return o;
+}
+static uint32_t mm_until_run(uint32_t timeout_ms, uint8_t setmode)
+{
+    uint32_t k; for (k = 0U; k < timeout_ms / 100U; k++) { if (g_ctrl.state == CTRL_RUN) return k * 100U; (void)mm_tick(setmode, 0U, 0U); } return timeout_ms;
+}
+
+static void t_mc_master_logic(void)
+{
+    uint32_t t, k; MCtlOut_t o;
+    /* Auto: the master starts the slave by itself */
+    mm_start(1U); t = mm_until_run(60000U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && t >= 4000U, "Auto: the master starts the slave after its on-delay (RUN after %u ms)", (unsigned)t);
+    for (k = 0U; k < 120U; k++) (void)mm_tick(0U, 0U, 0U);
+    CHECK((double)W.vout > 228.5 && (double)W.vout < 231.5, "the slave regulates to the master's Set Voltage 230 V (%.2f V)", (double)W.vout);
+    /* Set-Mode opens: the slave stops its PWM and trips the output */
+    o = mm_tick(1U, 0U, 0U);
+    CHECK(o.run == 0U && g_ctrl.run_request == 0U, "Set-Mode opened: in the SAME master tick the slave's run request is 0");
+    for (k = 0U; k < 90U; k++) (void)mm_tick(1U, 0U, 0U);
+    CHECK(g_ctrl.state == CTRL_OFF && !inv_enabled && g_ctrl.fault == CF_NONE, "9 s later the slave is OFF: PWM stopped, output tripped, and it is not a fault (state %d, inverter %d)", g_ctrl.state, inv_enabled);
+    for (k = 0U; k < 600U; k++) (void)mm_tick(1U, 0U, 0U);
+    CHECK(g_ctrl.state == CTRL_OFF && !is_running(), "and it stays off for a minute while Set-Mode is open (the master keeps sending run = 0)");
+    /* a new Set Voltage made in Set-Mode reaches the slave and is regulated to after leaving */
+    mm_s.set_v = 240U; mm_s.maxcorr_v = 25U;
+    for (k = 0U; k < 10U; k++) (void)mm_tick(1U, 0U, 0U);
+    CHECK(SlaveCtrl_SetvDv() == 2400U && SlaveCtrl_MaxCorrDv() == 250U, "the slave has the new Set Voltage 2400 and Max Correction 250 (while stopped, it takes them at once)");
+    t = mm_until_run(60000U, 0U);
+    for (k = 0U; k < 120U; k++) (void)mm_tick(0U, 0U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && (double)W.vout > 238.5 && (double)W.vout < 241.5, "after leaving Set-Mode it starts again and regulates to 240 V (%.2f V, RUN after %u ms)", (double)W.vout, (unsigned)t);
+    CHECK(SlaveCtrl_SetvDv() == 2400U, "and reports 2400 as the set voltage in use");
+    /* a Set Voltage changed while the slave RUNS is ignored until it stops (the master only changes it in Set-Mode, but the rule is the slave's) */
+    mm_s.set_v = 230U; for (k = 0U; k < 100U; k++) (void)mm_tick(0U, 0U, 0U);
+    CHECK(SlaveCtrl_SetvDv() == 2400U && (double)W.vout > 238.5, "a change while running is not adopted (the slave keeps regulating to 240 V)");
+    /* a trip: Auto clears it by itself */
+    mm_s.set_v = 240U;
+    SlaveCtrl_OnFltIrq(); run_for(100000);
+    CHECK(g_ctrl.state == CTRL_LATCHED, "a hardware trip latches the slave");
+    { int c0 = mm_clr_changes; t = mm_until_run(90000U, 0U);
+      CHECK(g_ctrl.state == CTRL_RUN && mm_clr_changes > c0, "Auto: the master changes the clear counter and the slave runs again by itself (RUN after %u ms, %d clear changes)", (unsigned)t, mm_clr_changes - c0); }
+    /* Manual: stop at the fault, wait for START */
+    mm_start(0U); (void)mm_tick(0U, 1U, 0U); t = mm_until_run(60000U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN, "Manual: START runs it (after %u ms)", (unsigned)t);
+    for (k = 0U; k < 100U; k++) (void)mm_tick(0U, 0U, 0U);
+    SlaveCtrl_OnFltIrq(); run_for(100000);
+    for (k = 0U; k < 600U; k++) (void)mm_tick(0U, 0U, 0U);
+    CHECK(g_ctrl.state == CTRL_LATCHED && !is_running(), "Manual: after the trip it stays stopped for a minute");
+    (void)mm_tick(0U, 1U, 0U); t = mm_until_run(60000U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN, "and START clears it and runs it again (RUN after %u ms)", (unsigned)t);
+    /* STOP */
+    (void)mm_tick(0U, 0U, 1U); for (k = 0U; k < 90U; k++) (void)mm_tick(0U, 0U, 0U);
+    CHECK(g_ctrl.state == CTRL_OFF && !inv_enabled, "STOP: the slave is off");
+    check_invariants("master control: real master logic");
+    printf("  real master logic against the real slave: it starts by itself (Auto), Set-Mode stops PWM at once, new settings arrive and are regulated to, a trip is cleared (Auto) or waits for START (Manual), STOP\n");
+}
+
+/* ---- the WHOLE real master application (keys, screens, fault engine, control) against the REAL slave controller. The master sees the slave only through what the slave SENDS ($E frames as
+ * bytes, and its status values) and the slave sees the master only through the $M frames the master sends, as bytes. Keys are raw levels with real timing. ---- */
+#include "m_app.h"
+static uint8_t ma_fm[8U * MFLASH_PAGE];
+static int ma_rd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &ma_fm[a], n); return 0; }
+static int ma_pg(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; for (i = 0U; i < n; i++) ma_fm[a + i] &= b[i]; return 0; }
+static int ma_er(uint32_t a) { memset(&ma_fm[a], 0xFF, MFLASH_PAGE); return 0; }
+static const MFlash_t MAFL = { ma_rd, ma_pg, ma_er };
+static MApp_t ma; static MAppData_t md; static char ma_f[4][21]; static uint8_t ma_k[4]; static uint32_t ma_t_tx, ma_seq, ma_last_run; static uint8_t ma_have_last; static MCtlOut_t ma_last;
+static int ma_link_up; static uint8_t ma_buzz_seen;
+
+static void ma_start(uint8_t restart_auto, float vin)
+{
+    mc_world(231000000ULL, vin);
+    e2e_cnt = 0; e2e_seq_m = 0U; SL2_Init(&HK2, mc_ms());
+    memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
+    MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
+    ma.settings.restart_auto = restart_auto; MF_Init(&ma.eng, &ma.settings, mc_ms());
+    ma_t_tx = 0U; ma_seq = 0U; ma_have_last = 0U; ma_link_up = 1; ma_buzz_seen = 0U;
+}
+/* 10 ms of the master: what the slave sent, the key levels, the application, the $M frame (every 100 ms and at once on a change), 10 ms of the slave */
+static void ma_ms10(void)
+{
+    LinkE_t e; uint32_t now = mc_ms();
+    md.have = (uint8_t)(ma_link_up != 0); md.link_ok = md.have;
+    md.vin_dv = (uint16_t)(W.vin * 10.0f); md.vout_dv = (uint16_t)(W.vout * 10.0f); md.freq_chz = 5000U;
+    md.state = SlaveCtrl_LinkState(); md.fault = (uint8_t)SlaveCtrl_FaultCode();
+    md.load_ok = 1U; md.load_da = 100U;
+    if (e2e_last_e(&e)) { md.e_valid = 1U; md.in_band = (uint8_t)((e.flags2 & LINKV2_FLAG_IN_BAND) != 0U); md.clr_echo = e.clr; }
+    e2e_cnt = 0;                                                                                  /* keep only the NEWEST $E: the capture buffer must never fill up and go stale */
+    MApp_Step(&ma, ma_k[0], ma_k[1], ma_k[2], ma_k[3], &md, now, ma_f);
+    if (MApp_Engine(&ma)->buzzer != 0U) ma_buzz_seen = 1U;
+    if (MApp_ControlValid(&ma) != 0U)
+    {
+        const MCtlOut_t *c = MApp_Control(&ma);
+        if ((ma_have_last == 0U) || (c->run != ma_last.run) || (c->clr != ma_last.clr) || (c->setv_dv != ma_last.setv_dv) || (c->maxc_dv != ma_last.maxc_dv) || ((uint32_t)(now - ma_t_tx) >= 100U))
+        {
+            LinkM_t m; char b[96]; int32_t n;
+            m.seq = (uint8_t)ma_seq++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv;
+            n = LinkV2_BuildM(b, sizeof b, &m); if (n > 0) e2e_bytes(b, (uint32_t)n);
+            ma_t_tx = now; ma_last = *c; ma_have_last = 1U;
+        }
+    }
+    e2e_step(10);
+}
+static void ma_run(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 10U; k++) ma_ms10(); }
+static uint32_t ma_until(int (*cond)(void), uint32_t timeout_ms) { uint32_t k; for (k = 0U; k < timeout_ms / 10U; k++) { if (cond()) return k * 10U; ma_ms10(); } return timeout_ms; }
+static int ma_c_run(void) { return g_ctrl.state == CTRL_RUN; }
+static int ma_c_contactor(void) { return MApp_Engine(&ma)->contactor[0] != 0U; }
+static int ma_c_latched(void) { return g_ctrl.state == CTRL_LATCHED; }
+static void ma_tap(int key, uint32_t ms) { ma_k[key] = 1U; ma_run(ms); ma_k[key] = 0U; ma_run(120U); }
+
+static void t_mc_master_app(void)
+{
+    uint32_t t, t_run, t_con; uint32_t k;
+    /* ---- Auto: power-up on-delay, the slave runs, and the contactor closes ONLY after IN_BAND has held ---- */
+    ma_start(1U, 225.0f);
+    t_run = ma_until(ma_c_run, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN && t_run >= 4500U, "Auto: the master starts the slave after the 5 s on-delay (RUN after %u ms)", (unsigned)t_run);
+    CHECK(!ma_c_contactor(), "at that moment the contactor is still OPEN");
+    t_con = ma_until(ma_c_contactor, 30000U);
+    CHECK(ma_c_contactor() && t_con >= 900U && (double)W.vout > 227.5 && (double)W.vout < 232.5, "the contactor closes when the output is AT the set voltage (%.1f V) and has stayed there for about 1 s (%u ms after the slave started)", (double)W.vout, (unsigned)t_con);
+    ma_run(8000U);
+    CHECK((double)W.vout > 228.5 && (double)W.vout < 231.5 && ma_c_contactor(), "regulating to 230 V with the contactor closed (%.2f V)", (double)W.vout);
+    CHECK(ma.eout.fault[0] == 0U && MLog_Count(&ma.log) == 0U && !MApp_Engine(&ma)->buzzer, "no fault, nothing logged, buzzer off");
+    /* ---- Set-Mode by the raw keys: the contactor opens and the slave stops IN THE SAME 10 ms step ---- */
+    ma_k[0] = ma_k[3] = 1U;
+    for (k = 0U; k < 400U && !MApp_SetModeOpen(&ma); k++) ma_ms10();
+    CHECK(MApp_SetModeOpen(&ma) && !ma_c_contactor() && g_ctrl.run_request == 0U, "MENU+LOG for 2 s opens Set-Mode: in that same step the contactor is open and the slave's run request is 0");
+    ma_k[0] = ma_k[3] = 0U; ma_run(9000U);
+    CHECK(g_ctrl.state == CTRL_OFF && !inv_enabled && g_ctrl.fault == CF_NONE && MLog_Count(&ma.log) == 0U, "9 s later the slave is OFF, PWM stopped, no fault, nothing logged (Set-Mode is not a fault)");
+    /* edit Set Voltage 230 -> 240 and leave with MENU+LOG */
+    ma_tap(0, 100U); ma_tap(0, 100U); ma_tap(2, 100U); ma_tap(1, 100U); ma_tap(0, 100U);
+    ma_k[0] = ma_k[3] = 1U; ma_run(2150U); ma_k[0] = ma_k[3] = 0U; ma_run(300U);
+    CHECK(!MApp_SetModeOpen(&ma) && ma.settings.set_v == 240U, "saved: Set Voltage 240 V");
+    t = ma_until(ma_c_contactor, 60000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN, "after leaving Set-Mode the unit restarts by itself and the contactor closes again (%u ms)", (unsigned)t);
+    ma_run(10000U);
+    CHECK((double)W.vout > 238.5 && (double)W.vout < 241.5 && SlaveCtrl_SetvDv() == 2400U, "and regulates to the NEW Set Voltage: 240 V (%.2f V; the slave reports %u)", (double)W.vout, (unsigned)SlaveCtrl_SetvDv());
+    /* ---- STOP and START keys ---- */
+    ma_tap(2, 100U);
+    CHECK(!ma_c_contactor() && ma.ctl_out.run == 0U, "STOP: the contactor opens and run = 0");
+    ma_run(8000U); CHECK(g_ctrl.state == CTRL_OFF && !ma_c_contactor(), "the slave stops and nothing restarts it by itself");
+    ma_tap(1, 100U); t = ma_until(ma_c_contactor, 60000U);
+    CHECK(ma_c_contactor(), "START: it starts and the contactor closes again (%u ms)", (unsigned)t);
+    /* ---- an inrush trip: the contactor opens at once, it is logged, the buzzer sounds, and it retries after 30 s ---- */
+    ma_run(10000U); ma_buzz_seen = 0U;
+    SlaveCtrl_OnFltIrq();
+    ma_run(300U);
+    CHECK(!ma_c_contactor() && g_ctrl.state == CTRL_LATCHED, "a hardware trip: the contactor is open within 0.3 s and the slave is latched");
+    CHECK(MLog_Count(&ma.log) == 1U && ma_buzz_seen, "it is logged once (%u) and the buzzer sounded", (unsigned)MLog_Count(&ma.log));
+    { MLogRec_t r; CHECK(MLog_Get(&ma.log, 0U, &r) == 0 && r.type == MLOG_T_INRUSH && r.slave_code == 2U, "as an Inrush, with the slave's code 2"); }
+    ma_run(25000U); CHECK(!ma_c_contactor() && g_ctrl.state == CTRL_LATCHED, "25 s later: still latched and open (the retry waits 30 s)");
+    t = ma_until(ma_c_run, 20000U);
+    CHECK(g_ctrl.state == CTRL_RUN, "after 30 s the master clears the slave and it runs again (RUN %u ms later)", (unsigned)t);
+    t = ma_until(ma_c_contactor, 30000U); CHECK(ma_c_contactor(), "and the contactor closes once IN_BAND has held (%u ms)", (unsigned)t);
+    CHECK(!MApp_Engine(&ma)->buzzer, "the buzzer is off again");
+    /* ---- three more inrush trips in a row: the fourth latches until power off and on ---- */
+    for (k = 0U; k < 3U; k++)
+    {
+        ma_run(3000U); SlaveCtrl_OnFltIrq(); ma_run(500U);
+        if (k < 2U) { (void)ma_until(ma_c_run, 40000U); ma_run(500U); }
+    }
+    ma_run(100000U);
+    CHECK(g_ctrl.state == CTRL_LATCHED && !ma_c_contactor() && ma.eng.u[0].st == (uint8_t)U_LATCHED, "after the 4th trip the master stops retrying: latched, contactor open, even 100 s later");
+    ma_tap(2, 100U); CHECK(!MApp_Engine(&ma)->buzzer && ma.eng.u[0].st == (uint8_t)U_LATCHED, "STOP silences the buzzer; the latch stays");
+    CHECK(MLog_Count(&ma.log) >= 4U, "every attempt was logged (%u entries)", (unsigned)MLog_Count(&ma.log));
+    /* ---- link lost: the contactor opens at once, and it restarts by itself when the link returns ---- */
+    ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 60000U);
+    ma_link_up = 0; ma_run(100U);
+    CHECK(!ma_c_contactor() && ma.eout.fault[0] == MLOG_T_LINK_LOST, "no frames from the slave: the contactor opens at once, Slave Link Lost");
+    ma_link_up = 1; t = ma_until(ma_c_contactor, 60000U);
+    CHECK(ma_c_contactor(), "frames back: it restarts by itself and the contactor closes again (%u ms)", (unsigned)t);
+    /* ---- a low input: I/P LV after the Volt Cut Delay, restart 5 V inside the limit ---- */
+    ma_run(5000U); W.vin = 175.0f; ma_run(4500U);
+    CHECK(ma_c_contactor(), "175 V (the I/P LV is 180 V): 4.5 s is not yet a trip");
+    ma_run(1500U);
+    CHECK(!ma_c_contactor() && ma.eout.fault[0] == MLOG_T_IP_LV, "after the 5 s Volt Cut Delay: I/P LV, contactor open");
+    W.vin = 183.0f; ma_run(30000U);
+    CHECK(!ma_c_contactor(), "183 V is not 5 V inside the limit: no restart after 30 s (hysteresis)");
+    W.vin = 215.0f; t = ma_until(ma_c_contactor, 80000U);          /* inside the master's limit by 5 V AND inside this slave's own start window */
+    CHECK(ma_c_contactor(), "215 V: it restarts by itself and the contactor closes (%u ms)", (unsigned)t);
+    /* ---- Manual: nothing starts by itself; START does ---- */
+    ma_start(0U, 225.0f); ma_run(30000U);
+    CHECK(g_ctrl.state == CTRL_OFF && !ma_c_contactor(), "Manual: 30 s after power-up nothing has started");
+    ma_tap(1, 100U); t = ma_until(ma_c_contactor, 60000U); CHECK(ma_c_contactor(), "START starts it and the contactor closes (%u ms)", (unsigned)t);
+    check_invariants("master control: the master application");
+    printf("  the REAL master application against the REAL slave: Auto start, the contactor only after IN_BAND, Set-Mode by raw keys, a new Set Voltage regulated to, STOP/START, an inrush with retries and the latch, link loss, input low, Manual\n");
+}
+
+#if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
+/* ---- TEST build: the slave applies NO voltage limits of its own ---- */
+static void t_mc_no_voltage_cuts(void)
+{
+    uint32_t t;
+    mc_world(240000000ULL, 130.0f);                                  /* below the 140 V input envelope: the standard slave refuses to start here */
+    t = mc_until_run(2300U, 1U, 60000U);
+    mc_for(10000U, 1U, 2300U, 1U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "130 V input (below the 140 V envelope): it starts and runs, no fault (state %d, fault %d, RUN after %u ms)", g_ctrl.state, g_ctrl.fault, (unsigned)t);
+    mc_world(241000000ULL, 305.0f);                                  /* above the 300 V envelope */
+    t = mc_until_run(3000U, 1U, 60000U);
+    mc_for(10000U, 1U, 3000U, 1U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "305 V input (above the 300 V envelope): it starts and runs, no fault (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    mc_world(242000000ULL, 270.0f);
+    t = mc_until_run(2950U, 1U, 60000U);
+    mc_for(15000U, 1U, 2950U, 1U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && (double)W.vout > 285.0, "regulating to 295 V, above the old output guard: no output-high trip (%.1f V, state %d, fault %d)", (double)W.vout, g_ctrl.state, g_ctrl.fault);
+    mc_for(30000U, 1U, 2950U, 1U, 0U);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "and it keeps running for another 30 s");
+    check_invariants("master control: no voltage cuts");
+    printf("  TEST build, no voltage cuts: starts at 130 V and at 305 V, regulates to 295 V, no trip\n");
+}
+#endif
+#endif /* TEST_MC */

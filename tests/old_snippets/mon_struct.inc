@@ -1,0 +1,17 @@
+typedef struct
+{
+    LinkStatus_t last;               /* the latest valid status frame                 */
+    uint8_t      have_frame;         /* at least one valid frame has arrived          */
+    uint8_t      have_seq;
+    uint8_t      last_seq;
+    uint32_t     t_last_ms;          /* HAL_GetTick() when the last valid frame came  */
+
+    uint32_t     frames_ok;          /* valid frames                                  */
+    uint32_t     frames_bad;         /* complete lines rejected (checksum/format)     */
+    uint32_t     overflows;          /* over-long lines                               */
+    uint32_t     lost;               /* frames missing, from gaps in the seq number   */
+    uint32_t     bytes_rx;           /* every byte the DMA delivered                  */
+    uint32_t     uart_errors;        /* overrun / framing / noise flags cleared       */
+    uint32_t     fps;                /* valid frames in the last whole second         */
+    uint32_t     max_poll_gap_us;    /* longest time the loop went without polling    */
+} MasterMon_t;
