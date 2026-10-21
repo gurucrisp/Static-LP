@@ -146,6 +146,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             in.ph[0].in_band = (uint8_t)(((d->e_valid != 0U) && (d->in_band != 0U)) || (meas != 0U));
         }
         in.ph[0].heat = d->heat; in.ph[0].ct_peak = d->ct_peak;
+        in.ph[0].slave_state = d->state; in.ph[0].state_valid = d->have;                    /* PWM off = load off */
         /* the Y and B slaves have no link yet: in Industrial and Domestic they count as missing, so those modes do not start */
         in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = now / 60000UL;
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */

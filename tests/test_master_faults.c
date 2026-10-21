@@ -22,6 +22,7 @@ typedef struct
     int      n_clr[3];
     uint32_t t_last_trip;
     uint8_t  key_start, key_stop;
+    uint8_t  state_valid, slave_state;   /* the slave's state from $S; invalid (0) in the older scenarios */
 } W_t;
 
 static void world(W_t *w, uint8_t mode, uint8_t restart_auto, uint32_t t0)
@@ -47,6 +48,7 @@ static void step(W_t *w)
         if (!w->out.run[p]) w->running[p] = 0U;
         w->in.ph[p].in_band = (uint8_t)(w->running[p] && (w->code[p] == 0U) && ((uint32_t)(w->now - w->run_since[p]) >= 1000U));
         w->in.ph[p].slave_fault = w->code[p];
+        w->in.ph[p].state_valid = w->state_valid; w->in.ph[p].slave_state = w->slave_state;
     }
     w->now += 100U;
 }
@@ -302,6 +304,30 @@ static void t_no_retry(void)
     printf("  retries: 0 latches at the first inrush / break / power-stage trip, 1 retries once, the default is the approved 3\n");
 }
 
+static void t_inverter_off(void)
+{
+    W_t w;
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U); w.state_valid = 1U; w.slave_state = 2U; run_ms(&w, 1000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "running: the slave state is 2 (RUNNING), the unit is ON");
+    w.slave_state = 0U; run_ms(&w, 100U); CHECK(unit_st(&w, 0) == (int)U_ON, "off for 0.1 s: still ON");
+    run_ms(&w, 300U); CHECK(unit_st(&w, 0) == (int)U_FAULT && w.out.contactor[0] == 0U && w.out.run[0] == 0U && w.log[0].type == MLOG_T_MAINS && w.log[0].slave_code == 0U && w.n_log == 1, "off for 0.4 s (100 ms ticks): the contactor opens and run drops; logged once as Mains (code 0)");
+    w.slave_state = 2U; run_ms(&w, 8000U); CHECK(w.out.run[0] == 1U, "Auto: the Restart Time later it tries again");
+    /* a glitch of 0.1 s never trips */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U); w.state_valid = 1U; w.slave_state = 2U; run_ms(&w, 1000U);
+    { int i; for (i = 0; i < 5; i++) { w.slave_state = 1U; run_ms(&w, 100U); w.slave_state = 2U; run_ms(&w, 500U); } }
+    CHECK(unit_st(&w, 0) == (int)U_ON && w.n_log == 0, "five 0.1 s glitches of the state: no trip");
+    /* an unknown state (an older slave, or not heard) is not judged */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); w.state_valid = 0U; w.slave_state = 0U; run_ms(&w, 5000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "state_valid = 0: the rule is not applied");
+    /* only while the output is live: STARTING with state 1 is normal */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); w.state_valid = 1U; w.slave_state = 1U; run_ms(&w, 6500U);
+    CHECK(w.out.run[0] == 1U && w.n_log == 0, "STARTING with the slave in state 1: allowed, nothing logged");
+    /* Domestic: only the unit whose slave stopped opens */
+    world(&w, M_MODE_DOMESTIC, 1U, 20000U); { uint32_t k; for (k = 0U; k < 400U && !w.out.contactor[2]; k++) step(&w); }
+    w.state_valid = 1U; w.slave_state = 2U; run_ms(&w, 1000U);
+    printf("  inverter off: the engine opens the contactor 0.2 s after the slave leaves RUNNING (no fault code needed), tolerates glitches and STARTING\n");
+}
+
 static void t_modes(void)
 {
     W_t w; uint32_t k;
@@ -448,6 +474,7 @@ int main(void)
     t_mains_group();
     t_flip_retune_link();
     t_modes();
+    t_inverter_off();
     t_no_retry();
     t_setmode_and_stale();
     t_priority();

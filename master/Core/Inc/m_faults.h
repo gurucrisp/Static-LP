@@ -23,6 +23,7 @@ extern "C" {
 #endif
 
 #define MF_CLOSE_HOLD_MS    1000UL    /* the contactor closes once the output has been IN BAND (at the set voltage) for this long: a short debounce, no longer the Restart Time */
+#define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
 #define MF_RETRY_MS         30000UL   /* inrush and power-stage retries (D27) */
 #define MF_RETRIES          3U
 #define MF_HYST_V           5U        /* a voltage fault clears this far back inside its limit */
@@ -37,6 +38,8 @@ typedef struct
     uint8_t  in_band;          /* $E IN_BAND                                                                 */
     uint8_t  heat;             /* $E OVERHEAT (the digital limit signal)                                     */
     uint8_t  ct_peak;          /* the master CT reached its ADC full scale (inrush backup, D27)              */
+    uint8_t  slave_state;      /* the slave's state from $S: 0 stopped, 1 starting / unwinding, 2 RUNNING, 3 fault */
+    uint8_t  state_valid;      /* slave_state is real (the slave is being heard)                              */
 } MPhaseIn_t;
 
 typedef struct
@@ -83,6 +86,8 @@ typedef struct
     uint8_t  ip_lv[3], ip_hv[3], op_lv[3], op_hv[3];        /* hysteresis memory: 1 = the limit is violated and has not yet cleared */
     uint32_t t_ip_lv[3], t_ip_hv[3], t_op_lv[3], t_op_hv[3], t_ovl[3], t_heat[3];   /* when the violation began */
     uint8_t  a_ovl[3], a_heat[3];
+    uint8_t  st_bad[3];                    /* the slave is not RUNNING while the output is live                      */
+    uint32_t t_st_bad[3];                  /* since when                                                             */
     uint8_t  buzzer;
     uint8_t  inited;
     uint8_t  max_retries;      /* inrush / power-stage retries before the latch: MF_RETRIES (3, the approved rule) or 0 = latch at the FIRST trip (commissioning a repaired power stage) */

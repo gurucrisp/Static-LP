@@ -1145,7 +1145,9 @@ void SlaveCtrl_Service(void)
                     s_vin_cnt = m.update_count; s_vin_ref = m.vin;
                     if (dv >= CTRL_VIN_STEP_V) trigger = 1U;                              /* whatever the correction is now: the output measurement is stale for a cycle or two after a step, and the regulator would wind up on it */
                 }
-                if ((want != s_dir_applied) && (d > (float)CTRL_DIR_FLIP_MAX_TICKS)) trigger = 1U;
+                /* a wish to reverse at a large correction starts a hold, but must NOT re-arm one that is already running: during the hold the regulator keeps integrating the stale error and its output d winds up to the cap,
+                 * so this test would see "large d and a direction mismatch" on every pass and the guard would never release (the output then stays at the input: found in simulation on a 200 -> 250 V step). */
+                if ((s_guard_on == 0U) && (want != s_dir_applied) && (d > (float)CTRL_DIR_FLIP_MAX_TICKS)) trigger = 1U;
                 if (trigger != 0U)
                 {
                     if (s_guard_on == 0U) s_guard_events++;
@@ -1158,6 +1160,13 @@ void SlaveCtrl_Service(void)
                     {   /* steady again: restart the regulator from zero and take the direction it now wants */
                         s_guard_on = 0U;
                         Reg_Init(&s_reg, s_target_v, m.vin, m.vout, now_ms);
+#if (SLAVE_POWER_STAGE >= 3)
+                        s_reg.out_max = (float)CTRL_STAGE3_MAX_EFF_TICKS;              /* the SAME cap as at the start: Reg_Init resets it to a full period, and the integrator IS the output */
+#endif
+                        s_reg.ss_slow_slope_vps  = CTRL_GUARD_RESTART_SLOPE_VPS;       /* a fast ramp, no slow first phase: the output is already live */
+                        s_reg.ss_fast_slope_vps  = CTRL_GUARD_RESTART_SLOPE_VPS;
+                        s_reg.ss_final_slope_vps = CTRL_GUARD_RESTART_FINAL_VPS;
+                        s_reg.ss_slow_time_ms    = 0U;
                         s_dir_applied = Reg_IsBoost(&s_reg, m.vin);
                     }
                 }

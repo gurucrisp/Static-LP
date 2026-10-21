@@ -389,9 +389,33 @@ static void t_inrush_retries_app(void)
     D.fault = 0U; D.state = 0U; run(120000U);
     CHECK(MApp_Control(&A)->run == 0U && A.eng.u[0].st == (uint8_t)U_LATCHED && MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_INRUSH,
           "with 0 retries it is latched: two minutes later the slave is still not told to run, one entry in the log");
-    fresh(); MApp_SetInrushRetries(&A, 3U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(300U); D.fault = 0U; D.state = 0U; run(40000U);
+    fresh(); MApp_SetInrushRetries(&A, 3U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(300U); D.fault = 0U; D.state = 2U; run(40000U);
     CHECK(MApp_Control(&A)->run == 1U, "with 3 retries it tries again after 30 s");
     printf("  inrush retries in the application: 0 latches at once, 3 retries\n");
+}
+
+static void t_inverter_off(void)
+{
+    MLogRec_t r;
+    /* the slave stops WITHOUT any fault code (mains unstable, its own link timeout ...): PWM off means the load must be off too */
+    fresh(); to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running with the contactor closed");
+    D.state = 0U; run(150U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "the slave has been off for 0.15 s: not yet (a glitch is tolerated)");
+    run(150U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && MApp_Control(&A)->run == 0U, "off for 0.3 s: the contactor is OPEN and the master stops commanding run");
+    CHECK(strcmp(row(3), "Mains Unstable") == 0, "the screen says Mains Unstable (%s)", row(3));
+    CHECK(MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_MAINS && r.slave_code == 0U, "logged once, as Mains, with no slave code");
+    /* Auto: it restarts by itself once the Restart Time has passed and the slave is running again */
+    D.state = 2U; run(9000U); CHECK(MApp_Control(&A)->run == 1U, "Auto: the master tries again after the Restart Time"); run(4000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "and the contactor closes again when the output is at the set voltage");
+    /* a flicker of the slave's state shorter than 0.2 s changes nothing */
+    D.state = 1U; run(100U); D.state = 2U; run(3000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "a 0.1 s glitch of the state does not open it");
+    /* fault state 3 without a code, and state 1 (unwinding) held: both open it */
+    D.state = 3U; D.fault = 0U; run(400U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "state 3 without a code opens it");
+    /* STARTING is not affected: the slave is allowed to be 'starting' before the contactor closes */
+    fresh(); D.state = 1U; D.in_band = 0U; D.vout_dv = 2160U; run(MUI_SPLASH_MS + 9000U);
+    CHECK(MApp_Control(&A)->run == 1U && MLog_Count(&A.log) == 0U && MApp_Engine(&A)->contactor[0] == 0U, "while STARTING the slave may be in state 1: nothing is tripped, nothing logged");
+    /* a slave that is not being heard at all is the link-lost rule, not this one */
+    fresh(); to_run(); run(12000U); D.have = 0U; D.link_ok = 0U; run(300U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Slave Link Lost") == 0, "no frames from the slave: Slave Link Lost, contactor open");
+    printf("  inverter off = load off: the contactor opens 0.2 s after the slave leaves RUNNING, whatever the reason; STARTING and glitches are tolerated\n");
 }
 
 static uint32_t rs = 5150U;
@@ -434,6 +458,7 @@ int main(void)
     t_slave_control();
     t_engine_inputs();
     t_status_and_diag();
+    t_inverter_off();
     t_inrush_retries_app();
     t_slave_wait();
     t_display_stability();

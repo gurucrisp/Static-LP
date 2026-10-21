@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.13 — no automatic inrush retries while commissioning (current)
+## v0.9.14 — faster buck/boost (guard fixed), inverter off = load off (current)
+* SLAVE: the injection guard of v0.9.11 slowed every input step and could DEADLOCK: its restart used the slow compile-time ramp and no correction cap, and a direction mismatch re-armed a running hold while the regulator wound up to the cap (after a 200 to 250 V step the output stayed at the input for ever). Fixed: fast restart ramp
+  (`CTRL_GUARD_RESTART_SLOPE_VPS` 30 V/s), the stage-3 cap applied, no re-arming of a running hold. Simulated: boost step 5 s to 2 s, buck step never to 1 s, 8 fast swings never stick (new group `input steps`, which fails on the old guard).
+* New ready-made config `slave_config_STAGE3_cap2752_full_range_MASTER_fast_start.h` (the existing fast soft-start values on the master-control config).
+* MASTER: the engine opens the contactor when the slave leaves RUNNING (state 2) for 0.2 s while the output is live, without needing a fault code (`MF_INV_OFF_MS`). Tested against the REAL slave stopping with no fault (no `$M` for a second). Engine 124 checks, app 201, whole master against the real slave 245.
+
+## v0.9.13 — no automatic inrush retries while commissioning
 * The master showed "Inrush" (the slave's hardware break or FLT, codes 1 and 2) on a unit with a repaired power stage. The approved rule retries such a trip after 30 s, up to 3 times: every retry re-energises a stage that may still be faulty. NEW `MASTER_INRUSH_RETRIES` (default 0 = latch at the FIRST trip; 3 = the approved rule), engine `max_retries`,
   `MApp_SetInrushRetries`. The slave and the engine's default (3) are unchanged. Tests: engine 117 checks, app 190 (0, 1 and 3 retries; codes 1, 2 and 7).
 

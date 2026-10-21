@@ -2561,6 +2561,9 @@ int main(void)
     run_isolated(t_mc_end_to_end,             "master control: end to end through the link");
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
+#if (SLAVE_INJ_GUARD != 0)
+    run_isolated(t_mc_input_steps,            "input steps: recover fast and never stick");
+#endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
     run_isolated(t_mc_no_voltage_cuts,        "no voltage cuts: the slave applies no limits");
 #endif

@@ -150,6 +150,13 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             if ((ph->slave_fault != 0U) && (age(now, un->t_enter) >= MF_CLR_SETTLE_MS || un->clr_owed == 0U))
             {   Cause_t c; classify_slave(ph->slave_fault, ph->vin_dv, s->set_v, &c); consider(&best, &have, c.type, c.cls, p, c.code); }
             if (ph->ct_peak != 0U) consider(&best, &have, MLOG_T_INRUSH, (uint8_t)FC_RETRY, p, 0U);
+            /* the inverter is OFF but the load is still connected: whatever the reason (mains unstable, a slave that stopped without a fault code), the slave leaving RUNNING for MF_INV_OFF_MS opens the contactor */
+            if ((live != 0U) && (ph->state_valid != 0U) && (ph->slave_state != 2U))
+            {
+                if (f->st_bad[p] == 0U) { f->st_bad[p] = 1U; f->t_st_bad[p] = now; }
+                else if (age(now, f->t_st_bad[p]) >= MF_INV_OFF_MS) consider(&best, &have, MLOG_T_MAINS, (uint8_t)FC_VOLT, p, 0U);
+            }
+            else f->st_bad[p] = 0U;
             if ((f->ip_lv[p] != 0U) && (age(now, f->t_ip_lv[p]) >= vdelay)) consider(&best, &have, MLOG_T_IP_LV, (uint8_t)FC_VOLT, p, 0U);
             if ((f->ip_hv[p] != 0U) && (age(now, f->t_ip_hv[p]) >= vdelay)) consider(&best, &have, MLOG_T_IP_HV, (uint8_t)FC_VOLT, p, 0U);
             if ((f->op_lv[p] != 0U) && (age(now, f->t_op_lv[p]) >= vdelay)) consider(&best, &have, MLOG_T_OP_LV, (uint8_t)FC_VOLT, p, 0U);

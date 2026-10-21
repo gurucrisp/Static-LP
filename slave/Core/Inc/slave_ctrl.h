@@ -350,6 +350,13 @@ void     SlaveCtrl_ClearLatch(void);    /* manual reset after CTRL_LATCHED      
 #ifndef CTRL_VIN_STEP_V
 #define CTRL_VIN_STEP_V         15.0f   /* an input step this big between two RMS results holds the correction at zero                  */
 #endif
+/* After a guard event the regulator restarts from zero with a FAST ramp and no slow first phase (the output is already live, the 3 V/s phase is only for a cold start). V/s. */
+#ifndef CTRL_GUARD_RESTART_SLOPE_VPS
+#define CTRL_GUARD_RESTART_SLOPE_VPS  30.0f
+#endif
+#ifndef CTRL_GUARD_RESTART_FINAL_VPS
+#define CTRL_GUARD_RESTART_FINAL_VPS  10.0f
+#endif
 #ifndef CTRL_GUARD_HOLD_MS
 #define CTRL_GUARD_HOLD_MS      100UL   /* ... until the input has been steady this long, then the regulator restarts from zero        */
 #endif

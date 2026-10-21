@@ -361,7 +361,7 @@ static int ma_pg(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; for (i 
 static int ma_er(uint32_t a) { memset(&ma_fm[a], 0xFF, MFLASH_PAGE); return 0; }
 static const MFlash_t MAFL = { ma_rd, ma_pg, ma_er };
 static MApp_t ma; static MAppData_t md; static char ma_f[4][21]; static uint8_t ma_k[4]; static uint32_t ma_t_tx, ma_seq, ma_last_run; static uint8_t ma_have_last; static MCtlOut_t ma_last;
-static int ma_link_up; static uint8_t ma_buzz_seen;
+static int ma_link_up; static uint8_t ma_buzz_seen; static int ma_mute_m;
 
 static void ma_start(uint8_t restart_auto, float vin)
 {
@@ -370,7 +370,7 @@ static void ma_start(uint8_t restart_auto, float vin)
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
     ma.settings.restart_auto = restart_auto; MF_Init(&ma.eng, &ma.settings, mc_ms());
-    ma_t_tx = 0U; ma_seq = 0U; ma_have_last = 0U; ma_link_up = 1; ma_buzz_seen = 0U;
+    ma_t_tx = 0U; ma_seq = 0U; ma_have_last = 0U; ma_link_up = 1; ma_buzz_seen = 0U; ma_mute_m = 0;
 }
 /* 10 ms of the master: what the slave sent, the key levels, the application, the $M frame (every 100 ms and at once on a change), 10 ms of the slave */
 static void ma_ms10(void)
@@ -384,7 +384,7 @@ static void ma_ms10(void)
     e2e_cnt = 0;                                                                                  /* keep only the NEWEST $E: the capture buffer must never fill up and go stale */
     MApp_Step(&ma, ma_k[0], ma_k[1], ma_k[2], ma_k[3], &md, now, ma_f);
     if (MApp_Engine(&ma)->buzzer != 0U) ma_buzz_seen = 1U;
-    if (MApp_ControlValid(&ma) != 0U)
+    if ((MApp_ControlValid(&ma) != 0U) && (ma_mute_m == 0))
     {
         const MCtlOut_t *c = MApp_Control(&ma);
         if ((ma_have_last == 0U) || (c->run != ma_last.run) || (c->clr != ma_last.clr) || (c->setv_dv != ma_last.setv_dv) || (c->maxc_dv != ma_last.maxc_dv) || ((uint32_t)(now - ma_t_tx) >= 100U))
@@ -478,10 +478,66 @@ static void t_mc_master_app(void)
     ma_start(0U, 225.0f); ma_run(30000U);
     CHECK(g_ctrl.state == CTRL_OFF && !ma_c_contactor(), "Manual: 30 s after power-up nothing has started");
     ma_tap(1, 100U); t = ma_until(ma_c_contactor, 60000U); CHECK(ma_c_contactor(), "START starts it and the contactor closes (%u ms)", (unsigned)t);
+    /* ---- the REAL slave stops WITHOUT a fault (it hears no $M for a second): PWM off, so the master must open the load contactor ---- */
+    ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 60000U); ma_run(5000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN, "running, contactor closed");
+    ma_mute_m = 1;                                                                  /* the commands stop arriving; the slave's own status frames still reach the master */
+    { uint32_t k, t_off = 0U, t_open = 0U;
+      for (k = 0U; k < 400U; k++)
+      {
+          ma_ms10();
+          if (t_off == 0U && g_ctrl.state != CTRL_RUN) t_off = (k + 1U) * 10U;
+          if (t_open == 0U && !ma_c_contactor()) t_open = (k + 1U) * 10U;
+      }
+      CHECK(t_off >= 900U && t_off <= 1600U && g_ctrl.fault == CF_NONE, "no $M for 1 s: the slave stops by itself, with NO fault code (left RUN at %u ms, fault %d)", (unsigned)t_off, g_ctrl.fault);
+      CHECK(t_open != 0U && t_open >= t_off && t_open <= t_off + 600U, "and the master opens the contactor within 0.6 s of the slave leaving RUN (%u ms after, %u ms after it left)", (unsigned)t_open, (unsigned)(t_open - t_off));
+      CHECK(MLog_Count(&ma.log) >= 1U, "logged"); }
+    ma_mute_m = 0; t = ma_until(ma_c_contactor, 60000U); CHECK(ma_c_contactor(), "commands back: it restarts and the contactor closes again (%u ms)", (unsigned)t);
     check_invariants("master control: the master application");
     printf("  the REAL master application against the REAL slave: Auto start, the contactor only after IN_BAND, Set-Mode by raw keys, a new Set Voltage regulated to, STOP/START, an inrush with retries and the latch, link loss, input low, Manual\n");
 }
 
+
+#if (SLAVE_INJ_GUARD != 0)
+/* ---- input steps while running: the guard protects the first moments, then the output must come back FAST and never stay stuck ---- */
+static double mc_back_within(double band_v, uint32_t limit_ms, uint16_t setv_dv)
+{
+    uint32_t k;
+    for (k = 0U; k < limit_ms / 20U; k++)
+    {
+        SlaveCtrl_OnControl(1U, setv_dv, 1U, 0U, mc_ms()); run_for(20000);
+        if (g_ctrl.state == CTRL_RUN && fabs((double)W.vout - ((double)setv_dv / 10.0)) <= band_v) return (double)(k * 20U) / 1000.0;
+    }
+    return -1.0;
+}
+static void t_mc_input_steps(void)
+{
+    double t; uint32_t k;
+    /* a boost step: 230 -> 200 V */
+    mc_world(250000000ULL, 230.0f); (void)mc_until_run(2300U, 1U, 60000U); mc_for(15000U, 1U, 2300U, 1U, 0U);
+    W.vin = 200.0f; t = mc_back_within(2.0, 8000U, 2300U);
+    CHECK(t >= 0.0 && t <= 3.0 && g_ctrl.fault == CF_NONE, "boost step 230 -> 200 V: the output is back within 2 V of 230 V in %.1f s (limit 3 s), no fault", t);
+    /* a buck step: 200 -> 250 V. With the guard's old deadlock the output stayed at 250 V for ever. */
+    mc_for(10000U, 1U, 2300U, 1U, 0U);
+    W.vin = 250.0f; t = mc_back_within(2.0, 8000U, 2300U);
+    CHECK(t >= 0.0 && t <= 3.0 && g_ctrl.fault == CF_NONE, "buck step 200 -> 250 V: back within 2 V in %.1f s (limit 3 s): the guard releases (it used to deadlock and hold the output at the input)", t);
+    mc_for(20000U, 1U, 2300U, 1U, 0U);
+    CHECK((double)W.vout > 228.0 && (double)W.vout < 232.0, "and it stays there: %.1f V 20 s later", (double)W.vout);
+    /* a small step crossing the set voltage */
+    W.vin = 245.0f; t = mc_back_within(2.0, 8000U, 2300U); CHECK(t >= 0.0 && t <= 3.0, "small buck step to 245 V: back in %.1f s", t);
+    /* several fast swings in a row (the variac): the guard acts, the output follows within seconds each time, nothing latches, nothing deadlocks */
+    mc_world(251000000ULL, 215.0f); (void)mc_until_run(2300U, 1U, 60000U); mc_for(15000U, 1U, 2300U, 1U, 0U);
+    for (k = 0U; k < 8U; k++)
+    {
+        W.vin = (k & 1U) ? 205.0f : 255.0f; mc_for(1500U, 1U, 2300U, 1U, 0U);          /* a swing every 1.5 s */
+        CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "swing %u: still running, no fault", (unsigned)(k + 1U));
+    }
+    W.vin = 225.0f; t = mc_back_within(2.0, 10000U, 2300U);
+    CHECK(t >= 0.0 && t <= 4.0, "after 8 swings the output settles at 230 V within %.1f s of the last one", t);
+    CHECK(SlaveCtrl_GuardCount() >= 8U, "the guard acted on the swings (%u events)", (unsigned)SlaveCtrl_GuardCount());
+    printf("  input steps: boost and buck steps recover in about 2 s, 8 fast swings never stick, the guard releases every time\n");
+}
+#endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
 /* ---- TEST build: the slave applies NO voltage limits of its own ---- */
 static void t_mc_no_voltage_cuts(void)
