@@ -2563,6 +2563,7 @@ int main(void)
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
 #if (SLAVE_INJ_GUARD != 0)
     run_isolated(t_mc_input_steps,            "input steps: recover fast and never stick");
+    run_isolated(t_mc_master_limits,          "input steps: the master's limits govern (185 V in, 200 V set)");
 #endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
     run_isolated(t_mc_no_voltage_cuts,        "no voltage cuts: the slave applies no limits");

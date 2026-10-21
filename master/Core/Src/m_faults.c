@@ -130,11 +130,12 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         {
             const MPhaseIn_t *ph = &in->ph[p];
             if ((mask & (1U << p)) == 0U) continue;
-            if ((live == 0U) || (ph->link_ok == 0U)) { f->op_lv[p] = 0U; f->op_hv[p] = 0U; f->a_ovl[p] = 0U; continue; }
+            if ((live == 0U) || (ph->link_ok == 0U)) { f->op_lv[p] = 0U; f->op_hv[p] = 0U; f->a_ovl[p] = 0U; f->hv_fast[p] = 0U; continue; }
             if (ph->vout_dv < (uint16_t)(s->op_lv * 10U))                     { if (f->op_lv[p] == 0U) { f->op_lv[p] = 1U; f->t_op_lv[p] = now; } }
             else if (ph->vout_dv >= (uint16_t)((s->op_lv + MF_HYST_V) * 10U)) f->op_lv[p] = 0U;
             if (ph->vout_dv > (uint16_t)(s->op_hv * 10U))                     { if (f->op_hv[p] == 0U) { f->op_hv[p] = 1U; f->t_op_hv[p] = now; } }
             else if (ph->vout_dv <= (uint16_t)((s->op_hv - MF_HYST_V) * 10U)) f->op_hv[p] = 0U;
+            if (ph->vout_dv > (uint16_t)((s->op_hv + MF_OP_HV_FAST_V) * 10U)) { if (f->hv_fast[p] == 0U) { f->hv_fast[p] = 1U; f->t_hv_fast[p] = now; } } else f->hv_fast[p] = 0U;
             if (ph->load_da > (uint16_t)(s->ovl_current * 10U))               { if (f->a_ovl[p] == 0U) { f->a_ovl[p] = 1U; f->t_ovl[p] = now; } } else f->a_ovl[p] = 0U;
         }
 
@@ -161,6 +162,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             if ((f->ip_hv[p] != 0U) && (age(now, f->t_ip_hv[p]) >= vdelay)) consider(&best, &have, MLOG_T_IP_HV, (uint8_t)FC_VOLT, p, 0U);
             if ((f->op_lv[p] != 0U) && (age(now, f->t_op_lv[p]) >= vdelay)) consider(&best, &have, MLOG_T_OP_LV, (uint8_t)FC_VOLT, p, 0U);
             if ((f->op_hv[p] != 0U) && (age(now, f->t_op_hv[p]) >= vdelay)) consider(&best, &have, MLOG_T_OP_HV, (uint8_t)FC_VOLT, p, 0U);
+            if ((f->hv_fast[p] != 0U) && (age(now, f->t_hv_fast[p]) >= MF_OP_HV_FAST_MS)) consider(&best, &have, MLOG_T_OP_HV, (uint8_t)FC_VOLT, p, 0U);     /* a gross over-voltage: no waiting for the delay */
             if ((f->a_ovl[p] != 0U) && (age(now, f->t_ovl[p]) >= (uint32_t)s->ovl_cut_delay * 1000UL)) consider(&best, &have, MLOG_T_OVERLOAD, (uint8_t)FC_START, p, 0U);
             if ((f->a_heat[p] != 0U) && (age(now, f->t_heat[p]) >= (uint32_t)s->heat_delay * 1000UL)) consider(&best, &have, MLOG_T_HEAT, (uint8_t)FC_START, p, 0U);
         }

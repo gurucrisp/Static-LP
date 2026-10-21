@@ -71,7 +71,7 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
             on_frame(&st, now_ms);
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
-            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_t_ms = now_ms; }
+            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_t_ms = now_ms; }
             else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; }
         }
     }
@@ -517,7 +517,7 @@ void MasterApp_Run(void)
     MonLcd_t      lcd;
     uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
     uint16_t      ct_x16 = 0U;
-    uint8_t       seq_tx = 0U, have_last = 0U;
+    uint8_t       seq_tx = 0U, have_last = 0U, k_id = 1U;
     MCtlOut_t     last;
 
     HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);
@@ -553,7 +553,7 @@ void MasterApp_Run(void)
             d.link_ok  = d.have;
             {   /* the slave's version 2 data: $E must be fresh (the slave sends one every 100 ms) */
                 uint8_t e_fresh = (uint8_t)((g_mon.e_valid != 0U) && ((uint32_t)(now - g_mon.e_t_ms) < MON_LINK_TIMEOUT_MS));
-                d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr;
+                d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr; d.e_setv_dv = g_mon.e_setv_dv;
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
                 d.wait_valid = (uint8_t)((g_mon.last.state == 1U) && ((g_mon.last.flags & 0x8000U) != 0U));       /* the slave waits in SYNC and says what for */
@@ -579,6 +579,13 @@ void MasterApp_Run(void)
                     if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);      /* about 0.6 ms at 500 kbaud; the receive DMA keeps running */
                     MApp_NoteFrameSent(&app); t_tx = now; last = *c; have_last = 1U;
                 }
+            }
+            if (MApp_HelloDue(&app, now) != 0U)
+            {   /* the slave says hello only at ITS power-up: if this master started later, ask for the slave's limits ($K HELLO) */
+                LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
+                k.id = k_id; k_id = (uint8_t)((k_id >= 255U) ? 1U : (k_id + 1U)); k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
+                n = LinkV2_BuildK(b, sizeof b, &k);
+                if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);
             }
             {   const MFOut_t *eo = MApp_Engine(&app);
 #if (MASTER_DRIVE_CONTACTORS == 1)

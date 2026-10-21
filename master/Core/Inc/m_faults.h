@@ -23,6 +23,8 @@ extern "C" {
 #endif
 
 #define MF_CLOSE_HOLD_MS    1000UL    /* the contactor closes once the output has been IN BAND (at the set voltage) for this long: a short debounce, no longer the Restart Time */
+#define MF_OP_HV_FAST_V     15U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... */
+#define MF_OP_HV_FAST_MS    200UL     /* ... once it has lasted this long: the load must not sit on a gross over-voltage for the whole delay */
 #define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
 #define MF_RETRY_MS         30000UL   /* inrush and power-stage retries (D27) */
 #define MF_RETRIES          3U
@@ -86,6 +88,8 @@ typedef struct
     uint8_t  ip_lv[3], ip_hv[3], op_lv[3], op_hv[3];        /* hysteresis memory: 1 = the limit is violated and has not yet cleared */
     uint32_t t_ip_lv[3], t_ip_hv[3], t_op_lv[3], t_op_hv[3], t_ovl[3], t_heat[3];   /* when the violation began */
     uint8_t  a_ovl[3], a_heat[3];
+    uint8_t  hv_fast[3];                   /* the output is more than MF_OP_HV_FAST_V above the O/P HV setting          */
+    uint32_t t_hv_fast[3];
     uint8_t  st_bad[3];                    /* the slave is not RUNNING while the output is live                      */
     uint32_t t_st_bad[3];                  /* since when                                                             */
     uint8_t  buzzer;

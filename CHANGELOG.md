@@ -2,7 +2,14 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.14 — faster buck/boost (guard fixed), inverter off = load off (current)
+## v0.9.15 — the master owns the voltage limits (current)
+* The master-control configs (MASTER, MASTER_fast_start, MASTER_TEST_NOCUTS) no longer narrow the slave's envelope to 195 / 275 / 265 V (they trip at once and ignore the master's limits and the Volt Cut Delay). The slave keeps its built-in 140 to 300 V input trip (start 150 to 290 V) and 280 V output guard and announces them in `$H`; Set-Mode refuses limits outside them.
+  The runner now REFUSES a master-control config that narrows the envelope, and its old "every STAGE3 file needs a 250/260/265 V output guard" rule exempts the master-control files.
+* MASTER: a gross output over-voltage (15 V above O/P HV for 0.2 s) is cut without waiting for the Volt Cut Delay (`MF_OP_HV_FAST_V`, `MF_OP_HV_FAST_MS`).
+* MASTER: asks for the slave's `$H` itself (`$K HELLO`, every 2 s, while `$E` is heard and `$H` is not): `MApp_HelloDue`. The diagnostics page shows the set voltage the slave is using (`T230`, `T!230` when it differs from Set-Mode).
+* Tests: new group `master's limits govern` against the REAL slave (185 V in, I/P LV 170 V, Set Voltage 205 V runs; the master trips at its own limit after its own delay); 62 runner groups pass; 6 breakages of the new code caught.
+
+## v0.9.14 — faster buck/boost (guard fixed), inverter off = load off
 * SLAVE: the injection guard of v0.9.11 slowed every input step and could DEADLOCK: its restart used the slow compile-time ramp and no correction cap, and a direction mismatch re-armed a running hold while the regulator wound up to the cap (after a 200 to 250 V step the output stayed at the input for ever). Fixed: fast restart ramp
   (`CTRL_GUARD_RESTART_SLOPE_VPS` 30 V/s), the stage-3 cap applied, no re-arming of a running hold. Simulated: boost step 5 s to 2 s, buck step never to 1 s, 8 fast swings never stick (new group `input steps`, which fails on the old guard).
 * New ready-made config `slave_config_STAGE3_cap2752_full_range_MASTER_fast_start.h` (the existing fast soft-start values on the master-control config).

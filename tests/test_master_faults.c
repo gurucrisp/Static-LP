@@ -328,6 +328,32 @@ static void t_inverter_off(void)
     printf("  inverter off: the engine opens the contactor 0.2 s after the slave leaves RUNNING (no fault code needed), tolerates glitches and STARTING\n");
 }
 
+static void t_fast_hv(void)
+{
+    W_t w;
+    /* a gross output over-voltage (more than 15 V above the O/P HV setting, 250 V) is cut within about 0.2 s, not after the 5 s Volt Cut Delay */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
+    w.in.ph[0].vout_dv = 2660U; run_ms(&w, 100U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "266 V (16 V over O/P HV): 0.1 s: not yet");
+    run_ms(&w, 400U);
+    CHECK(unit_st(&w, 0) == (int)U_FAULT && w.out.contactor[0] == 0U && w.n_log == 1 && w.log[0].type == MLOG_T_OP_HV && w.log[0].vout_dv == 2660U, "0.5 s later: cut, logged once as O/P HV with the voltage (state %d)", unit_st(&w, 0));
+    /* exactly 15 V over is still the normal delayed rule */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
+    w.in.ph[0].vout_dv = 2650U; run_ms(&w, 4000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "265.0 V (exactly 15 V over): 4 s: still ON, the Volt Cut Delay applies");
+    run_ms(&w, 2000U);
+    CHECK(unit_st(&w, 0) == (int)U_FAULT && w.log[0].type == MLOG_T_OP_HV, "and after the 5 s delay it trips as before");
+    /* a spike of 0.1 s does not trip */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
+    w.in.ph[0].vout_dv = 2800U; run_ms(&w, 100U); w.in.ph[0].vout_dv = 2300U; run_ms(&w, 3000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON && w.n_log == 0, "a 0.1 s spike to 280 V: no trip");
+    /* the setting moves the cut: O/P HV 270 V -> the fast cut is above 285 V */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); w.s.op_hv = 270U; to_on(&w); run_ms(&w, 2000U);
+    w.in.ph[0].vout_dv = 2800U; run_ms(&w, 1000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "O/P HV = 270 V: 280 V is not a gross over-voltage (the fast cut is above 285 V)");
+    printf("  fast output-high cut: 15 V over O/P HV for 0.2 s opens the contactor, exactly 15 V over and short spikes follow the normal rules\n");
+}
+
 static void t_modes(void)
 {
     W_t w; uint32_t k;
@@ -475,6 +501,7 @@ int main(void)
     t_flip_retune_link();
     t_modes();
     t_inverter_off();
+    t_fast_hv();
     t_no_retry();
     t_setmode_and_stale();
     t_priority();

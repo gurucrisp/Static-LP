@@ -50,6 +50,7 @@ typedef struct
     uint8_t  heat;               /* the slave's OVERHEAT flag (not available yet: 0)                   */
     uint8_t  ct_peak;            /* the CT reached full scale (not measured yet: 0)                    */
     uint8_t  clr_echo;           /* $E: the clear counter the slave last saw                           */
+    uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
     uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
     uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
@@ -73,6 +74,8 @@ typedef struct
     uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
     uint8_t      lim_set;
     uint8_t      retries_cfg;
+    uint8_t      hello_n;
+    uint32_t     t_hello;
     uint8_t      ctl_valid;            /* $M may be sent: the slave was heard ($E), or its $S frames have been arriving for 3 s */
     uint8_t      have_seen;
     uint32_t     t_first_have, m_sent;
@@ -96,6 +99,8 @@ void    MApp_SetTestNoCuts(MApp_t *a, uint8_t on);
 void    MApp_InitCal(MApp_t *a, uint32_t page_a, uint32_t page_b);
 /* inrush / power-stage retries: 3 = the approved rule (retry after 30 s, up to 3 times), 0 = latch at the FIRST trip. Use 0 while commissioning a repaired power stage. */
 void    MApp_SetInrushRetries(MApp_t *a, uint8_t n);
+/* The slave announces its limits ($H) only at its own power-up. If the master started later it asks: returns 1 (at most every 2 s) while the slave's $E is heard but no $H has arrived; the glue then sends a $K HELLO. */
+uint8_t MApp_HelloDue(MApp_t *a, uint32_t now);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
 void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */

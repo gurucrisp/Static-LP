@@ -76,9 +76,9 @@
 
 /* ---- this file (v0.8.2): ---- */
 #define SLAVE_CONV_FIRST_AT_PEAK 1       /* the converter's first diagonal at the line peak (bench: starts reliably) */
-#define CTRL_VIN_MIN_V 195.0f            /* trip below 195 V, start from 205 V */
-#define CTRL_VIN_MAX_V 275.0f            /* trip above 275 V, start up to 265 V */
-#define CTRL_VOUT_MAX_V 265.0f           /* trip if the OUTPUT exceeds 265 V (a runaway guard: the target is 230 V) */
+/* The MASTER owns the voltage limits: the slave's own outer envelope is NOT narrowed here. It keeps its built-in values (input trips below 140 V and above 300 V, it STARTS only from 150 V to 290 V;
+ * output trips above 280 V), and announces them in its $H frame, so Set-Mode refuses limits outside them. The master's I/P LV, I/P HV, O/P LV and O/P HV settings, with the Volt Cut Delay, decide inside that envelope
+ * (and a gross output over-voltage, 15 V above O/P HV, is cut within 0.2 s). The other full_range files narrow the slave to 195 / 275 / 265 V to mimic the old firmware: that is NOT wanted when the master is in control. */
 #define CTRL_STAGE3_MAX_EFF_TICKS 2752U   /* the cap: 2752 effective ticks, the duty ceiling: about 27 V at 200 V and 38 V at 250 V of correction; it reaches 230 V from about 202 V to 270 V (upper figure extrapolated) */
 /* Optional: the OLD firmware only ran the converter from about 180 V (its LV cut-out, +5 V hysteresis). To compare against it, remove the
  * comment marks below: the converter then starts at 190 V and trips below 180 V. (Defaults: trip below 140 V, start from 150 V.) */

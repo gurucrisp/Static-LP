@@ -208,6 +208,12 @@ uint8_t MApp_SetModeOpen(const MApp_t *a) { return MUI_SetModeOpen(&a->ui); }
 const MCtlOut_t *MApp_Control(const MApp_t *a) { return &a->ctl_out; }
 uint8_t MApp_ControlValid(const MApp_t *a) { return a->ctl_valid; }
 void MApp_NoteFrameSent(MApp_t *a) { a->m_sent++; }
+uint8_t MApp_HelloDue(MApp_t *a, uint32_t now)
+{
+    if ((a->last.e_valid == 0U) || (a->last.h_valid != 0U)) { a->hello_n = 0U; return 0U; }
+    if ((a->hello_n != 0U) && ((uint32_t)(now - a->t_hello) < 2000UL)) return 0U;
+    a->t_hello = now; a->hello_n = 1U; return 1U;
+}
 void MApp_SetInrushRetries(MApp_t *a, uint8_t n) { a->retries_cfg = n; a->eng.max_retries = n; }
 void MApp_SetTestNoCuts(MApp_t *a, uint8_t on) { a->no_cuts = (uint8_t)(on != 0U); }
 uint8_t MApp_ShowsDiag(const MApp_t *a) { return MUI_ShowsDiag(&a->ui); }
@@ -233,6 +239,15 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     t[8] = (char)('0' + ((a->settings.ip_lv / 100U) % 10U)); t[9] = (char)('0' + ((a->settings.ip_lv / 10U) % 10U)); t[10] = (char)('0' + (a->settings.ip_lv % 10U));
     t[12] = (char)('0' + ((a->settings.ip_hv / 100U) % 10U)); t[13] = (char)('0' + ((a->settings.ip_hv / 10U) % 10U)); t[14] = (char)('0' + (a->settings.ip_hv % 10U));
     if (a->no_cuts != 0U) copy(&t[15], " NOCUT");
+    else
+    {   /* T = the set voltage the SLAVE is using (its $E echo); "!" in place of the T when it differs from the Set Voltage in Set-Mode */
+        uint32_t ev = (uint32_t)(d->e_setv_dv + 5U) / 10U; copy(&t[15], " T---");
+        if ((d->e_valid != 0U) && (d->e_setv_dv != 0U))
+        {
+            t[17] = (char)('0' + ((ev / 100U) % 10U)); t[18] = (char)('0' + ((ev / 10U) % 10U)); t[19] = (char)('0' + (ev % 10U));
+            if (ev != (uint32_t)a->settings.set_v) t[16] = '!';
+        }
+    }
     for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
     /* row 3: the slave's own state, fault code and IN_BAND */
     copy(t, "Slv st:0 F:00 inb:0"); t[7] = (char)('0' + (d->state % 10U)); put2(&t[11], d->fault); t[18] = (char)('0' + (d->in_band & 1U));

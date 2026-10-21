@@ -418,6 +418,25 @@ static void t_inverter_off(void)
     printf("  inverter off = load off: the contactor opens 0.2 s after the slave leaves RUNNING, whatever the reason; STARTING and glitches are tolerated\n");
 }
 
+static void t_hello_and_echo(void)
+{
+    /* the master asks for the slave's $H when it missed it */
+    fresh(); D.e_valid = 1U; D.h_valid = 0U; run(MUI_SPLASH_MS + 500U);
+    CHECK(MApp_HelloDue(&A, T) == 1U, "$E heard, no $H: the master asks for the hello");
+    CHECK(MApp_HelloDue(&A, T) == 0U, "and not twice at once");
+    run(1900U); CHECK(MApp_HelloDue(&A, T) == 0U, "1.9 s later: still waiting for the answer");
+    run(300U); CHECK(MApp_HelloDue(&A, T) == 1U, "2.2 s later with no answer: it asks again");
+    D.h_valid = 1U; run(300U); run(2500U); CHECK(MApp_HelloDue(&A, T) == 0U, "once the $H has arrived it never asks");
+    fresh(); D.e_valid = 0U; D.h_valid = 0U; run(MUI_SPLASH_MS + 4000U); CHECK(MApp_HelloDue(&A, T) == 0U, "no $E (a slave without the v2 link): it does not ask");
+    /* the diagnostics page shows the set voltage the slave is using */
+    fresh(); D.e_valid = 1U; D.h_valid = 1U; D.e_setv_dv = 2300U; run(MUI_SPLASH_MS + 3000U); MApp_Diag(&A, T, F);
+    CHECK(strcmp(&F[2][15], " T230") == 0, "row 2 ends with the slave's set voltage: ' T230' ('%s')", F[2]);
+    D.e_setv_dv = 2200U; run(300U); MApp_Diag(&A, T, F); CHECK(strcmp(&F[2][15], " !220") == 0, "a slave using 220 V while Set-Mode says 230 V: the T becomes ! ('%s')", F[2]);
+    D.e_setv_dv = 0U; run(300U); MApp_Diag(&A, T, F); CHECK(strcmp(&F[2][15], " T---") == 0, "not known yet: ' T---' ('%s')", F[2]);
+    D.e_valid = 0U; D.e_setv_dv = 2300U; run(300U); MApp_Diag(&A, T, F); CHECK(strcmp(&F[2][15], " T---") == 0, "no $E: ' T---' ('%s')", F[2]);
+    printf("  hello request and set-voltage echo: asked every 2 s until $H arrives, never without $E; T230 on the diagnostics page, ! when the slave disagrees\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -459,6 +478,7 @@ int main(void)
     t_engine_inputs();
     t_status_and_diag();
     t_inverter_off();
+    t_hello_and_echo();
     t_inrush_retries_app();
     t_slave_wait();
     t_display_stability();

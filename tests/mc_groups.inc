@@ -538,6 +538,23 @@ static void t_mc_input_steps(void)
     printf("  input steps: boost and buck steps recover in about 2 s, 8 fast swings never stick, the guard releases every time\n");
 }
 #endif
+
+#if (SLAVE_INJ_GUARD != 0)
+/* ---- the MASTER owns the limits: an input the old narrowed slave (trip below 195 V) would have refused, inside the slave's built-in envelope (140 to 300 V) ---- */
+static void t_mc_master_limits(void)
+{
+    uint32_t t;
+    ma_start(1U, 185.0f); ma.settings.ip_lv = 170U; ma.settings.set_v = 205U;                 /* the master's I/P LV 170 V, Set Voltage 205 V (above the default O/P LV of 200 V, as Set-Mode requires) */
+    t = ma_until(ma_c_contactor, 90000U); ma_run(15000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && (double)W.vout > 203.0 && (double)W.vout < 207.0, "185 V in, I/P LV 170 V, Set Voltage 205 V: it starts, regulates to %.1f V and the contactor closes (%u ms)", (double)W.vout, (unsigned)t);
+    /* the master's own delayed rule decides at its limit: 165 V is below I/P LV 170 V: the master waits the delay, then trips (not the slave, which is still inside its envelope) */
+    W.vin = 165.0f; ma_run(2000U);
+    CHECK(ma_c_contactor() && g_ctrl.fault == CF_NONE, "input at 165 V (below the master's I/P LV): after 2 s the contactor is still closed: the Volt Cut Delay is being waited");
+    ma_run(5000U);
+    CHECK(!ma_c_contactor() && MLog_Count(&ma.log) >= 1U && g_ctrl.fault == CF_NONE, "after the 5 s delay the MASTER opens it and logs it; the slave itself raised no fault (%d)", g_ctrl.fault);
+    printf("  master owns the limits: 185 V in with I/P LV 170 V and Set Voltage 205 V runs; the master trips at its own limit after its own delay\n");
+}
+#endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
 /* ---- TEST build: the slave applies NO voltage limits of its own ---- */
 static void t_mc_no_voltage_cuts(void)

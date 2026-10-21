@@ -95,6 +95,7 @@ typedef struct
     uint32_t     e_t_ms;             /* when it arrived                               */
     uint8_t      h_valid;            /* a $H has arrived                              */
     uint16_t     h_win_lo_dv, h_win_hi_dv, h_vout_max_dv;
+    uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
 } MasterMon_t;
 
 extern MasterMon_t g_mon;
