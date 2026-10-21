@@ -53,6 +53,15 @@ void MApp_InitCal(MApp_t *a, uint32_t pa, uint32_t pb)
     MUI_SetFeatures(&a->ui, MUI_FEAT_CALIBRATE);
 }
 
+
+/* the slave's start-up wait reasons as letters: Z zero-cross pattern, V input window, M measurement, F FLT low, B break input low (or floating), O output too high, R relays not settled */
+static uint32_t wait_letters(uint8_t ctx, char *o)
+{
+    static const char L[7] = { 'Z', 'V', 'M', 'F', 'B', 'O', 'R' }; uint32_t k, n = 0U;
+    for (k = 0U; k < 7U; k++) if (((ctx >> k) & 1U) != 0U) o[n++] = L[k];
+    o[n] = '\0'; return n;
+}
+
 static uint32_t age_ms(uint32_t now, uint32_t t) { return (uint32_t)(now - t); }
 static void put2(char *o, uint32_t v) { o[0] = (char)('0' + ((v / 10U) % 10U)); o[1] = (char)('0' + (v % 10U)); }
 static void copy(char *o, const char *s) { uint32_t i = 0U; while ((s[i] != '\0') && (i < 20U)) { o[i] = s[i]; i++; } o[i] = '\0'; }
@@ -68,7 +77,11 @@ static void make_status(const MApp_t *a, const MAppData_t *d, uint32_t now, char
     case U_OFF:      copy(o, "Press START"); break;
     case U_ONDELAY:  rem = (age_ms(now, u->t_enter) >= rd) ? 0U : ((rd - age_ms(now, u->t_enter) + 999UL) / 1000UL); copy(o, "Start in 00 s"); put2(&o[9], rem); break;
     case U_STARTING:
-        if (u->inband_run == 0U)
+        if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U))
+        {   /* the slave was told to run but is waiting for something: SAY WHAT (letters, see wait_letters) */
+            char w[10]; copy(o, "Slave Waits:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (12U + i < 20U)) { o[12U + i] = w[i]; i++; } o[12U + i] = '\0'; }
+        }
+        else if (u->inband_run == 0U)
         {   /* rising to the set voltage: "To 240 V (230)" = the set voltage and what the output is now */
             uint32_t sv = a->settings.set_v, ov = (uint32_t)(d->vout_dv + 5U) / 10U; copy(o, "To 000 V (000)");
             o[3] = (char)('0' + ((sv / 100U) % 10U)); o[4] = (char)('0' + ((sv / 10U) % 10U)); o[5] = (char)('0' + (sv % 10U));
@@ -219,6 +232,7 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
     /* row 3: the slave's own state, fault code and IN_BAND */
     copy(t, "Slv st:0 F:00 inb:0"); t[7] = (char)('0' + (d->state % 10U)); put2(&t[11], d->fault); t[18] = (char)('0' + (d->in_band & 1U));
+    if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U)) { char w[10]; copy(&t[14], "W:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (16U + i < 20U)) { t[16U + i] = w[i]; i++; } t[16U + i] = '\0'; } }
     for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
 }
 const MFOut_t *MApp_Engine(const MApp_t *a) { return &a->eout; }

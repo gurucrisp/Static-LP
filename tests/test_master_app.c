@@ -362,6 +362,24 @@ static void t_load_calibration(void)
     printf("  load calibration: defaults equal the original firmware, your 3.0 A -> 6.6 A case, zero and span, flash, the 2.0 A and range checks\n");
 }
 
+static void t_slave_wait(void)
+{
+    /* YOUR VIDEO: the master commands run, the slave answers "starting" (state 1) with no fault, never reaches RUN, the output stays at the input. The slave says WHY in its status frame. */
+    fresh(); D.state = 1U; D.in_band = 0U; D.vout_dv = 2160U; D.vin_dv = 2160U; run(MUI_SPLASH_MS + 7000U);
+    CHECK(MApp_Control(&A)->run == 1U && strcmp(row(3), "To 230 V (216)") == 0, "no wait reason sent: the screen shows the rise to the set voltage (%s)", row(3));
+    D.wait_valid = 1U; D.wait_ctx = 0x10U; run(300U); ROW(3, "Slave Waits:B");
+    D.wait_ctx = 0x08U; run(300U); ROW(3, "Slave Waits:F");
+    D.wait_ctx = 0x01U | 0x04U | 0x40U; run(300U); ROW(3, "Slave Waits:ZMR");
+    D.wait_ctx = 0x7FU; run(300U); ROW(3, "Slave Waits:ZVMFBOR");
+    D.wait_valid = 1U; D.wait_ctx = 0U; run(300U); CHECK(strcmp(row(3), "To 230 V (216)") == 0, "'nothing is missing' shows the normal rise text (%s)", row(3));
+    D.wait_ctx = 0x10U; D.wait_valid = 0U; run(300U); CHECK(strncmp(row(3), "Slave Waits", 11) != 0, "a stale wait value without the valid flag is not shown (%s)", row(3));
+    D.wait_valid = 1U; D.wait_ctx = 0x18U; run(300U); MApp_Diag(&A, T, F);
+    CHECK(strncmp(F[3], "Slv st:1 F:00 W:FB", 18) == 0, "diagnostics row 3 shows W:FB ('%s')", F[3]);
+    D.wait_valid = 0U; D.state = 2U; run(300U); MApp_Diag(&A, T, F);
+    CHECK(strncmp(F[3], "Slv st:2 F:00 inb:0", 19) == 0 || strncmp(F[3], "Slv st:2 F:00 inb:1", 19) == 0, "without a wait the page is as before ('%s')", F[3]);
+    printf("  slave start-up wait shown: Z V M F B O R letters on the status row and the diagnostics page\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -402,6 +420,7 @@ int main(void)
     t_slave_control();
     t_engine_inputs();
     t_status_and_diag();
+    t_slave_wait();
     t_display_stability();
     t_load_calibration();
     t_no_cuts();

@@ -555,6 +555,8 @@ void MasterApp_Run(void)
                 d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr;
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
+                d.wait_valid = (uint8_t)((g_mon.last.state == 1U) && ((g_mon.last.flags & 0x8000U) != 0U));       /* the slave waits in SYNC and says what for */
+                d.wait_ctx   = (uint8_t)((g_mon.last.flags >> 8) & 0x7FU);
                 d.h_valid = g_mon.h_valid; d.win_lo_dv = g_mon.h_win_lo_dv; d.win_hi_dv = g_mon.h_win_hi_dv; d.vout_max_dv = g_mon.h_vout_max_dv;
             }
             if ((uint32_t)(now - t_ct) >= 200U)

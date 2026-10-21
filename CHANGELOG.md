@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.11 — injection guard after the IGBT failure in a fast variac test (current)
+## v0.9.12 — the screen names what the slave is waiting for (current)
+* From a video of the unit: the master commanded run (`run:1`, `$M` counting up), the slave answered "starting" with no fault and never started its converter, and nothing on the screen said why. The slave already reports its start-up wait reason (Z zero-cross, V input window, M measurement, F FLT low, B break input low or floating,
+  O output too high, R relays) in its status frame. The status row now shows it (`Slave Waits:FB`) and the diagnostics page shows `W:FB`. See `docs/MASTER_UI.md`. Tests: app suite 186 checks.
+* NO change to the slave's protection. `F` and `B` mean an over-current / driver-fault line reads LOW (or floats): the slave is right to refuse to start.
+* The development repository was rebuilt from the delivered v0.9.11 package after a sandbox reset: the source is identical, the git history before v0.9.11 is not available.
+
+## v0.9.11 — injection guard after the IGBT failure in a fast variac test
 * A unit lost its inverter IGBTs when the input was swung back and forth quickly (v0.9.9, voltage cuts removed). By simulation: the boost/buck direction was reversed at the regulator's full correction in a single pass as the input crossed the set point (8 of 8 snaps), and the integral
   regulator wound up on a stale output measurement within 20 ms of a step. NEW `SLAVE_INJ_GUARD` (on by default): an input step of 15 V or more between RMS results, or a direction reversal above 96 ticks of correction, takes the correction to zero, holds it until the input has been steady 100 ms, and restarts the regulator from zero.
   `MASTER_TEST_NO_VOLTAGE_CUTS` is 0 (cuts ON) by default again, a build with it on says "TEST: NO V CUTS" at start, and the runner refuses unsafe defaults. See `docs/PROTECTION_PATH.md`, "Incident report": this is a mitigation of one reproducible cause, NOT proof; the FLT latency still has to be measured.

@@ -50,6 +50,8 @@ typedef struct
     uint8_t  heat;               /* the slave's OVERHEAT flag (not available yet: 0)                   */
     uint8_t  ct_peak;            /* the CT reached full scale (not measured yet: 0)                    */
     uint8_t  clr_echo;           /* $E: the clear counter the slave last saw                           */
+    uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
+    uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
     uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
     uint16_t win_lo_dv, win_hi_dv, vout_max_dv;   /* the slave's input window and output guard, tenths of a volt */
 } MAppData_t;

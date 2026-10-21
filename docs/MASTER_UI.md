@@ -120,3 +120,19 @@ The load shown (and used for the Overload fault) came from the original firmware
    STOP moves the cursor. Press LOG: `Calibrated`. It is refused below 2.0 A of load (`Load Too Low`, as in the spec), for a value outside 2.0 to 180.0 A, and for a gain that no CT could give (`Out Of Range`: check the CT). MENU leaves the page (a fourth press returns to the Run screen).
    START and STOP on this page only edit the value; they never start or stop the unit.
 The raw ADC count averaging is unchanged (200 samples every 200 ms). The ADC reads the average of the rectified CT signal, so a distorted (non-sinusoidal) load reads differently from a true-RMS clamp meter: calibrate with the typical load.
+
+
+## "Slave Waits:..." (v0.9.12)
+When the master has told the slave to run (`run:1` on the diagnostics page) and the slave answers "starting" (`Slv st:1`) but never reaches RUN, the slave is waiting in its start-up check. It says what for in its status frame, and the status row now shows it
+as letters, for example `Slave Waits:FB` (the diagnostics page shows `W:FB`; your old monitor page, one MENU press, shows the same as `WAIT: F B`):
+| letter | the slave is waiting for |
+|---|---|
+| `Z` | a validated zero-cross pattern (no or unstable mains zero-cross signal) |
+| `V` | the input to be inside its start window (off in the NOCUTS build) |
+| `M` | a valid voltage measurement |
+| `F` | the FLT line (PD2, the over-current comparators) to go HIGH: it reads LOW |
+| `B` | the break input (PB12 / PA9) to go HIGH: it reads LOW, **which includes a FLOATING input** |
+| `O` | the output voltage to fall below its limit |
+| `R` | the relays to settle in the shorted (bypass) state |
+No letters (`To 230 V (216)`) means nothing is missing and the slave is moving through its start sequence. **`F` and `B` are protection: the slave refuses to start while an over-current / driver-fault line reads LOW.** After a power-stage repair a latched
+gate-driver fault output, a floating break input or a comparator without its CT connected will do exactly that. Find out why the line is low; do not bypass it.
