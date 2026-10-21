@@ -380,6 +380,20 @@ static void t_slave_wait(void)
     printf("  slave start-up wait shown: Z V M F B O R letters on the status row and the diagnostics page\n");
 }
 
+static void t_inrush_retries_app(void)
+{
+    MLogRec_t r;
+    fresh(); MApp_SetInrushRetries(&A, 0U); to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running");
+    D.state = 3U; D.fault = 2U; run(300U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Inrush") == 0, "the slave reports FLT (code 2): the contactor opens and the screen says Inrush (%s)", row(3));
+    D.fault = 0U; D.state = 0U; run(120000U);
+    CHECK(MApp_Control(&A)->run == 0U && A.eng.u[0].st == (uint8_t)U_LATCHED && MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_INRUSH,
+          "with 0 retries it is latched: two minutes later the slave is still not told to run, one entry in the log");
+    fresh(); MApp_SetInrushRetries(&A, 3U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(300U); D.fault = 0U; D.state = 0U; run(40000U);
+    CHECK(MApp_Control(&A)->run == 1U, "with 3 retries it tries again after 30 s");
+    printf("  inrush retries in the application: 0 latches at once, 3 retries\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -420,6 +434,7 @@ int main(void)
     t_slave_control();
     t_engine_inputs();
     t_status_and_diag();
+    t_inrush_retries_app();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

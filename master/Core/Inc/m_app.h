@@ -72,6 +72,7 @@ typedef struct
     MCal_t       cal;
     uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
     uint8_t      lim_set;
+    uint8_t      retries_cfg;
     uint8_t      ctl_valid;            /* $M may be sent: the slave was heard ($E), or its $S frames have been arriving for 3 s */
     uint8_t      have_seen;
     uint32_t     t_first_have, m_sent;
@@ -93,6 +94,8 @@ const MCtlOut_t *MApp_Control(const MApp_t *a); /* the content of the $M frame t
 void    MApp_SetTestNoCuts(MApp_t *a, uint8_t on);
 /* the load-current calibration lives in two flash pages of its own; call once after MApp_Init to enable it (it also turns on Set-Mode "Calibration") */
 void    MApp_InitCal(MApp_t *a, uint32_t page_a, uint32_t page_b);
+/* inrush / power-stage retries: 3 = the approved rule (retry after 30 s, up to 3 times), 0 = latch at the FIRST trip. Use 0 while commissioning a repaired power stage. */
+void    MApp_SetInrushRetries(MApp_t *a, uint8_t n);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
 void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */

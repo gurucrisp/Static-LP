@@ -527,6 +527,7 @@ void MasterApp_Run(void)
     MApp_Init(&app, MFlashG0_Iface(), MAPP_PAGE_SETTINGS_A, MAPP_PAGE_SETTINGS_B, MAPP_PAGE_LOG_A, MAPP_PAGE_LOG_B, HAL_GetTick());
     MApp_InitCal(&app, MAPP_PAGE_CALIB_A, MAPP_PAGE_CALIB_B);
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
+    MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
     rx_start();
 #if (MASTER_TEST_NO_VOLTAGE_CUTS != 0)
     MUI_Notify(&app.ui, "TEST: NO V CUTS", "Not For Field Use", HAL_GetTick());                  /* every start of a build with the voltage cuts removed says so */

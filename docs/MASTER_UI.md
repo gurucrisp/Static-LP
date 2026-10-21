@@ -136,3 +136,10 @@ as letters, for example `Slave Waits:FB` (the diagnostics page shows `W:FB`; you
 | `R` | the relays to settle in the shorted (bypass) state |
 No letters (`To 230 V (216)`) means nothing is missing and the slave is moving through its start sequence. **`F` and `B` are protection: the slave refuses to start while an over-current / driver-fault line reads LOW.** After a power-stage repair a latched
 gate-driver fault output, a floating break input or a comparator without its CT connected will do exactly that. Find out why the line is low; do not bypass it.
+
+
+## "Inrush" on the screen, and the retries (v0.9.13)
+The master shows **Inrush** when the slave reports its hardware break (code 1) or its FLT input (code 2): the over-current comparator chain fired. It does NOT necessarily mean a mains inrush; in a unit with a repaired power stage it can be a real over-current or a spurious trip.
+Read the diagnostics page (MENU twice): `Slv F:02` = FLT, `F:01` = the hardware break; the fault log (LOG key) has the entry with the voltages and the load at the moment.
+**Retries:** the approved rule retries an Inrush or power-stage trip after 30 s, up to 3 times, then latches until power off and on. Each retry re-energises the power stage, which is NOT safe while a repaired stage is being commissioned.
+`MASTER_INRUSH_RETRIES` in `master_monitor.h` sets it: **0 (this release's default) = latch at the FIRST trip**, 3 = the approved rule. Set it back to 3 for a unit in service.

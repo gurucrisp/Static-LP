@@ -85,11 +85,13 @@ typedef struct
     uint8_t  a_ovl[3], a_heat[3];
     uint8_t  buzzer;
     uint8_t  inited;
+    uint8_t  max_retries;      /* inrush / power-stage retries before the latch: MF_RETRIES (3, the approved rule) or 0 = latch at the FIRST trip (commissioning a repaired power stage) */
 } MFaults_t;
 
 /* power-up: the units start per the mode and restart mode */
 void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms);
 void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now_ms, MFOut_t *out);
+void MF_SetMaxRetries(MFaults_t *f, uint8_t n);   /* survives nothing: MF_Init sets it back to MF_RETRIES */
 void MF_RetuneDone(MFaults_t *f);     /* the user re-tuned: clears the Re-tune latch */
 uint8_t MF_Rank(uint8_t type);        /* display priority, higher = shown first */
 /* the fault type (MLOG_T_*) a slave fault code stands for; code 9 needs the input voltage and the Set Voltage to decide I/P LV or HV. Used by the engine AND the screens, so they cannot disagree. */

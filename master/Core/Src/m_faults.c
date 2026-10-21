@@ -41,8 +41,11 @@ void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms)
         f->u[u].st = (s->restart_auto != 0U) ? (uint8_t)U_ONDELAY : (uint8_t)U_OFF;      /* power-up: Auto waits the Restart Time (the on-delay), Manual waits for START */
         f->u[u].t_enter = now_ms;
     }
+    f->max_retries = (uint8_t)MF_RETRIES;
     f->inited = 1U;
 }
+
+void MF_SetMaxRetries(MFaults_t *f, uint8_t n) { f->max_retries = n; }
 
 void MF_RetuneDone(MFaults_t *f)
 {
@@ -172,7 +175,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             }
             un->ftype = best.type; un->fclass = best.cls; un->fphase = best.phase; un->fcode = best.code; un->t_enter = now; un->clr_owed = 0U;
             un->st = (uint8_t)U_FAULT;
-            if (best.cls == (uint8_t)FC_RETRY) { un->retries++; if (un->retries > MF_RETRIES) un->st = (uint8_t)U_LATCHED; }
+            if (best.cls == (uint8_t)FC_RETRY) { un->retries++; if (un->retries > f->max_retries) un->st = (uint8_t)U_LATCHED; }
             if ((best.cls == (uint8_t)FC_LATCH) || (best.cls == (uint8_t)FC_RETUNE)) un->st = (uint8_t)U_LATCHED;
             if ((f->mode != (uint8_t)M_MODE_DOMESTIC) || (best.type == MLOG_T_FLIP)) f->buzzer = 1U;       /* D28: the flip sounds in Domestic too */
         }

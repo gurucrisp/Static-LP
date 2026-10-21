@@ -103,6 +103,7 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     MLog_Init(&a->log, fl, la, lb);
     MK_Init(&a->keys);
     MF_Init(&a->eng, &a->settings, now);
+    a->retries_cfg = (uint8_t)MF_RETRIES;
     cal_defaults(&a->cal);                                                  /* until MApp_InitCal: the original firmware's scale and 3 A offset */                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
     MUI_Init(&a->ui, &a->settings, &a->log, now);
     MUI_SetLimits(&a->ui, 0);                                              /* the slave's window and output guard come with its $H frame (stage 7c) */
@@ -147,6 +148,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         in.ph[0].heat = d->heat; in.ph[0].ct_peak = d->ct_peak;
         /* the Y and B slaves have no link yet: in Industrial and Domestic they count as missing, so those modes do not start */
         in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = now / 60000UL;
+        a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
         {   MSettings_t es = a->settings;                                                /* what the engine judges by */
             if (a->no_cuts != 0U) { es.ip_lv = 1U; es.ip_hv = 999U; es.op_lv = 1U; es.op_hv = 999U; }   /* TEST: no voltage limits */
             MF_Tick(&a->eng, &es, &in, now, &a->eout);
@@ -205,6 +207,7 @@ uint8_t MApp_SetModeOpen(const MApp_t *a) { return MUI_SetModeOpen(&a->ui); }
 const MCtlOut_t *MApp_Control(const MApp_t *a) { return &a->ctl_out; }
 uint8_t MApp_ControlValid(const MApp_t *a) { return a->ctl_valid; }
 void MApp_NoteFrameSent(MApp_t *a) { a->m_sent++; }
+void MApp_SetInrushRetries(MApp_t *a, uint8_t n) { a->retries_cfg = n; a->eng.max_retries = n; }
 void MApp_SetTestNoCuts(MApp_t *a, uint8_t on) { a->no_cuts = (uint8_t)(on != 0U); }
 uint8_t MApp_ShowsDiag(const MApp_t *a) { return MUI_ShowsDiag(&a->ui); }
 

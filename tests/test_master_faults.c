@@ -279,6 +279,29 @@ static void t_flip_retune_link(void)
     printf("  flip (Domestic buzzer, latch), re-tune, link lost\n");
 }
 
+static void t_no_retry(void)
+{
+    W_t w;
+    /* commissioning a repaired power stage: ZERO retries. The first inrush latches, nothing re-energises the stage, however long we wait. */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 0U); to_on(&w); run_ms(&w, 4000U);
+    w.code[0] = 2U; step(&w); step(&w);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 1 && w.log[0].type == MLOG_T_INRUSH, "0 retries: the FIRST inrush latches (state %d, %d logged)", unit_st(&w, 0), w.n_log);
+    { int run_before = w.n_clr[0]; run_ms(&w, 600000U); CHECK(w.out.run[0] == 0U && w.out.contactor[0] == 0U && w.n_clr[0] == run_before, "ten minutes later: no retry, no clear pulse, the slave was never told to run again"); }
+    /* the hardware break code 1 and the power-stage codes behave the same */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 0U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 1U; step(&w); step(&w);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED, "the hardware break (code 1) latches at once too");
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 0U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 7U; step(&w); step(&w);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED, "and so does a power-stage fault (code 7)");
+    /* the approved rule is untouched: the default is 3 */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 2U; step(&w); step(&w);
+    CHECK(unit_st(&w, 0) == (int)U_FAULT && w.f.max_retries == 3U, "by default the first inrush is a normal trip that retries (state %d, max %u)", unit_st(&w, 0), (unsigned)w.f.max_retries);
+    /* 1 retry: exactly one */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 1U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w);
+    run_ms(&w, 120000U);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 2, "1 retry: one retry, then the latch (%d trips logged)", w.n_log);
+    printf("  retries: 0 latches at the first inrush / break / power-stage trip, 1 retries once, the default is the approved 3\n");
+}
+
 static void t_modes(void)
 {
     W_t w; uint32_t k;
@@ -425,6 +448,7 @@ int main(void)
     t_mains_group();
     t_flip_retune_link();
     t_modes();
+    t_no_retry();
     t_setmode_and_stale();
     t_priority();
     t_fuzz();

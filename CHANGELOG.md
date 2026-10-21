@@ -2,7 +2,11 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.12 — the screen names what the slave is waiting for (current)
+## v0.9.13 — no automatic inrush retries while commissioning (current)
+* The master showed "Inrush" (the slave's hardware break or FLT, codes 1 and 2) on a unit with a repaired power stage. The approved rule retries such a trip after 30 s, up to 3 times: every retry re-energises a stage that may still be faulty. NEW `MASTER_INRUSH_RETRIES` (default 0 = latch at the FIRST trip; 3 = the approved rule), engine `max_retries`,
+  `MApp_SetInrushRetries`. The slave and the engine's default (3) are unchanged. Tests: engine 117 checks, app 190 (0, 1 and 3 retries; codes 1, 2 and 7).
+
+## v0.9.12 — the screen names what the slave is waiting for
 * From a video of the unit: the master commanded run (`run:1`, `$M` counting up), the slave answered "starting" with no fault and never started its converter, and nothing on the screen said why. The slave already reports its start-up wait reason (Z zero-cross, V input window, M measurement, F FLT low, B break input low or floating,
   O output too high, R relays) in its status frame. The status row now shows it (`Slave Waits:FB`) and the diagnostics page shows `W:FB`. See `docs/MASTER_UI.md`. Tests: app suite 186 checks.
 * NO change to the slave's protection. `F` and `B` mean an over-current / driver-fault line reads LOW (or floats): the slave is right to refuse to start.

@@ -58,6 +58,10 @@ extern "C" {
  * Set to 0 for any unit that is not on the test bench. */
 #define MASTER_TEST_NO_VOLTAGE_CUTS 0     /* 0 = the cuts are ON (the safe default since v0.9.11, after a unit lost its IGBTs on a fast variac test) */
 
+/* Inrush and power-stage trips (the slave's hardware break / FLT, its power-stage codes, the CT peak): how many times the master RETRIES, 30 s apart, before it latches until power off and on.
+ * 3 = the approved rule (D27). 0 = latch at the FIRST trip: use 0 while a repaired power stage is being commissioned, so that no retry ever re-energises a stage that may still be faulty. */
+#define MASTER_INRUSH_RETRIES   0
+
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
  * scale and 3 A offset). Zero: Set-Mode "Calibration" = Yes (no load). Span: the Load Calibration page (MENU x3 in Run-Mode), typing the clamp-meter reading while the load runs. */
 #define MASTER_CT_SAMPLES       200U
