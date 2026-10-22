@@ -49,6 +49,10 @@
 #ifndef SLAVE_MASTER_CONTROL
 #define SLAVE_MASTER_CONTROL   1
 #endif
+/* A rare zero-cross glitch (F16, F04) while RUNNING skips one half-cycle instead of latching the unit (and opening the load contactor): at most 2 in 2 s, the third is the fault as before. See slave_features.h. */
+#ifndef SLAVE_GLITCH_SKIP
+#define SLAVE_GLITCH_SKIP      1
+#endif
 /* ---- FAST SOFT START (the values of slave_config_STAGE3_cap2752_full_range_fast_start.h): the output reaches the set voltage about 1.4 s sooner from 205 V, and much sooner from a low input ---- */
 /* the soft-start ramp of the setpoint: 10 V/s for 0.5 s, then 30 V/s, then 10 V/s for the last 3 V (the standard values are 3 V/s for 2 s, 10 V/s, 5 V/s). Measured in simulation on the real regulator: no overshoot.
  * The 3 s the converter runs alone before the inverter starts is a separate delay and is not changed. A faster ramp is a faster rise of the load voltage. */

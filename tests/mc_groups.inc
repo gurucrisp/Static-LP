@@ -555,6 +555,26 @@ static void t_mc_master_limits(void)
     printf("  master owns the limits: 185 V in with I/P LV 170 V and Set Voltage 205 V runs; the master trips at its own limit after its own delay\n");
 }
 #endif
+
+#if (SLAVE_GLITCH_SKIP != 0)
+/* ---- the master with the REAL slave: the glitch rate observed on the bench (6 in 10 minutes, F16) must not open the load ---- */
+static void t_mc_glitch_master(void)
+{
+    uint32_t k, s0; MLogRec_t r;
+    ma_start(1U, 228.0f); (void)ma_until(ma_c_contactor, 90000U); ma_run(8000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN, "running with the contactor closed");
+    s0 = SlaveCtrl_GlitchSkips();
+    for (k = 0U; k < 6U; k++) { W.preen_glitch = 1; ma_run(100000U); }                  /* 6 glitches in 10 simulated minutes */
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && MLog_Count(&ma.log) == 0U,
+          "6 last-moment glitches in 10 minutes: the contactor stays closed, nothing is logged (contactor %d, state %d, fault %d, %u logged)", (int)ma_c_contactor(), g_ctrl.state, g_ctrl.fault, (unsigned)MLog_Count(&ma.log));
+    CHECK(SlaveCtrl_GlitchSkips() - s0 == 6U, "all six were counted (%u)", (unsigned)(SlaveCtrl_GlitchSkips() - s0));
+    /* a real problem: three in a row. The slave stops with F16, the master opens the contactor and logs it with the code. */
+    W.preen_glitch = 3; ma_run(3000U);
+    CHECK(!ma_c_contactor() && g_ctrl.fault == CF_PRE_ENERGISE, "three in a row: the slave stops with F16 and the contactor opens (contactor %d, fault %d)", (int)ma_c_contactor(), g_ctrl.fault);
+    CHECK(MLog_Count(&ma.log) >= 1U && MLog_Get(&ma.log, 0U, &r) == 0 && r.type == MLOG_T_MAINS && r.slave_code == 16U, "and it is logged as Mains Unstable with code 16");
+    printf("  glitch with the master: 6 rare F16 glitches in 10 minutes leave the load connected; three in a row open it and log F16\n");
+}
+#endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
 /* ---- TEST build: the slave applies NO voltage limits of its own ---- */
 static void t_mc_no_voltage_cuts(void)

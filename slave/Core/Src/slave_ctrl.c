@@ -63,6 +63,20 @@ static uint8_t TrkUpdate(Trk_t *k, uint32_t now_us, uint8_t rising, int8_t sign,
 
     *dt_out = 0U;
     *why    = 0U;
+#if (SLAVE_GLITCH_SKIP != 0)
+    if ((sign == 0) && (k->have_prev != 0U) && (k->good >= 8U) && (k->sign_last != 0))
+    {   /* ONE unreadable sign (the sample at the event is too small) in an established pattern: judge the TIMING, and INFER the sign (it alternates), so the next event is still checked against a real
+         * sequence instead of failing on a sign of 0. Whether the unreadable sign itself is tolerated is decided by the caller (GlitchTolerated), which is bounded. */
+        uint32_t dt0 = (uint32_t)(now_us - k->t_last);
+        *dt_out = dt0;
+        if ((dt0 >= CTRL_EVENT_MIN_US) && (dt0 <= CTRL_EVENT_MAX_US) && ((need_alternating_edge == 0U) || (rising != k->rising_last)))
+        {
+            if (k->good < 255U) k->good++;
+            k->t_last = now_us; k->sign_last = (int8_t)(-k->sign_last); k->rising_last = rising;
+            return 1U;
+        }
+    }
+#endif
     if (k->have_prev != 0U)
     {
         uint32_t dt = (uint32_t)(now_us - k->t_last);
@@ -104,6 +118,25 @@ void SlaveCtrl_LegsFor(int8_t polarity, uint8_t boost, uint16_t duty,
 /* SOFT fault (everything except an overcurrent): the converter goes off and the inverter duty to ZERO. The inverter is
  * NOT disabled here - its low sides keep the transformer primary shorted (rule R3) until the main loop has closed the
  * relay shunts and only then disables it. */
+
+#if (SLAVE_GLITCH_SKIP != 0)
+static volatile uint32_t s_gl_t0_us;          /* the start of the 2 s window */
+static volatile uint8_t  s_gl_n;              /* half-cycles skipped in this window */
+static volatile uint32_t s_gl_total;
+/* A rare polarity glitch (F16, F04) while RUNNING: returns 1 = skip this half-cycle quietly, 0 = raise the fault as before. Interrupt level only. */
+static uint8_t GlitchTolerated(uint32_t now_us)
+{
+    if (g_ctrl.state != CTRL_RUN) return 0U;                                   /* during a start the checks stay strict */
+    if ((uint32_t)(now_us - s_gl_t0_us) > (uint32_t)CTRL_GLITCH_WINDOW_US) { s_gl_t0_us = now_us; s_gl_n = 0U; }
+    if (s_gl_n >= (uint8_t)CTRL_GLITCH_MAX) return 0U;                         /* too many: it is real */
+    s_gl_n++; s_gl_total++;
+    return 1U;
+}
+uint32_t SlaveCtrl_GlitchSkips(void) { return s_gl_total; }
+#else
+uint32_t SlaveCtrl_GlitchSkips(void) { return 0U; }
+#endif
+
 static void IsrFail(uint16_t code)
 {
     SlavePower_ConverterOffNow();
@@ -171,7 +204,18 @@ void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
 
     if (g_ctrl.run_allowed == 0U) return; /* monitoring only: nothing may be energised */
 
-    if (sign_in == 0)                                  { IsrFail(CF_POLARITY);       return; }
+    if (sign_in == 0)
+    {
+#if (SLAVE_GLITCH_SKIP != 0)
+        if (GlitchTolerated(now_us))                   /* the sample at this event is too small to read: no diagonal this half-cycle, keep the watchdog armed */
+        {
+            CtrlHw_ArmWatchdog((uint32_t)(now_us + interval + CTRL_WD_MARGIN_US));
+            return;
+        }
+#endif
+        IsrFail(CF_POLARITY);
+        return;
+    }
     if (ok == 0U)                                      /* say WHICH check failed: wrong TIME (F03) or wrong SIGN sequence (F15) */
     {
         IsrFail(((why & TRK_WHY_INTERVAL) != 0U || why == 0U) ? CF_ZC_PATTERN : CF_ZC_SEQUENCE);
@@ -218,7 +262,14 @@ void SlaveCtrl_OnDeadtimeIrq(void)
      * the line has not reversed yet - and energising now would conduct against it. */
     {
         int8_t s = CtrlHw_SignLatest(1U);
-        if ((s != 0) && (pol != 0) && (s != pol)) { IsrFail(CF_PRE_ENERGISE); return; }
+        if ((s != 0) && (pol != 0) && (s != pol))
+        {
+#if (SLAVE_GLITCH_SKIP != 0)
+            if (GlitchTolerated(CtrlHw_NowUs())) return;   /* an early or noisy event: energise NOTHING this half-cycle (the safe state), the next event carries on */
+#endif
+            IsrFail(CF_PRE_ENERGISE);
+            return;
+        }
     }
 
 #if (SLAVE_CONV_SWAP != 0)       /* DANGEROUS if set without a scope check: see slave_config.h */
@@ -803,6 +854,9 @@ void SlaveCtrl_Init(void)
     s_target_v = (float)CTRL_TARGET_V;
     s_vin_bad = s_vout_bad = 0U;
     s_meas_seen = 0U;
+#if (SLAVE_GLITCH_SKIP != 0)
+    s_gl_t0_us = 0U; s_gl_n = 0U;
+#endif
 #if (SLAVE_TF_CHECK != 0) || (SLAVE_POWER_STAGE == 2)
     s_tf_word = 0U;
 #endif

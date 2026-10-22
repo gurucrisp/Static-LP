@@ -31,6 +31,13 @@
 /* INJECTION GUARD (v0.9.11, stages 3 and up). 1 (the default) = the correction is taken to ZERO and held, and the regulator restarts from zero, (a) before the boost/buck DIRECTION is reversed while the correction is
  * larger than CTRL_DIR_FLIP_MAX_TICKS, and (b) when the input voltage steps by CTRL_VIN_STEP_V or more between two RMS results (a fast variac, a mains switch-over), until the input has been steady for
  * CTRL_GUARD_HOLD_MS. Without it the controller reversed the injection at full duty in the same pass as the input crossed the set point. 0 = the old behaviour, for comparison only. */
+/* 1 = a RARE zero-cross glitch while RUNNING does not stop the unit. Two of the slave's polarity checks, F16 (the last-moment sign check before a diagonal is energised) and F04 (the sign at an event is too small to read),
+ * used to latch the unit at the first occurrence; in master-control mode that opens the load contactor for a noise spike. With 1 the slave instead SKIPS that half-cycle (nothing is energised: the same safe state the check
+ * enforced) and counts it; a third in 2 s fails exactly as before, so a real polarity problem (it fails on every half-cycle) still stops the unit within about 30 ms. Only while RUN: during a start the checks stay strict.
+ * 0 = every one of them is a fault (the behaviour of every standalone build). The master-control configs set 1. */
+#ifndef SLAVE_GLITCH_SKIP
+#define SLAVE_GLITCH_SKIP      0
+#endif
 #ifndef SLAVE_INJ_GUARD
 #define SLAVE_INJ_GUARD        1
 #endif
@@ -43,7 +50,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       915UL
+#define SLAVE_FW_VERSION       916UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

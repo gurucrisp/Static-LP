@@ -49,6 +49,10 @@
 #ifndef SLAVE_MASTER_CONTROL
 #define SLAVE_MASTER_CONTROL   1
 #endif
+/* A rare zero-cross glitch (F16, F04) while RUNNING skips one half-cycle instead of latching the unit (and opening the load contactor): at most 2 in 2 s, the third is the fault as before. See slave_features.h. */
+#ifndef SLAVE_GLITCH_SKIP
+#define SLAVE_GLITCH_SKIP      1
+#endif
 /* ---- TEST ONLY: NO VOLTAGE CUTS IN THE SLAVE ---------------------------------------------------------------------------------------------------------------------
  * The input-range trip, the input start window and the output-high trip are OFF, and $H announces a 0 to 650 V window so the master accepts any cut-off. The hardware over-current protection stays.
  * For bench testing only: do not leave a unit running on this file. The standard MASTER file keeps every limit.

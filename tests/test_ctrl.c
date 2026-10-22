@@ -1305,6 +1305,82 @@ static void t_zc_fault_split(void)
     printf("  zero-cross faults tell the cause: wrong time -> F03, wrong sign sequence -> F15, last-moment polarity disagreement -> F16\n");
 }
 
+
+#if (SLAVE_GLITCH_SKIP != 0)
+/* ---- a RARE zero-cross glitch (F16, F04) while RUNNING must not stop the unit; a real one still must ---- */
+static void t_glitch_skip(void)
+{
+    uint32_t s0, k;
+    /* a) ONE bad last-moment check while running: nothing energised that half-cycle, no fault, the unit carries on */
+    world_reset(71000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    s0 = SlaveCtrl_GlitchSkips();
+    W.preen_glitch = 1;
+    run_for(2000000);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "one F16-type glitch: the unit keeps running, no fault (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    CHECK(SlaveCtrl_GlitchSkips() == s0 + 1U, "and it was counted as one skipped half-cycle (%u)", (unsigned)(SlaveCtrl_GlitchSkips() - s0));
+    CHECK(diag != 0 || g_ctrl.commutations > 0U, "the converter keeps commutating afterwards");
+    check_invariants("one F16 glitch");
+
+    /* b) TWO in a row are tolerated, the THIRD within 2 s is the fault, exactly as before */
+    world_reset(72000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    W.preen_glitch = 2;
+    run_for(1000000);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "two glitches in a row: still tolerated (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    world_reset(73000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    W.preen_glitch = 3;
+    run_for(1000000);
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_PRE_ENERGISE, "the third glitch within 2 s is F16 as before (got %d/%d)", g_ctrl.state, g_ctrl.fault);
+    CHECK(diag == 0, "and nothing is energised");
+
+    /* c) a REAL polarity problem fails on every half-cycle: the unit stops within a few events (F04 for a signal too small to read) */
+    world_reset(74000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    W.amp = 10.0;                                        /* mains too small to read a sign: every event fails */
+    run_for(100000);
+    CHECK(diag == 0 && g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_POLARITY, "a persistent tiny signal: F04 within 0.1 s (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    check_invariants("persistent tiny signal");
+
+    /* d) ONE unreadable sign at one event: tolerated */
+    world_reset(75000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    s0 = SlaveCtrl_GlitchSkips();
+    W.in_zero = 1;                                          /* the input reads zero until ONE event has been affected */
+    for (k = 0U; (k < 60U) && (SlaveCtrl_GlitchSkips() == s0); k++) run_for(1000);
+    W.in_zero = 0;
+    run_for(1500000);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && SlaveCtrl_GlitchSkips() > s0 && SlaveCtrl_GlitchSkips() <= s0 + 2U, "one unreadable sign (F04-type): tolerated and counted (%u skipped, state %d fault %d)", (unsigned)(SlaveCtrl_GlitchSkips() - s0), g_ctrl.state, g_ctrl.fault);
+
+    /* e) the observed rate, 6 in 10 minutes: 20 simulated minutes, a glitch every 100 s, the unit never stops */
+    world_reset(76000000);
+    run_for(12000000);
+    CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
+    s0 = SlaveCtrl_GlitchSkips();
+    for (k = 0U; k < 12U; k++)
+    {
+        W.preen_glitch = 1;
+        run_for(100000000);
+        if (!(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE)) break;
+    }
+    CHECK(k == 12U && g_ctrl.state == CTRL_RUN, "a glitch every 100 s for 20 minutes: never a fault (%u glitches survived, state %d fault %d)", (unsigned)k, g_ctrl.state, g_ctrl.fault);
+    CHECK(SlaveCtrl_GlitchSkips() - s0 == 12U, "all twelve counted (%u)", (unsigned)(SlaveCtrl_GlitchSkips() - s0));
+
+    /* f) while a start is going on the checks stay strict: a bad last-moment check before the first diagonals is a fault */
+    world_reset(77000000);
+    W.preen_glitch = 1;
+    run_for(1500000 + WARM);
+    CHECK(g_ctrl.fault_count >= 1U || g_ctrl.fault == CF_PRE_ENERGISE, "a glitch during the START is still F16 (fault_count %u, fault %d)", (unsigned)g_ctrl.fault_count, g_ctrl.fault);
+    printf("  glitch skip: one F16/F04 glitch while running is skipped and counted, three in 2 s or a persistent one stops the unit, 12 glitches over 20 minutes never do, the start stays strict\n");
+}
+#endif
+
 static void t_vin_hysteresis(void)
 {
     uint64_t t0;
@@ -2495,6 +2571,9 @@ int main(void)
     run_isolated(t_fault_context,             "fault context byte (state, mode, FLT/BKIN levels)");
     run_isolated(t_wait_reasons,              "START with nothing happening: wait reasons");
     run_isolated(t_zc_fault_split,            "zero-cross faults: time F03 / sequence F15 / last-moment F16");
+#if (SLAVE_GLITCH_SKIP != 0)
+    run_isolated(t_glitch_skip,               "glitch skip: a rare F16/F04 while running is skipped");
+#endif
     run_isolated(t_vin_hysteresis,            "input voltage: start window narrower than trip window");
     run_isolated(t_map_check,                 "passive converter-mapping check (no converter running)");
     run_isolated(t_diag_counters,             "bench diagnostics: FLT / break event counters (idle vs running)");
@@ -2564,6 +2643,9 @@ int main(void)
 #if (SLAVE_INJ_GUARD != 0)
     run_isolated(t_mc_input_steps,            "input steps: recover fast and never stick");
     run_isolated(t_mc_master_limits,          "input steps: the master's limits govern (185 V in, 200 V set)");
+#endif
+#if (SLAVE_GLITCH_SKIP != 0)
+    run_isolated(t_mc_glitch_master,          "input steps: a rare zero-cross glitch does not open the load");
 #endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS != 0)
     run_isolated(t_mc_no_voltage_cuts,        "no voltage cuts: the slave applies no limits");

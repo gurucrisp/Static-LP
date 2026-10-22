@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.15 — the master owns the voltage limits (current)
+## v0.9.16 — a rare zero-cross glitch (F16 / F04) while running no longer opens the load (current)
+* Bench: "Mains Unstable" 6 times in 10 minutes in stable conditions, mostly F16 (the last-moment polarity check before a diagonal is energised), once F04 (sign too small to read). In master-control mode each of those latched the unit and the master opened the contactor.
+* NEW `SLAVE_GLITCH_SKIP` (default 0; 1 in the three master-control configs, enforced by the runner): while RUN a rare F16 or F04 skips ONE half-cycle (nothing energised) and is counted (`SlaveCtrl_GlitchSkips()`); more than 2 in 2 s is the fault as before; the start stays strict.
+  The tracker infers the alternating sign across one unreadable event so F04 does not turn into F15. This hides a symptom: the cause (noise at the zero crossing) is still there.
+* Tests: new group `glitch skip` (41 checks), an end-to-end group with the real master (6 glitches in 10 minutes leave the contactor closed, 3 in a row open it and log F16), 6 breakages caught.
+
+## v0.9.15 — the master owns the voltage limits
 * The master-control configs (MASTER, MASTER_fast_start, MASTER_TEST_NOCUTS) no longer narrow the slave's envelope to 195 / 275 / 265 V (they trip at once and ignore the master's limits and the Volt Cut Delay). The slave keeps its built-in 140 to 300 V input trip (start 150 to 290 V) and 280 V output guard and announces them in `$H`; Set-Mode refuses limits outside them.
   The runner now REFUSES a master-control config that narrows the envelope, and its old "every STAGE3 file needs a 250/260/265 V output guard" rule exempts the master-control files.
 * MASTER: a gross output over-voltage (15 V above O/P HV for 0.2 s) is cut without waiting for the Volt Cut Delay (`MF_OP_HV_FAST_V`, `MF_OP_HV_FAST_MS`).

@@ -112,6 +112,14 @@ extern "C" {
                                                arrives. A missing event therefore leaves it OFF, never
                                                conducting against the line. */
 #endif
+/* SLAVE_GLITCH_SKIP: at most CTRL_GLITCH_MAX skipped half-cycles in CTRL_GLITCH_WINDOW_US; the next one is the fault */
+#ifndef CTRL_GLITCH_WINDOW_US
+#define CTRL_GLITCH_WINDOW_US    2000000UL
+#endif
+#ifndef CTRL_GLITCH_MAX
+#define CTRL_GLITCH_MAX          2U
+#endif
+uint32_t SlaveCtrl_GlitchSkips(void);       /* how many half-cycles have been skipped since power-up (0 when SLAVE_GLITCH_SKIP is 0) */
 #ifndef CTRL_GUARD_BLANK_US
 #define CTRL_GUARD_BLANK_US      250U       /* polarity guard ignores this long after a commutation (the
                                                newest ADC samples still belong to the previous half-cycle) */

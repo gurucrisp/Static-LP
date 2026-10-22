@@ -49,6 +49,10 @@
 #ifndef SLAVE_MASTER_CONTROL
 #define SLAVE_MASTER_CONTROL   1
 #endif
+/* A rare zero-cross glitch (F16, F04) while RUNNING skips one half-cycle instead of latching the unit (and opening the load contactor): at most 2 in 2 s, the third is the fault as before. See slave_features.h. */
+#ifndef SLAVE_GLITCH_SKIP
+#define SLAVE_GLITCH_SKIP      1
+#endif
 #ifndef SLAVE_BENCH_AUTORUN
 #define SLAVE_BENCH_AUTORUN    0
 #endif
