@@ -2,7 +2,12 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.17 — limits model, one Run screen, works from 90 V (current)
+## v0.9.18 — the transformer-flip check at start (current)
+* "The flip test is not working at start": it did not exist in the stage-3 firmware (stage 1 only; stage 2 left a word; the slave never raised fault 17). NEW `SLAVE_TF_RUN_CHECK` (default 0, 1 in the three master-control configs, enforced by the runner): during the regulator's start the output must move the commanded way; the sensor offset is recorded first; about -1 V in two 100 ms windows (or -2.5 V in one) = connected backwards:
+  fault 17 (`CF_TRANSFORMER_FLIP`), latched in every mode, never retried. The master already showed Transformer Flip with the buzzer. Wrong-way deviation before the stop in simulation: 0.7 V (boost), 1.5 V (buck).
+* Tests: group `flip check` with the real master (18 checks: correct boost/buck pass, backwards boost/buck latch, no verdict when nothing needs correcting, offsets of +-0.8, +-2 and +-5 V, +-0.6 V noise, +-2 V noise with a 1 V correction), group `flip standalone` (3 checks). 7 of 8 breakages caught; "two windows in a row instead of one" is not proven by a test.
+
+## v0.9.17 — limits model, one Run screen, works from 90 V
 * MASTER limits model: the window is Set Voltage -/+ Max Correction inside 90..300 V; I/P LV and HV default to its edges and can be moved inside it but not closer than 10 V to the Set Voltage; O/P LV and HV default 20 V inside the input limits and can be moved between the input limit and 10 V from Set. Changing the Set Voltage or Max Correction
   moves the limits that were at their defaults and clips the others; Set Voltage is 100..290 V; Max Correction 0 or 10..199 V; defaults and Factory Reset stay inside the slave's announced window and output guard. A refused edit now restores the WHOLE working set (it used to leave moved limits behind).
 * MASTER single-phase: ONE Run screen with the slave's fault code at the right of the status row (`Mains Unstable   F16`); MENU does nothing on it; the service pages (monitor, diagnostics, Load Calibration) are reached by LOG then MENU and return by themselves after 60 s or when a fault appears.

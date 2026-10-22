@@ -586,6 +586,78 @@ static void t_mc_from_90v(void)
     printf("  works from 90 V: starts and regulates from 96 V, refused at 88 V, the 5 V hysteresis at the low edge, the master trips at its own I/P LV after its own delay\n");
 }
 
+
+#if (SLAVE_TF_RUN_CHECK != 0)
+/* ---- the transformer-connection (FLIP) check at every start, with the real master ---- */
+static void ma_flip_case(float vin, double gain, double offset, uint32_t *t_latch_ms, double *max_wrong_v, int *latched)
+{
+    uint32_t k; double wrong = 0.0;
+    ma_start(1U, vin);
+    if (gain != 0.0) { W.plant_curve = 0; W.plant_gain = gain; }                      /* a NEGATIVE gain: the transformer connected the wrong way round */
+    W.out_offset = offset;
+    *t_latch_ms = 0U; *latched = 0;
+    for (k = 0U; k < 600U; k++)                                                        /* 60 s in 100 ms steps */
+    {
+        double dev = (vin < 230.0f) ? (double)(W.vin - W.vout) : (double)(W.vout - W.vin);      /* how far the output has moved AGAINST the direction it was told to go */
+        if (dev > wrong && g_ctrl.state != CTRL_LATCHED) wrong = dev;
+        ma_run(100U);
+        if (g_ctrl.state == CTRL_LATCHED && *latched == 0) { *latched = 1; *t_latch_ms = (k + 1U) * 100U; }
+    }
+    *max_wrong_v = wrong;
+}
+static void t_mc_flip(void)
+{
+    uint32_t t; double wrong; int latched; MLogRec_t r;
+    /* a correctly connected transformer: no fault, it regulates and the contactor closes */
+    ma_flip_case(215.0f, 0.0, 0.0, &t, &wrong, &latched);
+    CHECK(!latched && g_ctrl.fault != CF_TRANSFORMER_FLIP && ma_c_contactor(), "connected correctly (boost, 215 V in): no flip fault, the contactor is closed (latched %d, fault %d)", latched, g_ctrl.fault);
+    ma_flip_case(245.0f, 0.0, 0.0, &t, &wrong, &latched);
+    CHECK(!latched && ma_c_contactor(), "connected correctly (buck, 245 V in): no flip fault, the contactor is closed");
+    /* BOOST needed, the transformer connected BACKWARDS: the slave stops with fault 17, latched, after a deviation of only a few volts */
+    ma_flip_case(215.0f, -0.02, 0.0, &t, &wrong, &latched);
+    CHECK(latched && g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_TRANSFORMER_FLIP, "backwards (boost): the slave latches fault 17 (state %d, fault %d, after %u ms)", g_ctrl.state, g_ctrl.fault, (unsigned)t);
+    CHECK(wrong <= 3.5 && t <= 15000U, "the output moved against the command by only %.1f V before the stop, within %u ms of the run command", wrong, (unsigned)t);
+    CHECK(!ma_c_contactor() && ma.eout.fault[0] == MLOG_T_FLIP && ma.eout.buzzer != 0U, "the contactor never closed; the master shows Transformer Flip and sounds the buzzer (fault %u, buzzer %u)", (unsigned)ma.eout.fault[0], (unsigned)ma.eout.buzzer);
+    CHECK(MLog_Count(&ma.log) >= 1U && MLog_Get(&ma.log, 0U, &r) == 0 && r.type == MLOG_T_FLIP && r.slave_code == 17U, "logged as Transformer Flip with code 17");
+    CHECK(MApp_Control(&ma)->run == 0U && g_ctrl.state == CTRL_LATCHED, "and it stays stopped for the rest of the minute: a wiring fault is never retried by itself");
+    /* BUCK needed, backwards */
+    ma_flip_case(245.0f, -0.02, 0.0, &t, &wrong, &latched);
+    CHECK(latched && g_ctrl.fault == CF_TRANSFORMER_FLIP && wrong <= 3.5, "backwards (buck, 245 V in): fault 17 too, a wrong-way deviation of only %.1f V", wrong);
+    /* a unit that needs no correction is not tested and not at risk */
+    ma_flip_case(230.0f, -0.02, 0.0, &t, &wrong, &latched);
+    CHECK(!latched && g_ctrl.fault == CF_NONE, "230 V in at a Set Voltage of 230 V, even with a backwards transformer: nothing to correct, no verdict, no fault");
+    /* the two voltage sensors differ by 0.8 V: a correct transformer is not blamed, a backwards one is still found */
+    ma_flip_case(215.0f, 0.0, 0.8, &t, &wrong, &latched);
+    CHECK(!latched && ma_c_contactor(), "a 0.8 V offset between the sensors: a correct transformer is NOT called backwards");
+    ma_flip_case(215.0f, -0.02, 0.8, &t, &wrong, &latched);
+    CHECK(latched && g_ctrl.fault == CF_TRANSFORMER_FLIP, "a 0.8 V sensor offset does not hide a backwards transformer");
+    /* an exaggerated sensor offset (+-5 V): the baseline is the ONLY thing that keeps a correct transformer from looking backwards (-5 V) and a backwards one from looking correct (+5 V) */
+    ma_flip_case(215.0f, 0.0, -5.0, &t, &wrong, &latched);
+    CHECK(!latched && g_ctrl.fault == CF_NONE, "a -5 V sensor offset: a correct transformer is NOT called backwards");
+    ma_flip_case(215.0f, -0.02, 5.0, &t, &wrong, &latched);
+    CHECK(latched && g_ctrl.fault == CF_TRANSFORMER_FLIP, "a +5 V sensor offset does not hide a backwards transformer");
+    /* only about 1 V of correction is needed and the output sensor has +-2 V of noise: the true effect is small and the noise is large, so neither a lone window nor a single poor reading may decide. 60 s, correct transformer: no verdict, no fault. */
+    { uint32_t k, ns = 777U; int lat = 0;
+      ma_start(1U, 229.0f);
+      for (k = 0U; k < 3000U; k++) { ns = ns * 1664525U + 1013904223U; W.out_offset = ((double)((ns >> 12) % 2001U) / 1000.0 - 1.0) * 2.0; ma_run(20U); if (g_ctrl.state == CTRL_LATCHED) lat = 1; }
+      CHECK(!lat && g_ctrl.fault != CF_TRANSFORMER_FLIP, "needing ~1 V of correction with +-2 V of sensor noise for a minute: no false flip (latched %d, fault %d)", lat, g_ctrl.fault); }
+    /* big sensor offsets of EITHER sign: the recorded baseline must cancel them (a correct transformer with -2 V is not called backwards, a backwards one with +2 V is not hidden) */
+    ma_flip_case(215.0f, 0.0, -2.0, &t, &wrong, &latched);
+    CHECK(!latched && g_ctrl.fault == CF_NONE, "a -2.0 V offset between the sensors: a correct transformer is NOT called backwards");
+    ma_flip_case(215.0f, -0.02, 2.0, &t, &wrong, &latched);
+    CHECK(latched && g_ctrl.fault == CF_TRANSFORMER_FLIP, "a +2.0 V offset between the sensors does not hide a backwards transformer");
+    /* measurement noise on the output sensor (+-0.6 V, a new value every 20 ms): never a false flip over a minute, and a backwards transformer is still found */
+    { uint32_t k, ns = 4242U; int lat = 0;
+      ma_start(1U, 215.0f);
+      for (k = 0U; k < 3000U; k++) { ns = ns * 1664525U + 1013904223U; W.out_offset = ((double)((ns >> 12) % 2001U) / 1000.0 - 1.0) * 0.6; ma_run(20U); if (g_ctrl.state == CTRL_LATCHED) lat = 1; }
+      CHECK(!lat && g_ctrl.fault != CF_TRANSFORMER_FLIP && ma_c_contactor(), "+-0.6 V of noise on the output sensor for a minute: a correct transformer is never called backwards");
+      ma_start(1U, 215.0f); W.plant_curve = 0; W.plant_gain = -0.02; lat = 0;
+      for (k = 0U; k < 3000U; k++) { ns = ns * 1664525U + 1013904223U; W.out_offset = ((double)((ns >> 12) % 2001U) / 1000.0 - 1.0) * 0.6; ma_run(20U); if (g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_TRANSFORMER_FLIP) lat = 1; }
+      CHECK(lat, "and with the same noise a backwards transformer is still found"); }
+    printf("  transformer flip check: correct boost/buck pass, backwards boost/buck latch fault 17 within a few volts, nothing to correct = no verdict, a sensor offset neither fools it nor hides it\n");
+}
+#endif
+
 #if (SLAVE_GLITCH_SKIP != 0)
 /* ---- the master with the REAL slave: the glitch rate observed on the bench (6 in 10 minutes, F16) must not open the load ---- */
 static void t_mc_glitch_master(void)

@@ -113,6 +113,31 @@ extern "C" {
                                                conducting against the line. */
 #endif
 /* SLAVE_GLITCH_SKIP: at most CTRL_GLITCH_MAX skipped half-cycles in CTRL_GLITCH_WINDOW_US; the next one is the fault */
+/* SLAVE_TF_RUN_CHECK: the flip check (see slave_features.h) */
+#ifndef CTRL_TFRUN_BASE_TICKS
+#define CTRL_TFRUN_BASE_TICKS    15U        /* the sensor offset is recorded while the correction is below this many effective ticks */
+#endif
+#ifndef CTRL_TFRUN_MIN_TICKS
+#define CTRL_TFRUN_MIN_TICKS     40U        /* the output is judged only above this correction */
+#endif
+#ifndef CTRL_TFRUN_WINDOW
+#define CTRL_TFRUN_WINDOW        5U         /* measurement updates per window (100 ms at 50 Hz) */
+#endif
+#ifndef CTRL_TFRUN_VERDICT_V
+#define CTRL_TFRUN_VERDICT_V     1.0f       /* the signed change in the commanded direction: >= +1.0 V = correct, <= -1.0 V = backwards */
+#endif
+#ifndef CTRL_TFRUN_CLEAR_V
+#define CTRL_TFRUN_CLEAR_V       2.5f       /* a window this far AGAINST the command decides at once: it is not noise */
+#endif
+#ifndef CTRL_TFRUN_STRIKES
+#define CTRL_TFRUN_STRIKES       2U         /* windows in a row that say "backwards" */
+#endif
+#ifndef CTRL_TFRUN_JUMP_V
+#define CTRL_TFRUN_JUMP_V        3.0f       /* an input step bigger than this between two updates restarts the window */
+#endif
+#ifndef CTRL_TFRUN_WATCH_MS
+#define CTRL_TFRUN_WATCH_MS      60000UL    /* stop watching this long after the start */
+#endif
 #ifndef CTRL_GLITCH_WINDOW_US
 #define CTRL_GLITCH_WINDOW_US    2000000UL
 #endif
@@ -277,7 +302,8 @@ typedef enum
     CF_PRE_ENERGISE    = 16,   /* last-moment check: the newest samples show the OPPOSITE polarity to the one about to be energised - escalates */
     CF_ZC_LOST         = 8,    /* WATCHDOG COMPARE: next zero-cross event overdue    - condition */
     CF_VIN_RANGE       = 9,    /* input outside the permitted window                - condition */
-    CF_MEAS_STALE      = 10    /* measurement stopped updating                      - condition */
+    CF_MEAS_STALE      = 10,   /* measurement stopped updating                      - condition */
+    CF_TRANSFORMER_FLIP = 17   /* the series transformer is connected backwards (SLAVE_TF_RUN_CHECK) - latches at once, in every mode */
 } CtrlFault_t;
 
 #define CTRL_ZC_UNKNOWN   0U   /* pattern not (yet) recognised          */

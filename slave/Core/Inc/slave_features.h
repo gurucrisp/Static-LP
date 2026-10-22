@@ -35,6 +35,13 @@
  * used to latch the unit at the first occurrence; in master-control mode that opens the load contactor for a noise spike. With 1 the slave instead SKIPS that half-cycle (nothing is energised: the same safe state the check
  * enforced) and counts it; a third in 2 s fails exactly as before, so a real polarity problem (it fails on every half-cycle) still stops the unit within about 30 ms. Only while RUN: during a start the checks stay strict.
  * 0 = every one of them is a fault (the behaviour of every standalone build). The master-control configs set 1. */
+/* 1 = the TRANSFORMER-CONNECTION (FLIP) CHECK at every start, in stage 3: while the regulator starts up, the output must move in the direction it is told to. Before any correction the sensor offset (Vout - Vin) is recorded;
+ * then the signed change in the commanded direction is watched in 100 ms windows: about +1 V = correct (the check ends), about -1 V in two windows in a row (or -2.5 V in one) = the series transformer is connected BACKWARDS: fault 17, latched until the master clears it
+ * (the wrong-way deviation is limited to a few volts). It only judges once the correction is large enough to see; a unit that needs no correction is not tested (and not at risk); it stops watching 60 s after the start.
+ * 0 = no such check (every standalone build). The master-control configs set 1. */
+#ifndef SLAVE_TF_RUN_CHECK
+#define SLAVE_TF_RUN_CHECK     0
+#endif
 #ifndef SLAVE_GLITCH_SKIP
 #define SLAVE_GLITCH_SKIP      0
 #endif
@@ -50,7 +57,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       917UL
+#define SLAVE_FW_VERSION       918UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

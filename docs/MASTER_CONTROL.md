@@ -19,7 +19,7 @@ Ready-made file: `slave_config_STAGE3_cap2752_full_range_MASTER.h`. Without a ma
 * **Set voltage:** adopted while the unit is NOT energised; while energised a different value is ignored. The master repeats it every 100 ms, so it is picked up the moment the unit stops. `$E.setv` is the one in use (0 = none accepted yet).
 * **`$E.flags2`:** RUN_ACK (run = 1 and link alive), IN_BAND (running, |Vout - set| <= 2.0 V, `CTRL_IN_BAND_V`), AT_CAP (stage 3, at the correction cap), LINK_LOST, FAULT_LATCHED.
 * **`$H`:** protocol 2, firmware (`SLAVE_FW_VERSION`, checked against VERSION by the runner), input window, reset cause (0 power-on, 1 watchdog, 2 other), tuned = 1 (built-in profile), output guard.
-* **Not in this version:** every `$K` command except HELLO is answered UNKNOWN_CMD (status 6); `$M.maxc` is stored but unused; `$E.reach` is 0; heat, flip and not-tuned flags are 0. Steps 4 to 6.
+* **Not in this version:** every `$K` command except HELLO is answered UNKNOWN_CMD (status 6); `$M.maxc` is stored but unused; `$E.reach` is 0; heat and not-tuned flags are 0 (the transformer-flip check exists from v0.9.18: slave fault 17). Steps 4 to 6.
 
 ## Hardware side
 

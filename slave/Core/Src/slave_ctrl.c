@@ -611,6 +611,52 @@ static uint16_t InjStep(const CtrlMeas_t *m, uint32_t now_ms)
 }
 #endif
 
+
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
+/* ---- the transformer-connection (flip) check during the regulator's start: see slave_features.h SLAVE_TF_RUN_CHECK ---- */
+typedef enum { TFR_BASE = 0, TFR_WATCH, TFR_DONE } TfrState_t;
+static uint8_t  s_tfr_state, s_tfr_boost, s_tfr_strikes;
+static uint32_t s_tfr_seq, s_tfr_n, s_tfr_t0_ms;
+static float    s_tfr_sum, s_tfr_base, s_tfr_vin_prev;
+static void TfRunReset(uint32_t now_ms) { s_tfr_state = (uint8_t)TFR_BASE; s_tfr_boost = 0U; s_tfr_strikes = 0U; s_tfr_seq = 0U; s_tfr_n = 0U; s_tfr_sum = 0.0f; s_tfr_base = 0.0f; s_tfr_vin_prev = 0.0f; s_tfr_t0_ms = now_ms; }
+
+/* d = the effective correction in ticks, boost = the commanded direction. Returns 1 when the transformer is found connected BACKWARDS. */
+static uint8_t TfRunCheck(const CtrlMeas_t *m, float d, uint8_t boost, uint32_t now_ms)
+{
+    const uint8_t fresh = (uint8_t)((m->valid != 0U) && (m->update_count != s_tfr_seq));
+    if (s_tfr_state == (uint8_t)TFR_DONE) return 0U;
+    if ((uint32_t)(now_ms - s_tfr_t0_ms) > CTRL_TFRUN_WATCH_MS) { s_tfr_state = (uint8_t)TFR_DONE; return 0U; }
+    if (fresh == 0U) return 0U;
+    s_tfr_seq = m->update_count;
+    if (s_tfr_state == (uint8_t)TFR_BASE)
+    {   /* the sensors' own offset, with (almost) no correction applied */
+        if (d < (float)CTRL_TFRUN_BASE_TICKS) { s_tfr_sum += (m->vout - m->vin); if (s_tfr_n < 255U) s_tfr_n++; s_tfr_vin_prev = m->vin; if (s_tfr_n < CTRL_TFRUN_WINDOW) return 0U; }
+        if (s_tfr_n >= 3U) s_tfr_base = s_tfr_sum / (float)s_tfr_n;           /* too few samples (a fast start): no offset known, 0 */
+        s_tfr_state = (uint8_t)TFR_WATCH; s_tfr_n = 0U; s_tfr_sum = 0.0f; s_tfr_strikes = 0U; s_tfr_boost = boost; s_tfr_vin_prev = m->vin;
+    }
+    {   /* WATCH: the signed change in the commanded direction, in windows */
+        float dv = m->vin - s_tfr_vin_prev; if (dv < 0.0f) dv = -dv;
+        s_tfr_vin_prev = m->vin;
+        if ((d < (float)CTRL_TFRUN_MIN_TICKS) || (boost != s_tfr_boost) || (dv > CTRL_TFRUN_JUMP_V))
+        {   /* too little correction to see, the direction changed, or the input jumped: start a new window */
+            s_tfr_n = 0U; s_tfr_sum = 0.0f; s_tfr_boost = boost; if (dv > CTRL_TFRUN_JUMP_V) s_tfr_strikes = 0U;
+            return 0U;
+        }
+        s_tfr_sum += ((boost != 0U) ? 1.0f : -1.0f) * ((m->vout - m->vin) - s_tfr_base); s_tfr_n++;
+        if (s_tfr_n >= CTRL_TFRUN_WINDOW)
+        {
+            const float mean = s_tfr_sum / (float)s_tfr_n;
+            s_tfr_n = 0U; s_tfr_sum = 0.0f;
+            if (mean >= CTRL_TFRUN_VERDICT_V) { s_tfr_state = (uint8_t)TFR_DONE; return 0U; }          /* it moved the right way: connected correctly */
+            if (mean <= -CTRL_TFRUN_CLEAR_V) { s_tfr_state = (uint8_t)TFR_DONE; return 1U; }                  /* clearly the wrong way: decide at once */
+            if (mean <= -CTRL_TFRUN_VERDICT_V) { if (++s_tfr_strikes >= CTRL_TFRUN_STRIKES) { s_tfr_state = (uint8_t)TFR_DONE; return 1U; } }
+            else s_tfr_strikes = 0U;
+        }
+    }
+    return 0U;
+}
+#endif
+
 uint16_t SlaveCtrl_TfWord(void)
 {
 #if (SLAVE_TF_CHECK != 0) || (SLAVE_POWER_STAGE == 2)
@@ -725,6 +771,7 @@ static void FinishFault(uint16_t code, uint32_t now_ms)
     g_ctrl.fault     = code;
     g_ctrl.isr_fault = 0U;
     g_ctrl.state     = CTRL_FAULT;
+    if (code == CF_TRANSFORMER_FLIP) { g_ctrl.state = CTRL_LATCHED; return; }      /* a wiring fault: never retried by itself, in any mode */
     s_state_since_ms = now_ms;
     s_last_trip_ms   = now_ms;
 
@@ -854,6 +901,9 @@ void SlaveCtrl_Init(void)
     s_target_v = (float)CTRL_TARGET_V;
     s_vin_bad = s_vout_bad = 0U;
     s_meas_seen = 0U;
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
+    TfRunReset(0U);
+#endif
 #if (SLAVE_GLITCH_SKIP != 0)
     s_gl_t0_us = 0U; s_gl_n = 0U;
 #endif
@@ -1156,6 +1206,9 @@ void SlaveCtrl_Service(void)
 #if (SLAVE_INJ_GUARD != 0) && (SLAVE_POWER_STAGE != 2)
             s_guard_on = 0U; s_dir_applied = (uint8_t)(m.vin < s_target_v); s_vin_ref = m.vin; s_vin_cnt = m.update_count;
 #endif
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
+            TfRunReset(now_ms);                                      /* a new start: the flip check begins again */
+#endif
 #if (SLAVE_POWER_STAGE >= 3)
             s_reg.out_max = (float)CTRL_STAGE3_MAX_EFF_TICKS;              /* the cap: the integrator IS the output, so this is also the anti-wind-up */
 #endif
@@ -1229,6 +1282,9 @@ void SlaveCtrl_Service(void)
             }
 #else
             g_ctrl.boost       = Reg_IsBoost(&s_reg, m.vin);
+#endif
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
+            if (TfRunCheck(&m, d, g_ctrl.boost, now_ms) != 0U) { EnterFault(CF_TRANSFORMER_FLIP, now_ms); break; }     /* connected backwards: stop, latch */
 #endif
             g_ctrl.duty_counts = CTRL_EFF_TO_CCR((uint32_t)d);      /* + the dead time: a pulse at or below it outputs nothing */
 #if (SLAVE_POWER_STAGE >= 3)

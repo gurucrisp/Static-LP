@@ -53,6 +53,10 @@
 #ifndef SLAVE_GLITCH_SKIP
 #define SLAVE_GLITCH_SKIP      1
 #endif
+/* The TRANSFORMER-CONNECTION (FLIP) check at every start: if the output moves AGAINST the commanded direction the slave stops with fault 17, latched (the master shows Transformer Flip, buzzer in every mode). See slave_features.h. */
+#ifndef SLAVE_TF_RUN_CHECK
+#define SLAVE_TF_RUN_CHECK     1
+#endif
 #ifndef SLAVE_BENCH_AUTORUN
 #define SLAVE_BENCH_AUTORUN    0
 #endif

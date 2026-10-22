@@ -53,6 +53,10 @@
 #ifndef SLAVE_GLITCH_SKIP
 #define SLAVE_GLITCH_SKIP      1
 #endif
+/* The TRANSFORMER-CONNECTION (FLIP) check at every start: if the output moves AGAINST the commanded direction the slave stops with fault 17, latched (the master shows Transformer Flip, buzzer in every mode). See slave_features.h. */
+#ifndef SLAVE_TF_RUN_CHECK
+#define SLAVE_TF_RUN_CHECK     1
+#endif
 /* ---- TEST ONLY: NO VOLTAGE CUTS IN THE SLAVE ---------------------------------------------------------------------------------------------------------------------
  * The input-range trip, the input start window and the output-high trip are OFF, and $H announces a 0 to 650 V window so the master accepts any cut-off. The hardware over-current protection stays.
  * For bench testing only: do not leave a unit running on this file. The standard MASTER file keeps every limit.

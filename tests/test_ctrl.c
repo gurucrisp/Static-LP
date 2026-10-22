@@ -1381,6 +1381,23 @@ static void t_glitch_skip(void)
 }
 #endif
 
+
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_MASTER_CONTROL == 0)
+/* ---- the flip fault in a STANDALONE build (no master): it must latch at once and never be retried by itself ---- */
+static void t_flip_standalone(void)
+{
+    world_reset(81000000); W.vin = 215.0f; W.vout = 215.0f; W.plant_on = 1; W.plant_curve = 0; W.plant_gain = -0.02;      /* a transformer connected backwards */
+    run_for(30000000);
+    CHECK(g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_TRANSFORMER_FLIP, "standalone, backwards transformer: latched with fault 17 (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    run_for(300000000);
+    CHECK(g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_TRANSFORMER_FLIP && diag == 0, "five minutes later it is STILL latched and nothing is energised: a wiring fault is never retried by itself (state %d)", g_ctrl.state);
+    world_reset(82000000); W.vin = 215.0f; W.vout = 215.0f; W.plant_on = 1; W.plant_curve = 1;
+    run_for(40000000);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "standalone, correct transformer: runs normally (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    printf("  flip standalone: latched at once and never retried, a correct transformer runs\n");
+}
+#endif
+
 static void t_vin_hysteresis(void)
 {
     uint64_t t0;
@@ -2571,6 +2588,9 @@ int main(void)
     run_isolated(t_fault_context,             "fault context byte (state, mode, FLT/BKIN levels)");
     run_isolated(t_wait_reasons,              "START with nothing happening: wait reasons");
     run_isolated(t_zc_fault_split,            "zero-cross faults: time F03 / sequence F15 / last-moment F16");
+#if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_MASTER_CONTROL == 0)
+    run_isolated(t_flip_standalone,           "flip standalone: a backwards transformer latches");
+#endif
 #if (SLAVE_GLITCH_SKIP != 0)
     run_isolated(t_glitch_skip,               "glitch skip: a rare F16/F04 while running is skipped");
 #endif
@@ -2641,6 +2661,9 @@ int main(void)
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
     run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
+#if (SLAVE_TF_RUN_CHECK != 0)
+    run_isolated(t_mc_flip,                   "master control: the transformer flip check at start");
+#endif
 #if (SLAVE_INJ_GUARD != 0)
     run_isolated(t_mc_input_steps,            "input steps: recover fast and never stick");
     run_isolated(t_mc_master_limits,          "input steps: the master's limits govern (185 V in, 200 V set)");
