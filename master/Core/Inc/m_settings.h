@@ -17,6 +17,14 @@ extern "C" {
 #define MASTER_RATED_CURRENT_A   99U
 #endif
 
+/* THE LIMITS MODEL (v0.9.17). The unit works from MS_VIN_MIN_V to MS_VIN_MAX_V of input. The WINDOW is Set Voltage -/+ Max Correction, never outside 90..300 V (Max Correction 0 = not set: the whole 90..300 V).
+ * I/P LV and I/P HV default to the window's edges and can be moved INSIDE the window, but never closer than MS_LIM_MARGIN_V to the Set Voltage. O/P LV and O/P HV default MS_OUT_OFFSET_V inside the input limits and can be moved
+ * between the input limit and MS_LIM_MARGIN_V from the Set Voltage. So: window_lo <= I/P LV <= O/P LV <= Set - 10 and Set + 10 <= O/P HV <= I/P HV <= window_hi. */
+#define MS_VIN_MIN_V       90U
+#define MS_VIN_MAX_V       300U
+#define MS_LIM_MARGIN_V    10U
+#define MS_OUT_OFFSET_V    20U
+
 typedef enum { M_MODE_SINGLE = 0, M_MODE_INDUSTRIAL = 1, M_MODE_DOMESTIC = 2 } MMode_t;
 
 typedef struct
@@ -51,6 +59,13 @@ typedef enum
 #define MS_VERSION   1U       /* the record version: MStore_Init(&st, fl, page_a, page_b, MS_VERSION, MS_PACK_LEN) */
 
 void     MS_Defaults(MSettings_t *s);
+uint16_t MS_WinLo(const MSettings_t *s);      /* the lowest input limit allowed: Set - Max Correction, not below 90 V */
+uint16_t MS_WinHi(const MSettings_t *s);      /* the highest input limit allowed: Set + Max Correction, not above 300 V */
+/* the four defaults for this Set Voltage and Max Correction; with lim (the slave's $H) they are kept inside what the slave announced: I/P inside its window, O/P HV not above its output guard. lim may be NULL. */
+void     MS_DefaultLimits(const MSettings_t *s, const MLimits_t *lim, uint16_t *ip_lv, uint16_t *ip_hv, uint16_t *op_lv, uint16_t *op_hv);
+/* after Set Voltage or Max Correction was changed (s = the new settings, old = before): a limit that was at the OLD default follows to the NEW default, any other (a limit the user moved) is kept, clipped into the new window */
+void     MS_Rederive(MSettings_t *s, const MSettings_t *old, const MLimits_t *lim);
+void     MS_ApplyLim(MSettings_t *s, const MLimits_t *lim);     /* put the four limits inside the slave's announced window and output guard (used after a Factory Reset) */
 /* checks every range and the cross rules: I/P LV < Set V < I/P HV, O/P LV < Set V < O/P HV, I/P cut-offs inside the slave window, O/P HV not above the slave's output guard.
  * lim may be NULL (the slave has not announced yet): then only the plain ranges and the cross rules are checked. Returns MS_OK or the FIRST offending item. */
 MSErr_t  MS_Validate(const MSettings_t *s, const MLimits_t *lim);

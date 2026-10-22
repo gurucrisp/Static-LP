@@ -144,11 +144,11 @@ static int ms_eq(const MSettings_t *a, const MSettings_t *b)
 
 static void t_settings_validate(void)
 {
-    MSettings_t d, s; MLimits_t lim = { 80U, 310U, 265U };
+    MSettings_t d, s; MLimits_t lim = { 80U, 300U, 280U };            /* what the slave announces with the v0.9.17 master-control config */
     MS_Defaults(&d);
     CHECK(MS_Validate(&d, 0) == MS_OK && MS_Validate(&d, &lim) == MS_OK, "the factory defaults are valid (and inside the slave's window and guard)");
-    CHECK(d.mode == 0U && d.set_v == 230U && d.ip_lv == 180U && d.ip_hv == 280U && d.op_lv == 200U && d.op_hv == 250U && d.volt_cut_delay == 5U && d.ovl_cut_delay == 10U && d.heat_delay == 10U &&
-          d.phase_seq == 0U && d.scroll == 1U && d.scroll_time == 5U && d.password == 0U && d.restart_auto == 1U && d.restart_time == 5U && d.maxcorr_v == 0U && d.ovl_current == MASTER_RATED_CURRENT_A, "the defaults are the agreed ones");
+    CHECK(d.mode == 0U && d.set_v == 230U && d.ip_lv == 90U && d.ip_hv == 300U && d.op_lv == 110U && d.op_hv == 280U && d.volt_cut_delay == 5U && d.ovl_cut_delay == 10U && d.heat_delay == 10U &&
+          d.phase_seq == 0U && d.scroll == 1U && d.scroll_time == 5U && d.password == 0U && d.restart_auto == 1U && d.restart_time == 5U && d.maxcorr_v == 0U && d.ovl_current == MASTER_RATED_CURRENT_A, "the defaults are the agreed ones (Max Correction not set: the window is the whole 90..300 V)");
 #define EDGE(field, lo, hi, elo, ehi) do { s = d; s.field = (lo); CHECK(MS_Validate(&s, 0) == MS_OK, #field " minimum %d is valid", (int)(lo)); s.field = (hi); CHECK(MS_Validate(&s, 0) == MS_OK, #field " maximum %d is valid", (int)(hi)); \
         s.field = (lo) - 1; CHECK(MS_Validate(&s, 0) == (elo), #field " below the minimum is refused"); s.field = (hi) + 1; CHECK(MS_Validate(&s, 0) == (ehi), #field " above the maximum is refused"); } while (0)
     EDGE(volt_cut_delay, 1, 99, MS_BAD_VOLT_DELAY, MS_BAD_VOLT_DELAY);
@@ -157,25 +157,75 @@ static void t_settings_validate(void)
     EDGE(heat_delay, 1, 99, MS_BAD_HEAT_DELAY, MS_BAD_HEAT_DELAY);
     EDGE(scroll_time, 1, 99, MS_BAD_SCROLL_TIME, MS_BAD_SCROLL_TIME);
     EDGE(restart_time, 1, 999, MS_BAD_RESTART_TIME, MS_BAD_RESTART_TIME);
-    s = d; s.maxcorr_v = 199U; CHECK(MS_Validate(&s, 0) == MS_OK, "Max Correction 199 is valid"); s.maxcorr_v = 200U; CHECK(MS_Validate(&s, 0) == MS_BAD_MAXCORR, "200 is not");
     s = d; s.password = 999U; CHECK(MS_Validate(&s, 0) == MS_OK, "password 999 is valid"); s.password = 1000U; CHECK(MS_Validate(&s, 0) == MS_BAD_PASSWORD, "1000 is not");
     s = d; s.mode = 3U; CHECK(MS_Validate(&s, 0) == MS_BAD_MODE, "mode 3 is refused");
-    s = d; s.set_v = 99U; s.ip_lv = 50U; s.op_lv = 50U; CHECK(MS_Validate(&s, 0) == MS_BAD_SET_V, "Set Voltage 99 is refused"); s.set_v = 301U; s.ip_hv = 320U; s.op_hv = 320U; CHECK(MS_Validate(&s, 0) == MS_BAD_SET_V, "301 is refused");
-    s = d; s.set_v = 100U; s.ip_lv = 90U; s.op_lv = 95U; CHECK(MS_Validate(&s, 0) == MS_OK, "Set Voltage 100 with lower cut-offs is valid");
-    /* the cross rules: strict */
-    s = d; s.ip_lv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_LV, "I/P LV equal to Set V is refused");
-    s = d; s.ip_lv = 229U; CHECK(MS_Validate(&s, 0) == MS_OK, "one volt below is valid");
-    s = d; s.ip_hv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_HV, "I/P HV equal to Set V is refused");
-    s = d; s.op_lv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_OP_LV, "O/P LV equal to Set V is refused");
-    s = d; s.op_hv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_OP_HV, "O/P HV equal to Set V is refused");
-    /* the slave's window and guard (D7, D26) */
-    s = d; s.ip_lv = 79U; CHECK(MS_Validate(&s, &lim) == MS_BAD_IP_LV && MS_Validate(&s, 0) == MS_OK, "an I/P LV below the slave's window is refused only when the window is known");
-    s = d; s.ip_lv = 80U; CHECK(MS_Validate(&s, &lim) == MS_OK, "exactly at the window edge is valid");
-    s = d; s.ip_hv = 311U; CHECK(MS_Validate(&s, &lim) == MS_BAD_IP_HV, "an I/P HV above the window is refused");
-    s = d; s.op_hv = 266U; CHECK(MS_Validate(&s, &lim) == MS_BAD_OP_HV, "an O/P HV above the slave's output guard is refused");
-    s = d; s.op_hv = 265U; CHECK(MS_Validate(&s, &lim) == MS_OK, "exactly at the guard is valid");
+    /* Max Correction: 0 = not set, otherwise 10 to 199 (at least the 10 V margin to the Set Voltage) */
+    s = d; s.maxcorr_v = 0U; CHECK(MS_Validate(&s, 0) == MS_OK, "Max Correction 0 (not set) is valid");
+    { uint16_t m; int bad = 0; for (m = 1U; m <= 9U; m++) { s = d; s.maxcorr_v = m; if (MS_Validate(&s, 0) != MS_BAD_MAXCORR) bad++; } CHECK(bad == 0, "Max Correction 1 to 9 V is refused: a window narrower than the 10 V margin is impossible"); }
+    s = d; s.maxcorr_v = 10U; s.ip_lv = 220U; s.ip_hv = 240U; s.op_lv = 220U; s.op_hv = 240U; CHECK(MS_Validate(&s, 0) == MS_OK, "Max Correction 10 V is valid (the window 220..240 V: every limit sits exactly on the margin)");
+    s = d; s.maxcorr_v = 199U; CHECK(MS_Validate(&s, 0) == MS_OK, "Max Correction 199 is valid (the window is cut to 90..300 V)"); s.maxcorr_v = 200U; CHECK(MS_Validate(&s, 0) == MS_BAD_MAXCORR, "200 is not");
+    /* the Set Voltage: 100 to 290 (the limits must fit 10 V either side inside 90..300 V) */
+    s = d; s.set_v = 99U; s.ip_lv = 90U; s.op_lv = 90U; CHECK(MS_Validate(&s, 0) == MS_BAD_SET_V, "Set Voltage 99 is refused");
+    s = d; s.set_v = 100U; s.ip_lv = 90U; s.op_lv = 90U; CHECK(MS_Validate(&s, 0) == MS_OK, "Set Voltage 100 is valid (I/P LV 90 V, O/P LV 90 V: exactly the 10 V margin)");
+    s = d; s.set_v = 290U; s.op_hv = 300U; CHECK(MS_Validate(&s, 0) == MS_OK, "Set Voltage 290 is valid (I/P HV 300, O/P HV 300)"); CHECK(MS_Validate(&s, &lim) == MS_BAD_OP_HV, "but not with a slave whose output guard is 280 V (O/P HV would have to be 300)");
+    s = d; s.set_v = 291U; CHECK(MS_Validate(&s, 0) == MS_BAD_SET_V, "Set Voltage 291 is refused: the I/P HV could not be 10 V above it inside 300 V");
+    /* the window: Set Voltage -/+ Max Correction. Set 230, Max Correction 50: 180..280 */
+    s = d; s.maxcorr_v = 50U; s.ip_lv = 180U; s.ip_hv = 280U; s.op_lv = 200U; s.op_hv = 260U;
+    CHECK(MS_WinLo(&s) == 180U && MS_WinHi(&s) == 280U && MS_Validate(&s, 0) == MS_OK, "Set 230, Max Correction 50: the window is 180..280 V and the defaults sit in it");
+    { MSettings_t t = s; t.ip_lv = 179U; CHECK(MS_Validate(&t, 0) == MS_BAD_IP_LV, "I/P LV below the window (179) is refused"); t.ip_lv = 220U; t.op_lv = 220U; CHECK(MS_Validate(&t, 0) == MS_OK, "I/P LV may be moved up to 10 V below Set (220)"); t.ip_lv = 221U; CHECK(MS_Validate(&t, 0) == MS_BAD_IP_LV, "but not closer (221)"); }
+    { MSettings_t t = s; t.ip_hv = 281U; CHECK(MS_Validate(&t, 0) == MS_BAD_IP_HV, "I/P HV above the window (281) is refused"); t.ip_hv = 240U; t.op_hv = 240U; CHECK(MS_Validate(&t, 0) == MS_OK, "I/P HV may be moved down to 10 V above Set (240)"); t.ip_hv = 239U; CHECK(MS_Validate(&t, 0) == MS_BAD_IP_HV, "but not closer (239)"); }
+    { MSettings_t t = s; t.op_lv = 179U; CHECK(MS_Validate(&t, 0) == MS_BAD_OP_LV, "O/P LV below I/P LV is refused"); t.op_lv = 220U; CHECK(MS_Validate(&t, 0) == MS_OK, "O/P LV up to 10 V below Set is valid"); t.op_lv = 221U; CHECK(MS_Validate(&t, 0) == MS_BAD_OP_LV, "not closer"); }
+    { MSettings_t t = s; t.op_hv = 281U; CHECK(MS_Validate(&t, 0) == MS_BAD_OP_HV, "O/P HV above I/P HV is refused"); t.op_hv = 240U; CHECK(MS_Validate(&t, 0) == MS_OK, "O/P HV down to 10 V above Set is valid"); t.op_hv = 239U; CHECK(MS_Validate(&t, 0) == MS_BAD_OP_HV, "not closer"); }
+    s = d; s.ip_lv = 89U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_LV, "Max Correction not set: I/P LV 89 is below the 90 V the unit works from"); s.ip_lv = 90U; CHECK(MS_Validate(&s, 0) == MS_OK, "90 is valid");
+    s = d; s.ip_hv = 301U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_HV, "I/P HV 301 is above the fixed 300 V maximum"); 
+    s = d; s.ip_lv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_LV, "I/P LV equal to Set V is refused"); s = d; s.ip_hv = 230U; CHECK(MS_Validate(&s, 0) == MS_BAD_IP_HV, "I/P HV equal to Set V is refused");
+    /* the slave's window and guard (D7, D26) on top of that */
+    { MLimits_t l2 = { 120U, 300U, 280U }; s = d; s.ip_lv = 119U; s.op_lv = 130U; CHECK(MS_Validate(&s, &l2) == MS_BAD_IP_LV && MS_Validate(&s, 0) == MS_OK, "an I/P LV below the slave's window is refused only when the window is known"); s.ip_lv = 120U; CHECK(MS_Validate(&s, &l2) == MS_OK, "exactly at the window edge is valid"); }
+    s = d; s.op_hv = 281U; s.ip_hv = 300U; CHECK(MS_Validate(&s, &lim) == MS_BAD_OP_HV, "an O/P HV above the slave's output guard is refused"); s.op_hv = 280U; CHECK(MS_Validate(&s, &lim) == MS_OK, "exactly at the guard is valid");
     s = d; s.phase_seq = 2U; CHECK(MS_Validate(&s, 0) == MS_BAD_FLAG, "a flag of 2 is refused");
-    printf("  settings validation: defaults, every range edge, the strict cross rules, the slave's window and guard\n");
+    printf("  settings validation: defaults, every range edge, Max Correction 0 or 10..199, Set Voltage 100..290, the window and the 10 V margins, the slave's window and guard\n");
+}
+
+/* the default limits and the rule that a limit at its old default follows to the new one */
+static void t_settings_limits_model(void)
+{
+    static const struct { uint16_t set, mc, ilv, ihv, olv, ohv; } T[] = {
+        { 230U,   0U,  90U, 300U, 110U, 280U }, { 230U,  50U, 180U, 280U, 200U, 260U }, { 230U,  40U, 190U, 270U, 210U, 250U }, { 230U,  25U, 205U, 255U, 220U, 240U },
+        { 230U,  12U, 218U, 242U, 220U, 240U }, { 230U, 199U,  90U, 300U, 110U, 280U }, { 100U,   0U,  90U, 300U,  90U, 280U }, { 120U,  60U,  90U, 180U, 110U, 160U }, { 290U,  40U, 250U, 300U, 270U, 300U } };
+    unsigned i; MSettings_t s, o, n; MLimits_t lim = { 80U, 300U, 280U }; int bad = 0; uint32_t k;
+    for (i = 0U; i < sizeof T / sizeof T[0]; i++)
+    {
+        uint16_t a, b, c, e; MS_Defaults(&s); s.set_v = T[i].set; s.maxcorr_v = T[i].mc; MS_DefaultLimits(&s, 0, &a, &b, &c, &e);
+        CHECK(a == T[i].ilv && b == T[i].ihv && c == T[i].olv && e == T[i].ohv, "Set %u Max Correction %u: defaults I/P %u-%u, O/P %u-%u (got %u-%u, %u-%u)", T[i].set, T[i].mc, T[i].ilv, T[i].ihv, T[i].olv, T[i].ohv, a, b, c, e);
+        s.ip_lv = a; s.ip_hv = b; s.op_lv = c; s.op_hv = e; CHECK(MS_Validate(&s, 0) == MS_OK, "and the defaults are valid");
+    }
+    { uint16_t a, b, c, e; MS_Defaults(&s); MS_DefaultLimits(&s, &lim, &a, &b, &c, &e); CHECK(e == 280U, "O/P HV default 280 with a slave guard of 280"); lim.out_guard_v = 265U; MS_DefaultLimits(&s, &lim, &a, &b, &c, &e); CHECK(e == 265U, "kept under a slave guard of 265 V"); lim.out_guard_v = 280U; }
+    /* the limits that sit at their defaults follow a change; a limit the user moved stays (clipped into the new window) */
+    MS_Defaults(&o); o.maxcorr_v = 50U; { uint16_t a, b, c, e; MS_DefaultLimits(&o, 0, &a, &b, &c, &e); o.ip_lv = a; o.ip_hv = b; o.op_lv = c; o.op_hv = e; }
+    n = o; n.set_v = 240U; MS_Rederive(&n, &o, 0);
+    CHECK(n.ip_lv == 190U && n.ip_hv == 290U && n.op_lv == 210U && n.op_hv == 270U && MS_Validate(&n, 0) == MS_OK, "Set Voltage 230 -> 240 with every limit at its default: they all follow (I/P 190-290, O/P 210-270) (%u-%u %u-%u)", n.ip_lv, n.ip_hv, n.op_lv, n.op_hv);
+    n = o; n.ip_lv = 200U; o = n; n.set_v = 240U; MS_Rederive(&n, &o, 0);        /* (the user moved I/P LV to 200; o is the state before the Set Voltage edit) */
+    CHECK(n.ip_lv == 200U && n.ip_hv == 290U && MS_Validate(&n, 0) == MS_OK, "Set 230 -> 240: the I/P LV the user moved to 200 STAYS, the I/P HV that was at its default follows to 290 (%u %u)", n.ip_lv, n.ip_hv);
+    MS_Defaults(&o); o.maxcorr_v = 50U; { uint16_t a, b, c, e; MS_DefaultLimits(&o, 0, &a, &b, &c, &e); o.ip_lv = 230U - 10U; o.ip_hv = b; o.op_lv = 220U; o.op_hv = e; }
+    n = o; n.maxcorr_v = 20U; MS_Rederive(&n, &o, 0);
+    CHECK(n.ip_lv == 220U && MS_Validate(&n, 0) == MS_OK, "Max Correction 50 -> 20: I/P LV moved by the user to 220 stays inside the new window 210..250 (%u)", n.ip_lv);
+    n = o; n.set_v = 300U; MS_Rederive(&n, &o, 0); CHECK(MS_Validate(&n, 0) == MS_BAD_SET_V, "Set Voltage 300 is invalid whatever the limits do");
+    /* property: from ANY valid set, changing the Set Voltage and/or Max Correction to ANY valid pair and rederiving always gives a valid set */
+    for (k = 0U; k < 200000U; k++)
+    {
+        uint16_t lo, hi;
+        MS_Defaults(&o); o.set_v = (uint16_t)(100U + rnd() % 191U); o.maxcorr_v = (rnd() & 1U) ? 0U : (uint16_t)(10U + rnd() % 190U);
+        lo = MS_WinLo(&o); hi = MS_WinHi(&o);
+        o.ip_lv = (uint16_t)(lo + rnd() % (uint32_t)(o.set_v - 10U - lo + 1U)); o.ip_hv = (uint16_t)(o.set_v + 10U + rnd() % (uint32_t)(hi - o.set_v - 10U + 1U));
+        o.op_lv = (uint16_t)(o.ip_lv + rnd() % (uint32_t)(o.set_v - 10U - o.ip_lv + 1U)); o.op_hv = (uint16_t)(o.set_v + 10U + rnd() % (uint32_t)(o.ip_hv - o.set_v - 10U + 1U));
+        if (rnd() % 4U == 0U) { uint16_t a, b, c, e; MS_DefaultLimits(&o, 0, &a, &b, &c, &e); o.ip_lv = a; o.ip_hv = b; o.op_lv = c; o.op_hv = e; }       /* often a set that is all defaults */
+        if (MS_Validate(&o, 0) != MS_OK) { bad++; continue; }
+        n = o; if (rnd() & 1U) n.set_v = (uint16_t)(100U + rnd() % 191U); if (rnd() & 1U) n.maxcorr_v = (rnd() & 1U) ? 0U : (uint16_t)(10U + rnd() % 190U);
+        MS_Rederive(&n, &o, 0);
+        if (MS_Validate(&n, 0) != MS_OK) bad++;
+    }
+    CHECK(bad == 0, "200,000 random valid sets and random valid Set Voltage / Max Correction changes: the rederived set is always valid (%d not)", bad);
+    printf("  limits model: the default limits for 9 Set Voltage / Max Correction pairs, the follow-the-default rule, 200,000 random changes always valid\n");
 }
 
 static void t_settings_store(void)
@@ -183,10 +233,10 @@ static void t_settings_store(void)
     MStore_t st; MSettings_t a, b, c; uint8_t raw[32]; int i, bad = 0;
     flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     CHECK(MS_Load(&st, &a) == 0U, "blank flash: defaults are used"); { MSettings_t d; MS_Defaults(&d); CHECK(ms_eq(&a, &d), "and they ARE the defaults"); }
-    a.set_v = 240U; a.ip_lv = 170U; a.mode = 2U; a.restart_auto = 0U; a.password = 321U; a.maxcorr_v = 25U; a.ovl_current = 120U;
+    a.set_v = 240U; a.maxcorr_v = 40U; { uint16_t x1, x2, x3, x4; MS_DefaultLimits(&a, 0, &x1, &x2, &x3, &x4); a.ip_lv = (uint16_t)(x1 + 5U); a.ip_hv = x2; a.op_lv = x3; a.op_hv = x4; } a.mode = 2U; a.restart_auto = 0U; a.password = 321U; a.ovl_current = 120U;
     CHECK(MS_Save(&st, &a) == 0, "save");
     MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 240U && b.ip_lv == 170U && b.mode == 2U && b.restart_auto == 0U && b.password == 321U && b.maxcorr_v == 25U && b.ovl_current == 120U, "the settings come back after a restart");
+    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 240U && b.ip_lv == 205U && b.mode == 2U && b.restart_auto == 0U && b.password == 321U && b.maxcorr_v == 40U && b.ovl_current == 120U, "the settings come back after a restart");
     c = a; c.set_v = 50U;
     CHECK(MS_Save(&st, &c) != 0, "an invalid set is not written");
     MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); CHECK(MS_Load(&st, &b) == 1U && b.set_v == 240U, "and the stored one is untouched");
@@ -198,8 +248,10 @@ static void t_settings_store(void)
     for (i = 0; i < 100000; i++)
     {
         MSettings_t x, y; uint8_t p[32];
-        MS_Defaults(&x); x.mode = (uint8_t)(rnd() % 3U); x.set_v = (uint16_t)(100U + rnd() % 201U); x.maxcorr_v = (uint16_t)(rnd() % 200U);
-        x.ip_lv = (uint16_t)(1U + rnd() % (x.set_v - 1U)); x.ip_hv = (uint16_t)(x.set_v + 1U + rnd() % 100U); x.op_lv = (uint16_t)(1U + rnd() % (x.set_v - 1U)); x.op_hv = (uint16_t)(x.set_v + 1U + rnd() % 100U);
+        MS_Defaults(&x); x.mode = (uint8_t)(rnd() % 3U); x.set_v = (uint16_t)(100U + rnd() % 191U); x.maxcorr_v = (rnd() & 1U) ? 0U : (uint16_t)(10U + rnd() % 190U);
+        { uint16_t lo = MS_WinLo(&x), hi = MS_WinHi(&x);
+          x.ip_lv = (uint16_t)(lo + rnd() % (uint32_t)(x.set_v - 10U - lo + 1U)); x.ip_hv = (uint16_t)(x.set_v + 10U + rnd() % (uint32_t)(hi - x.set_v - 10U + 1U));
+          x.op_lv = (uint16_t)(x.ip_lv + rnd() % (uint32_t)(x.set_v - 10U - x.ip_lv + 1U)); x.op_hv = (uint16_t)(x.set_v + 10U + rnd() % (uint32_t)(x.ip_hv - x.set_v - 10U + 1U)); }
         x.volt_cut_delay = (uint8_t)(1U + rnd() % 99U); x.ovl_current = (uint16_t)(1U + rnd() % 180U); x.ovl_cut_delay = (uint8_t)(1U + rnd() % 99U); x.heat_delay = (uint8_t)(1U + rnd() % 99U);
         x.phase_seq = (uint8_t)(rnd() & 1U); x.scroll = (uint8_t)(rnd() & 1U); x.scroll_time = (uint8_t)(1U + rnd() % 99U); x.password = (uint16_t)(rnd() % 1000U); x.restart_auto = (uint8_t)(rnd() & 1U); x.restart_time = (uint16_t)(1U + rnd() % 999U);
         MS_Pack(&x, p); MS_Unpack(&y, p);
@@ -332,6 +384,7 @@ int main(void)
     t_store_powercut();
     t_store_bitflip();
     t_settings_validate();
+    t_settings_limits_model();
     t_settings_store();
     t_settings_powercut();
     t_log_basic();

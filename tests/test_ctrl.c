@@ -2640,6 +2640,7 @@ int main(void)
     run_isolated(t_mc_end_to_end,             "master control: end to end through the link");
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
+    run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
 #if (SLAVE_INJ_GUARD != 0)
     run_isolated(t_mc_input_steps,            "input steps: recover fast and never stick");
     run_isolated(t_mc_master_limits,          "input steps: the master's limits govern (185 V in, 200 V set)");

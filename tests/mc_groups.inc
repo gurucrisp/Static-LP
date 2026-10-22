@@ -192,7 +192,7 @@ static void t_mc_setv(void)
 static void t_mc_condition_fault(void)
 {
     mc_to_run_settled(228000000ULL, 225.0f, 2300U, 1U);
-    W.vin = 100.0f; W.vout = 100.0f;                                           /* the mains leaves the slave's window: a CONDITION, not a hardware event */
+    W.vin = 70.0f; W.vout = 70.0f;                                             /* the mains leaves the slave's window (trips below 80 V): a CONDITION, not a hardware event */
     mc_for(4000U, 1U, 2300U, 1U, 300U);
     CHECK(g_ctrl.state == CTRL_LATCHED && g_ctrl.fault == CF_VIN_RANGE, "even a condition fault latches under master control (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
     W.vin = 225.0f; W.vout = 225.0f;
@@ -369,7 +369,8 @@ static void ma_start(uint8_t restart_auto, float vin)
     e2e_cnt = 0; e2e_seq_m = 0U; SL2_Init(&HK2, mc_ms());
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
-    ma.settings.restart_auto = restart_auto; MF_Init(&ma.eng, &ma.settings, mc_ms());
+    ma.settings.restart_auto = restart_auto; ma.settings.ip_lv = 180U; ma.settings.ip_hv = 280U; ma.settings.op_lv = 200U; ma.settings.op_hv = 250U;      /* the limits these tests were written for; the NEW default limits have their own tests */
+    MF_Init(&ma.eng, &ma.settings, mc_ms());
     ma_t_tx = 0U; ma_seq = 0U; ma_have_last = 0U; ma_link_up = 1; ma_buzz_seen = 0U; ma_mute_m = 0;
 }
 /* 10 ms of the master: what the slave sent, the key levels, the application, the $M frame (every 100 ms and at once on a change), 10 ms of the slave */
@@ -555,6 +556,35 @@ static void t_mc_master_limits(void)
     printf("  master owns the limits: 185 V in with I/P LV 170 V and Set Voltage 205 V runs; the master trips at its own limit after its own delay\n");
 }
 #endif
+
+
+/* ---- the unit works from 90 V: the slave's input trip is 80 V (starts from 90 V), the master's I/P LV can be 90 V ---- */
+static void t_mc_from_90v(void)
+{
+    uint32_t t; MLogRec_t r;
+    /* 96 V in, Set Voltage 100 V with its default limits (I/P 90-300, O/P 90-280) */
+    ma_start(1U, 96.0f); ma.settings.set_v = 100U; MS_DefaultLimits(&ma.settings, 0, &ma.settings.ip_lv, &ma.settings.ip_hv, &ma.settings.op_lv, &ma.settings.op_hv);
+    t = ma_until(ma_c_contactor, 90000U); ma_run(10000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && (double)W.vout > 98.0 && (double)W.vout < 102.0,
+          "96 V in, Set Voltage 100 V: the slave starts, regulates to %.1f V and the contactor closes (%u ms; state %d, fault %d)", (double)W.vout, (unsigned)t, g_ctrl.state, g_ctrl.fault);
+    CHECK(MLog_Count(&ma.log) == 0U, "and nothing is logged (the master's I/P LV is 90 V, the slave trips only below 80 V)");
+    /* below the master's I/P LV of 90 V it is not started (Input LV); just inside it (92 V) is still within the 5 V hysteresis after a violation; 96 V starts it */
+    ma_start(1U, 88.0f); ma.settings.set_v = 100U; MS_DefaultLimits(&ma.settings, 0, &ma.settings.ip_lv, &ma.settings.ip_hv, &ma.settings.op_lv, &ma.settings.op_hv);
+    ma_run(20000U);
+    CHECK(!ma_c_contactor() && MApp_Control(&ma)->run == 0U && g_ctrl.state == CTRL_OFF, "88 V in, below I/P LV 90 V: it is not started (Input LV), the slave is not even asked (state %d)", g_ctrl.state);
+    W.vin = 92.0f; ma_run(20000U);
+    CHECK(MApp_Control(&ma)->run == 0U && !ma_c_contactor(), "92 V: inside I/P LV but not 5 V inside it after the violation: still not started (hysteresis)");
+    W.vin = 96.0f; t = ma_until(ma_c_contactor, 60000U); ma_run(5000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "96 V: 5 V inside: it starts, regulates and the contactor closes (%u ms)", (unsigned)t);
+    /* the master's own delayed limit: running at 96 V, the input falls to 85 V (above the slave's 80 V trip): the master waits its Volt Cut Delay, then trips and logs */
+    ma_start(1U, 96.0f); ma.settings.set_v = 100U; MS_DefaultLimits(&ma.settings, 0, &ma.settings.ip_lv, &ma.settings.ip_hv, &ma.settings.op_lv, &ma.settings.op_hv);
+    (void)ma_until(ma_c_contactor, 90000U); ma_run(8000U);
+    W.vin = 85.0f; ma_run(3000U);
+    CHECK(ma_c_contactor() && g_ctrl.fault == CF_NONE, "input falls to 85 V: after 3 s the contactor is still closed (the Volt Cut Delay is 5 s, the slave does not trip above 80 V)");
+    ma_run(4000U);
+    CHECK(!ma_c_contactor() && MLog_Count(&ma.log) >= 1U && MLog_Get(&ma.log, 0U, &r) == 0 && r.type == MLOG_T_IP_LV && g_ctrl.fault == CF_NONE, "after the 5 s the MASTER opens it and logs I/P LV; the slave raised no fault of its own (%d)", g_ctrl.fault);
+    printf("  works from 90 V: starts and regulates from 96 V, refused at 88 V, the 5 V hysteresis at the low edge, the master trips at its own I/P LV after its own delay\n");
+}
 
 #if (SLAVE_GLITCH_SKIP != 0)
 /* ---- the master with the REAL slave: the glitch rate observed on the bench (6 in 10 minutes, F16) must not open the load ---- */

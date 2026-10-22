@@ -1,5 +1,7 @@
 /* Tests of the master's key handling (m_keys) and screens (m_ui): exact screen text, Set-Mode editing and validation, password, timeouts, the fault-log viewer, and a fuzz run. */
 #include <stdio.h>
+/* the limits the tests were written for (valid in the new limits model with Max Correction not set); the NEW defaults have their own tests */
+#define LEGACY_LIMITS(s) do { (s).ip_lv = 180U; (s).ip_hv = 280U; (s).op_lv = 200U; (s).op_hv = 250U; } while (0)
 #include <string.h>
 #include <stdint.h>
 #include "m_ui.h"
@@ -93,7 +95,7 @@ static void ui_reset(uint8_t mode)
 {
     int p;
     memset(fm, 0xFF, sizeof fm); MLog_Init(&LG, &FL, 0U, MFLASH_PAGE);
-    MS_Defaults(&S); S.mode = mode;
+    MS_Defaults(&S); LEGACY_LIMITS(S); S.mode = mode;
     memset(&D, 0, sizeof D);
     for (p = 0; p < 3; p++) { D.have[p] = 1U; D.load_ok[p] = 1U; D.vin_dv[p] = 2015U; D.vout_dv[p] = 2300U; D.load_da[p] = 123U; D.vll_dv[p] = 4001U; }
     D.freq_chz = 5000U;
@@ -124,17 +126,24 @@ static void t_screens(void)
     D.out_on = 1U; D.vout_dv[0] = 2304U; tick(100U); ROW(0, "O/P Voltage    230 V"); ROW(3, "Output ON");
     D.have[0] = 0U; tick(100U); ROW(0, "O/P Voltage    --- V"); ROW(3, "Slave Link Lost");
     D.have[0] = 1U; D.fault[0] = MLOG_T_IP_LV; tick(100U); ROW(3, "Input LV");
-    D.fault[0] = MLOG_T_MAINS; D.fcode[0] = 8U; tick(100U); ROW(3, "Mains Unstable");
-    D.fault[0] = MLOG_T_POWER_STAGE; D.fcode[0] = 12U; tick(100U); ROW(3, "Power Stage Fault");
+    D.fault[0] = MLOG_T_MAINS; D.fcode[0] = 8U; tick(100U); ROW(3, "Mains Unstable   F08");
+    D.fault[0] = MLOG_T_POWER_STAGE; D.fcode[0] = 12U; tick(100U); ROW(3, "Power Stage FaultF12");
     D.fault[0] = MLOG_T_FLIP; tick(100U); ROW(3, "Transformer Flip");
     D.fault[0] = MLOG_T_RETUNE; tick(100U); ROW(3, "Re-tune Required");
     D.fault[0] = MLOG_T_LINK_LOST; tick(100U); ROW(3, "Slave Link Lost");
-    /* single-phase: MENU toggles to the monitor diagnostics (the app draws them) and back */
+    /* single-phase: ONE Run screen. MENU does nothing on it; the service pages (the app draws them) are reached through the log: LOG, then MENU */
     D.fault[0] = 0U; tick(100U); CHECK(!MUI_ShowsMonitor(&U), "the Run screen is shown");
-    key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U), "MENU switches to the monitor page");
+    key(MK_MENU_SHORT); tick(100U); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U), "MENU does nothing on the Run screen"); ROW(0, "O/P Voltage    230 V");
+    key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U), "LOG then MENU: the monitor page");
     key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && MUI_ShowsDiag(&U), "MENU again: the control diagnostics page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsCal(&U) && !MUI_ShowsDiag(&U), "a third press: the Load Calibration page");
     key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U), "and a fourth: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
+    /* a service page returns to the Run screen by itself after a minute, and at once when a fault appears */
+    key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "on the monitor page again");
+    tick(59000U); CHECK(MUI_ShowsMonitor(&U), "59 s without a key: still there"); tick(2000U); CHECK(!MUI_ShowsMonitor(&U), "61 s without a key: back on the Run screen");
+    key(MK_LOG_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsDiag(&U), "the diagnostics page");
+    D.fault[0] = MLOG_T_MAINS; D.fcode[0] = 16U; tick(100U); CHECK(!MUI_ShowsDiag(&U), "a new fault takes it back to the Run screen"); ROW(3, "Mains Unstable   F16");
+    D.fault[0] = 0U; D.fcode[0] = 0U; tick(100U);
     D.load_ok[0] = 0U; tick(100U); ROW(2, "Load  --.-A   50.0Hz"); D.load_ok[0] = 1U; tick(100U);
     /* every frame is 4 rows of 20 printable characters */
     for (r = 0; r < 4; r++) { if (strlen(F[r]) != 20U) ok = 0; for (c = 0; c < 20; c++) if (F[r][c] < 32 || F[r][c] > 126) ok = 0; }
@@ -156,8 +165,8 @@ static void t_screens(void)
 static void t_cal_page(void)
 {
     ui_reset(M_MODE_SINGLE); to_run(); D.load_da[0] = 66U; D.load_ok[0] = 1U; tick(100U);
-    key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); tick(100U);
-    CHECK(MUI_ShowsCal(&U), "three MENU presses open the Load Calibration page");
+    key(MK_LOG_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); tick(100U);
+    CHECK(MUI_ShowsCal(&U), "LOG, then three MENU presses open the Load Calibration page");
     ROW(0, "  Load Calibration"); CHECK(strncmp(row(1), "Reading", 7) == 0 && strstr(row(1), "6.6") != NULL, "it shows the reading ('%s')", row(1));
     CHECK(MUI_CalValue(&U) == 66U, "and the entry starts from it (6.6 A = 66)");
     ROW(3, "LOG=Save  MENU=Next");
@@ -213,7 +222,9 @@ static void t_log_viewer(void)
     key(MK_START); ROW(0, "Fault Log 02/02");
     CHECK(1, "START at the oldest stays");
     key(MK_STOP); key(MK_STOP); key(MK_STOP); ROW(0, "Fault Log 00/02");
-    key(MK_MENU_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "MENU leaves the log");
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "MENU in the log opens the service pages (single-phase)");
+    key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "three more MENU presses cycle back to the Run screen");
+    key(MK_LOG_SHORT); key(MK_LOG_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "LOG leaves the log");
     key(MK_LOG_SHORT); tick(30100U); CHECK(strstr(row(0), "O/P") != NULL, "30 s with no key leaves the log by itself");
     { int i; for (i = 0; i < 130; i++) add_log(MLOG_T_HEAT, 0U, 0U, 2300U, 2300U, 100U, (uint32_t)i); key(MK_LOG_SHORT); ROW(0, "Fault Log 00/99"); CHECK(1, "with a long log the numbers run 00 to 99"); }
     printf("  fault log viewer: newest first, START older, STOP newer, time as hours and minutes, 00 to 99, idle exit\n");
@@ -268,15 +279,15 @@ static void t_setmode_edit(void)
     key(MK_STOP); key(MK_STOP); CUR(5, 0);
     CHECK(1, "STOP moves the cursor through the digits and wraps");
     key(MK_MENU_SHORT); CROW(1, "Max Correction"); CROW(2, "000 V Not Set");
-    key(MK_STOP); key(MK_STOP); key(MK_START); key(MK_START); key(MK_START); CROW(2, "003 V");
+    key(MK_STOP); key(MK_START); key(MK_START); key(MK_START); CROW(2, "030 V");                         /* Max Correction 30 V: with Set 240 V the input window is 210..270 V */
     key(MK_MENU_SHORT); CROW(1, "I/P LV");
-    key(MK_STOP); key(MK_STOP); for (i = 0; i < 10; i++) key(MK_START); CROW(2, "180 V");
+    key(MK_STOP); key(MK_STOP); for (i = 0; i < 10; i++) key(MK_START); CROW(2, "210 V");                  /* the old 180 V was clipped into the new window 210..270 */
     CHECK(1, "ten presses are a full circle of a digit");
-    for (i = 0; i < 9; i++) { key(MK_START); } CROW(2, "189 V"); CUR(5, 2);                              /* the cursor is still on the units digit */
-    key(MK_STOP); key(MK_START); CROW(2, "289 V"); CUR(5, 0);                                             /* cursor wraps to the hundreds: 1 -> 2 */
+    for (i = 0; i < 9; i++) { key(MK_START); } CROW(2, "219 V"); CUR(5, 2);                              /* the cursor is still on the units digit */
+    key(MK_STOP); key(MK_START); CROW(2, "319 V"); CUR(5, 0);                                             /* cursor wraps to the hundreds: 2 -> 3 */
     key(MK_MENU_SHORT); CROW(1, "Invalid Value");
-    tick(1600U); CROW(1, "I/P LV"); CROW(2, "180 V");
-    CHECK(1, "an I/P LV of 289 V is above the Set Voltage 240: refused, put back");
+    tick(1600U); CROW(1, "I/P LV"); CROW(2, "210 V");
+    CHECK(1, "an I/P LV of 319 V is above the Set Voltage 240: refused, put back");
     printf("  Set-Mode editing: digit by digit, wrap, range refusal with the value put back, cursor\n");
 }
 
@@ -319,12 +330,14 @@ static void t_setmode_rules(void)
     ui_reset(M_MODE_SINGLE); to_run(); enter_set(); key(MK_MENU_SHORT); key(MK_MENU_SHORT);
     for (i = 0; i < 9; i++) key(MK_START);                                                                    /* hundreds 2 -> 1: 130 */
     key(MK_STOP); for (i = 0; i < 4; i++) key(MK_START); CROW(2, "170 V");
-    key(MK_MENU_SHORT); CROW(1, "Invalid Value"); tick(1600U); CROW(2, "230 V");
-    CHECK(1, "Set Voltage 170 V is below I/P LV 180 V: refused and put back");
+    key(MK_MENU_SHORT); CROW(1, "Max Correction");
+    CHECK(U.work.set_v == 170U && U.work.ip_lv == 160U && U.work.op_lv == 160U && U.work.ip_hv == 280U && U.work.op_hv == 250U,
+          "Set Voltage 170 V is ACCEPTED and the limits follow: I/P LV 180 -> 160 V, O/P LV 200 -> 160 V, the high limits stay (%u %u %u %u)", U.work.ip_lv, U.work.op_lv, U.work.ip_hv, U.work.op_hv);
     /* a Set Voltage that equals O/P HV is refused too (strict) */
     ui_reset(M_MODE_SINGLE); to_run(); enter_set(); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_STOP); for (i = 0; i < 2; i++) key(MK_START); CROW(2, "250 V");
-    key(MK_MENU_SHORT); CROW(1, "Invalid Value");
-    CHECK(1, "Set Voltage 250 V equals O/P HV 250 V: refused");
+    key(MK_MENU_SHORT); CROW(1, "Max Correction");
+    CHECK(U.work.set_v == 250U && U.work.op_hv == 260U && U.work.ip_hv == 280U && U.work.ip_lv == 180U,
+          "Set Voltage 250 V is accepted and O/P HV (250 V, no longer 10 V above Set) moves up to 260 V (%u)", U.work.op_hv);
     /* slave window and guard (D7, D26): an O/P HV above the guard must not trap the user on unrelated items */
     ui_reset(M_MODE_SINGLE); LIM.out_guard_v = 240U; to_run(); enter_set();
     key(MK_MENU_SHORT); CROW(1, "Calibration"); key(MK_MENU_SHORT); CROW(1, "Set Voltage");
@@ -369,7 +382,7 @@ static void t_setmode_actions(void)
     ui_reset(M_MODE_SINGLE); S.set_v = 250U; S.ip_hv = 290U; S.password = 0U; to_run(); enter_set();
     for (i = 0; i < 40 && U.item != 22; i++) { key(MK_MENU_SHORT); tick(1600U); }
     CROW(1, "Factory Reset"); key(MK_START); key(MK_MENU_SHORT); tick(100U);
-    CHECK(S.set_v == 230U && S.ip_hv == 280U && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset (the last item): Yes + MENU resets the settings and saves them, leaving Set-Mode");
+    CHECK(S.set_v == 230U && S.ip_hv == 300U && S.ip_lv == 90U && S.op_lv == 110U && S.op_hv == LIM.out_guard_v && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset (the last item): Yes + MENU resets the settings to the new default limits, O/P HV kept under the slave's output guard, and saves them, leaving Set-Mode (set %u, I/P %u-%u, O/P %u-%u)", S.set_v, S.ip_lv, S.ip_hv, S.op_lv, S.op_hv);
     /* idle timeout */
     ui_reset(M_MODE_SINGLE); to_run(); enter_set(); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_STOP); key(MK_START);
     tick(29000U); CHECK(MUI_SetModeOpen(&U), "29 s with no key: still in Set-Mode");

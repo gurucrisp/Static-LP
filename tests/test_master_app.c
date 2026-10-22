@@ -1,5 +1,7 @@
 /* End-to-end tests of the master application (m_app): raw key levels with real timing, settings that survive a restart, a failed save, a damaged flash, and the slave's data on the screen. */
 #include <stdio.h>
+/* the limits the tests were written for (valid in the new limits model with Max Correction not set); the NEW defaults have their own tests */
+#define LEGACY_LIMITS(s) do { (s).ip_lv = 180U; (s).ip_hv = 280U; (s).op_lv = 200U; (s).op_hv = 250U; } while (0)
 #include <string.h>
 #include <stdint.h>
 #include "m_app.h"
@@ -21,7 +23,7 @@ static const MFlash_t FL = { f_read, f_prog, f_erase };
 static uint8_t last_clr; static uint32_t clr_at;   /* the slave model: it clears its fault 200 ms after the clear counter changes */
 static MApp_t A; static MAppData_t D; static uint32_t T; static char F[4][21]; static uint8_t K[4];
 static void boot(void) { MApp_Init(&A, &FL, SA, SB, LA, LB, T); memset(K, 0, sizeof K); }
-static void fresh(void) { memset(fm, 0xFF, sizeof fm); fail_prog = 0; memset(&D, 0, sizeof D); D.have = 1U; D.link_ok = 1U; D.vin_dv = 2015U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.in_band = 1U; D.load_ok = 1U; D.load_da = 123U; D.clr_echo = 0U; T = 50000U; last_clr = 0U; clr_at = 0U; boot(); }
+static void fresh(void) { memset(fm, 0xFF, sizeof fm); fail_prog = 0; memset(&D, 0, sizeof D); D.have = 1U; D.link_ok = 1U; D.vin_dv = 2015U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.in_band = 1U; D.load_ok = 1U; D.load_da = 123U; D.clr_echo = 0U; T = 50000U; last_clr = 0U; clr_at = 0U; boot();  LEGACY_LIMITS(A.settings); }
 static void run(uint32_t ms)
 {
     uint32_t e = T + ms;
@@ -123,13 +125,22 @@ static void t_data(void)
     D.have = 0U; D.link_ok = 0U; run(200U); ROW(0, "O/P Voltage    --- V"); ROW(3, "Slave Link Lost");
     CHECK(MApp_Engine(&A)->contactor[0] == 0U, "a lost link opens the contactor at once");
     /* every slave fault code, shown while the unit is not yet running (the display never hides what the slave reports) */
-    for (i = 0U; i < sizeof F_ / sizeof F_[0]; i++) { fresh(); to_run(); D.fault = F_[i].code; D.state = F_[i].state; run(200U); ROW(3, F_[i].text); }
+    for (i = 0U; i < sizeof F_ / sizeof F_[0]; i++)
+    {
+        char ex[21]; size_t n = strlen(F_[i].text);
+        fresh(); to_run(); D.fault = F_[i].code; D.state = F_[i].state; run(200U);
+        memset(ex, ' ', 20); ex[20] = '\0'; memcpy(ex, F_[i].text, n);
+        if ((F_[i].code == 8U) || (F_[i].code == 2U) || (F_[i].code == 7U)) { ex[17] = 'F'; ex[18] = (char)('0' + (F_[i].code / 10U)); ex[19] = (char)('0' + (F_[i].code % 10U)); }   /* Mains / Inrush / Power stage show the slave's code at the right */
+        { int e = 19; while ((e >= 0) && (ex[e] == ' ')) { ex[e] = '\0'; e--; } }
+        ROW(3, ex);
+    }
     fresh(); to_run(); D.fault = 9U; D.vin_dv = 1700U; D.state = 3U; run(200U); ROW(3, "Input LV");
     fresh(); to_run(); D.fault = 9U; D.vin_dv = 2900U; D.state = 3U; run(200U); ROW(3, "Input HV");
     fresh(); to_run(); run(200U);
     /* MENU toggles the monitor diagnostics */
-    tap(0, 100U); CHECK(MApp_ShowsMonitor(&A), "MENU in single-phase Run-Mode switches to the monitor diagnostics");
-    tap(0, 100U); CHECK(!MApp_ShowsMonitor(&A), "and back");
+    tap(0, 100U); CHECK(!MApp_ShowsMonitor(&A), "MENU does nothing on the single Run screen");
+    tap(3, 100U); tap(0, 100U); CHECK(MApp_ShowsMonitor(&A), "LOG then MENU opens the monitor diagnostics");
+    tap(0, 100U); tap(0, 100U); tap(0, 100U); CHECK(!MApp_ShowsMonitor(&A), "and three more MENU presses cycle back to the Run screen");
     printf("  slave data on the screen: voltages, load, the contactor state, every fault code, no link\n");
 }
 
@@ -182,8 +193,8 @@ static void t_slave_control(void)
     run(1600U); CHECK(MApp_Control(&A)->run == 1U && MApp_Control(&A)->setv_dv == 2400U, "after the Restart Time: run = 1 with the new set voltage");
     /* Max Correction */
     combo(); tap(0, 100U); tap(0, 100U); tap(0, 100U);                                         /* Max Correction */
-    tap(2, 100U); tap(2, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U);   /* 005 V */
-    combo(); run(300U); CHECK(A.settings.maxcorr_v == 5U && MApp_Control(&A)->maxc_dv == 50U, "Max Correction 5 V is sent as 50 (%u)", (unsigned)MApp_Control(&A)->maxc_dv);
+    tap(2, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U); tap(1, 100U);   /* 040 V: the tens digit, 4 presses */
+    combo(); run(300U); CHECK(A.settings.maxcorr_v == 40U && MApp_Control(&A)->maxc_dv == 400U, "Max Correction 40 V is sent as 400 (setting %u, sent %u, limits %u-%u / %u-%u)", (unsigned)A.settings.maxcorr_v, (unsigned)MApp_Control(&A)->maxc_dv, (unsigned)A.settings.ip_lv, (unsigned)A.settings.ip_hv, (unsigned)A.settings.op_lv, (unsigned)A.settings.op_hv);
     /* a discarded edit never reaches the slave */
     fresh(); to_run(); combo(); tap(0, 100U); tap(0, 100U); tap(2, 100U); tap(1, 100U); run(31000U);
     CHECK(!MApp_SetModeOpen(&A) && MApp_Control(&A)->setv_dv == 2300U, "an edit abandoned by the 30 s timeout is never sent (still 2300)");
@@ -248,7 +259,7 @@ static void t_status_and_diag(void)
     CHECK(MApp_Engine(&A)->contactor[0] == 1U, "and the contactor closes without any $E: the master's own reading of the output (230 V = the set voltage) is enough");
     fresh(); D.have = 0U; D.link_ok = 0U; D.e_valid = 0U; run(10000U); CHECK(MApp_ControlValid(&A) == 0U, "never heard from the slave at all: nothing is sent");
     /* the diagnostics page */
-    fresh(); run(MUI_SPLASH_MS + 6000U); tap(0, 100U); tap(0, 100U);
+    fresh(); run(MUI_SPLASH_MS + 6000U); tap(3, 100U); tap(0, 100U); tap(0, 100U);
     CHECK(MApp_ShowsDiag(&A), "two MENU presses show the control diagnostics");
     MApp_NoteFrameSent(&A); MApp_NoteFrameSent(&A); MApp_Diag(&A, T, F);
     CHECK(strncmp(F[0], "S:Y E:Y H:N M:00002", 19) == 0, "row 0: heard from the slave and the frames sent ('%s')", row(0));
@@ -331,7 +342,7 @@ static void t_load_calibration(void)
     run(2000U); combo(); run(400U);                                    /* leave Set-Mode */
     /* SPAN: the Load Calibration page, MENU x3; the load runs at 6.6 A (the CT reads 282 counts) */
     D.ct_x16 = (uint16_t)(282U * 16U); run(15000U);
-    tap(0, 100U); tap(0, 100U); tap(0, 100U); CHECK(MUI_ShowsCal(&A.ui), "MENU x3 opens the Load Calibration page");
+    tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); CHECK(MUI_ShowsCal(&A.ui), "LOG, then MENU x3 opens the Load Calibration page");
     run(1500U); CHECK(strstr(row(1), "3.0") != NULL, "it shows the reading, 3.0 A (%s)", row(1));
     tap(1, 100U); tap(1, 100U); tap(1, 100U);                          /* 3.0 -> 6.0 A (the units) */
     tap(2, 100U); { int i; for (i = 0; i < 6; i++) tap(1, 100U); }     /* the tenths: 6.6 A */
@@ -347,7 +358,7 @@ static void t_load_calibration(void)
       to_run(); run(4000U); CHECK(load_shows("6.6") || load_shows("6.5") || load_shows("6.7"), "and the display is right straight away ('%s')", row(2)); }
     /* the checks of the spec: a load below 2.0 A is refused, so is a value outside 2.0 to 180.0 A, so is a gain that no CT could give */
     fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(141U * 16U + 40U * 16U); run(1500U);        /* 40 counts above the zero = 0.85 A nominal */
-    tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(3, 100U); ROW(1, "    Load Too Low"); CHECK(A.cal.gain_x1000 == 1000U, "a load below 2.0 A: 'Load Too Low', nothing changed");
+    tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(3, 100U); ROW(1, "    Load Too Low"); CHECK(A.cal.gain_x1000 == 1000U, "a load below 2.0 A: 'Load Too Low', nothing changed");
     run(2000U); D.ct_x16 = (uint16_t)(141U * 16U + 300U * 16U); run(1500U);                    /* 6.4 A nominal */
     A.ui.cal_val = 15U; tap(3, 100U); CHECK(strstr(row(1), "Enter") != NULL && A.cal.gain_x1000 == 1000U, "a typed value below 2.0 A is refused (%s)", row(1));
     run(2000U); A.ui.cal_val = 1900U; tap(3, 100U); CHECK(strstr(row(1), "Enter") != NULL && A.cal.gain_x1000 == 1000U, "and one above 180.0 A (%s)", row(1));
@@ -356,7 +367,7 @@ static void t_load_calibration(void)
     fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(900U * 16U); run(500U); combo(); tap(0, 100U); tap(1, 100U); tap(0, 100U);
     ROW(1, "   Load Not Zero"); CHECK(A.cal.zero_x16 == 141U * 16U, "Set-Mode Calibration with the CT reading 900 counts: 'Load Not Zero', the zero is unchanged");
     /* a failed save leaves the old calibration */
-    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(282U * 16U); run(1500U); tap(0, 100U); tap(0, 100U); tap(0, 100U); A.ui.cal_val = 66U; fail_prog = 1; tap(3, 100U); fail_prog = 0;
+    fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(282U * 16U); run(1500U); tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); A.ui.cal_val = 66U; fail_prog = 1; tap(3, 100U); fail_prog = 0;
     ROW(1, "    Save Failed"); CHECK(A.cal.gain_x1000 == 1000U, "a failed flash write: the gain is back to the old value");
     /* Factory Reset keeps the calibration (a separate record) */
     printf("  load calibration: defaults equal the original firmware, your 3.0 A -> 6.6 A case, zero and span, flash, the 2.0 A and range checks\n");
@@ -385,7 +396,7 @@ static void t_inrush_retries_app(void)
     MLogRec_t r;
     fresh(); MApp_SetInrushRetries(&A, 0U); to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running");
     D.state = 3U; D.fault = 2U; run(300U);
-    CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Inrush") == 0, "the slave reports FLT (code 2): the contactor opens and the screen says Inrush (%s)", row(3));
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Inrush           F02") == 0, "the slave reports FLT (code 2): the contactor opens and the screen says Inrush with its code (%s)", row(3));
     D.fault = 0U; D.state = 0U; run(120000U);
     CHECK(MApp_Control(&A)->run == 0U && A.eng.u[0].st == (uint8_t)U_LATCHED && MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_INRUSH,
           "with 0 retries it is latched: two minutes later the slave is still not told to run, one entry in the log");

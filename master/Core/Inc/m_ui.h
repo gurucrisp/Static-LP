@@ -32,6 +32,7 @@ extern "C" {
 #define MUI_REQ_CALIBRATE   0x04U
 #define MUI_REQ_RETUNE      0x08U
 #define MUI_REQ_START       0x10U   /* the START key in Run-Mode */
+#define MUI_SERVICE_IDLE_MS 60000U   /* a service page (monitor, diagnostics, load calibration) returns to the Run screen after this long without a key */
 #define MUI_REQ_STOP        0x20U   /* the STOP key in Run-Mode  */
 #define MUI_REQ_CAL_SAVE    0x40U   /* LOG on the Load Calibration page: the entered meter value is MUI_CalValue() */
 /* what the app can do: a request the app cannot serve is answered "Not Available" on the screen */

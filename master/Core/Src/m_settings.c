@@ -3,10 +3,54 @@
 
 
 
+uint16_t MS_WinLo(const MSettings_t *s)
+{
+    uint16_t lo = 0U;
+    if ((s->maxcorr_v != 0U) && (s->set_v > s->maxcorr_v)) lo = (uint16_t)(s->set_v - s->maxcorr_v);
+    return (lo < MS_VIN_MIN_V) ? (uint16_t)MS_VIN_MIN_V : lo;
+}
+uint16_t MS_WinHi(const MSettings_t *s)
+{
+    uint16_t hi = (s->maxcorr_v == 0U) ? (uint16_t)MS_VIN_MAX_V : (uint16_t)(s->set_v + s->maxcorr_v);
+    return (hi > MS_VIN_MAX_V) ? (uint16_t)MS_VIN_MAX_V : hi;
+}
+void MS_DefaultLimits(const MSettings_t *s, const MLimits_t *lim, uint16_t *ip_lv, uint16_t *ip_hv, uint16_t *op_lv, uint16_t *op_hv)
+{
+    uint16_t ilv = MS_WinLo(s), ihv = MS_WinHi(s);
+    if (lim != 0) { if (ilv < lim->win_lo_v) ilv = lim->win_lo_v; if (ihv > lim->win_hi_v) ihv = lim->win_hi_v; }
+    uint16_t olv = (uint16_t)(ilv + MS_OUT_OFFSET_V), ohv = (ihv > MS_OUT_OFFSET_V) ? (uint16_t)(ihv - MS_OUT_OFFSET_V) : 0U;
+    if (olv > (uint16_t)(s->set_v - MS_LIM_MARGIN_V)) olv = (uint16_t)(s->set_v - MS_LIM_MARGIN_V);       /* never closer than the margin to the Set Voltage */
+    if ((lim != 0) && (ohv > lim->out_guard_v)) ohv = lim->out_guard_v;                                  /* the slave would trip there first */
+    if (ohv < (uint16_t)(s->set_v + MS_LIM_MARGIN_V)) ohv = (uint16_t)(s->set_v + MS_LIM_MARGIN_V);   /* but never closer than the margin to the Set Voltage (Validate then names the guard) */
+    *ip_lv = ilv; *ip_hv = ihv; *op_lv = olv; *op_hv = ohv;
+}
+static uint16_t clip16(uint16_t v, uint16_t lo, uint16_t hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+void MS_ApplyLim(MSettings_t *s, const MLimits_t *lim)
+{
+    if (lim == 0) return;
+    if (s->ip_lv < lim->win_lo_v) s->ip_lv = lim->win_lo_v;
+    if (s->ip_hv > lim->win_hi_v) s->ip_hv = lim->win_hi_v;
+    if (s->op_lv < s->ip_lv) s->op_lv = s->ip_lv;
+    if (s->op_hv > s->ip_hv) s->op_hv = s->ip_hv;
+    if (s->op_hv > lim->out_guard_v) s->op_hv = lim->out_guard_v;
+}
+void MS_Rederive(MSettings_t *s, const MSettings_t *old, const MLimits_t *lim)
+{
+    uint16_t o_ilv, o_ihv, o_olv, o_ohv, n_ilv, n_ihv, n_olv, n_ohv;
+    MS_DefaultLimits(old, lim, &o_ilv, &o_ihv, &o_olv, &o_ohv);
+    MS_DefaultLimits(s, lim, &n_ilv, &n_ihv, &n_olv, &n_ohv);
+    s->ip_lv = (old->ip_lv == o_ilv) ? n_ilv : clip16(old->ip_lv, MS_WinLo(s), (uint16_t)(s->set_v - MS_LIM_MARGIN_V));
+    s->ip_hv = (old->ip_hv == o_ihv) ? n_ihv : clip16(old->ip_hv, (uint16_t)(s->set_v + MS_LIM_MARGIN_V), MS_WinHi(s));
+    s->op_lv = (old->op_lv == o_olv) ? n_olv : clip16(old->op_lv, s->ip_lv, (uint16_t)(s->set_v - MS_LIM_MARGIN_V));
+    s->op_hv = (old->op_hv == o_ohv) ? n_ohv : clip16(old->op_hv, (uint16_t)(s->set_v + MS_LIM_MARGIN_V), s->ip_hv);
+    if (s->op_lv < s->ip_lv) s->op_lv = s->ip_lv;          /* an output limit never lies outside its input limit, even when only the input one was moved by the user */
+    if (s->op_hv > s->ip_hv) s->op_hv = s->ip_hv;
+}
+
 void MS_Defaults(MSettings_t *s)
 {
     s->mode = (uint8_t)M_MODE_SINGLE; s->set_v = 230U; s->maxcorr_v = 0U;
-    s->ip_lv = 180U; s->ip_hv = 280U; s->op_lv = 200U; s->op_hv = 250U;
+    MS_DefaultLimits(s, 0, &s->ip_lv, &s->ip_hv, &s->op_lv, &s->op_hv);
     s->volt_cut_delay = 5U; s->ovl_current = MASTER_RATED_CURRENT_A; s->ovl_cut_delay = 10U; s->heat_delay = 10U;
     s->phase_seq = 0U; s->scroll = 1U; s->scroll_time = 5U; s->password = 0U; s->restart_auto = 1U; s->restart_time = 5U;
 }
@@ -14,12 +58,12 @@ void MS_Defaults(MSettings_t *s)
 MSErr_t MS_Validate(const MSettings_t *s, const MLimits_t *lim)
 {
     if (s->mode > (uint8_t)M_MODE_DOMESTIC)                         return MS_BAD_MODE;
-    if ((s->set_v < 100U) || (s->set_v > 300U))                      return MS_BAD_SET_V;
-    if (s->maxcorr_v > 199U)                                         return MS_BAD_MAXCORR;
-    if (s->ip_lv >= s->set_v)                                        return MS_BAD_IP_LV;
-    if (s->ip_hv <= s->set_v)                                        return MS_BAD_IP_HV;
-    if (s->op_lv >= s->set_v)                                        return MS_BAD_OP_LV;
-    if (s->op_hv <= s->set_v)                                        return MS_BAD_OP_HV;
+    if ((s->set_v < (MS_VIN_MIN_V + MS_LIM_MARGIN_V)) || (s->set_v > (MS_VIN_MAX_V - MS_LIM_MARGIN_V))) return MS_BAD_SET_V;      /* 100..290: the limits must fit 10 V either side */
+    if ((s->maxcorr_v > 199U) || ((s->maxcorr_v != 0U) && (s->maxcorr_v < MS_LIM_MARGIN_V))) return MS_BAD_MAXCORR;      /* 0 = not set, else at least the 10 V margin */
+    if ((s->ip_lv < MS_WinLo(s)) || ((uint16_t)(s->ip_lv + MS_LIM_MARGIN_V) > s->set_v))                      return MS_BAD_IP_LV;   /* inside the window, 10 V below Set at most */
+    if ((s->ip_hv > MS_WinHi(s)) || (s->ip_hv < (uint16_t)(s->set_v + MS_LIM_MARGIN_V)))                      return MS_BAD_IP_HV;
+    if ((s->op_lv < s->ip_lv) || ((uint16_t)(s->op_lv + MS_LIM_MARGIN_V) > s->set_v))                         return MS_BAD_OP_LV;   /* between the input limit and 10 V below Set */
+    if ((s->op_hv > s->ip_hv) || (s->op_hv < (uint16_t)(s->set_v + MS_LIM_MARGIN_V)))                         return MS_BAD_OP_HV;
     if (lim != 0)
     {
         if (s->ip_lv < lim->win_lo_v)                                return MS_BAD_IP_LV;      /* below the slave's window it would stop first, with no master fault (D7) */

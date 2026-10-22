@@ -226,7 +226,7 @@ static void set_commit(MUI_t *u, uint32_t now)
             else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
             else if (it->id == 20U) { u->req |= MUI_REQ_CLEAR_LOG; msg_set(u, "Fault Log", "Cleared", now, 0U); }
             else if (it->id == 21U) { leave_set_discard(u, now, "Changes", "Discarded"); return; }
-            else if (it->id == 22U) { MS_Defaults(&u->work); }
+            else if (it->id == 22U) { MS_Defaults(&u->work); MS_ApplyLim(&u->work, u->lim); }
         }
         if (is_last_item(u)) { leave_set_saved(u, now); return; }          /* one round is complete: leave Set-Mode (saving), do not start again */
         enter_item(u, next_item(u, u->item));
@@ -236,8 +236,9 @@ static void set_commit(MUI_t *u, uint32_t now)
          * tighter than a default) must not trap the user on this item: the check when leaving Set-Mode sends them to it. */
         MSettings_t before = u->work; MSErr_t after, was;
         item_set(&before, it->id, u->ed_backup);
+        if ((it->id == 3U) || (it->id == 4U)) MS_Rederive(&u->work, &before, u->lim);      /* Set Voltage or Max Correction changed: the limits that were at their defaults follow, the others are clipped into the new window */
         after = MS_Validate(&u->work, u->lim); was = MS_Validate(&before, u->lim);
-        if ((after != MS_OK) && (was == MS_OK)) { item_set(&u->work, it->id, u->ed_backup); msg_set(u, "Invalid Value", it->name, now, 0U); return; }     /* put it back, stay on the item */
+        if ((after != MS_OK) && (was == MS_OK)) { u->work = before; msg_set(u, "Invalid Value", it->name, now, 0U); return; }      /* the WHOLE set goes back: a Set Voltage or Max Correction edit may have moved the limits */     /* put it back, stay on the item */
         if (is_last_item(u)) { leave_set_saved(u, now); return; }
         enter_item(u, next_item(u, u->item));
     }
@@ -265,7 +266,10 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         else if (ev == MK_LOG_SHORT) { u->screen = (uint8_t)MUI_LOG; u->log_idx = 0U; }
         else if (ev == MK_MENU_SHORT)
         {
-            if (u->live->mode == (uint8_t)M_MODE_SINGLE) { u->page = (uint8_t)((u->page + 1U) % 4U); if (u->page == 3U) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */     /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
+            if (u->live->mode == (uint8_t)M_MODE_SINGLE)
+            {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
+                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 4U); if (u->page == 3U) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
+            }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }
         else if ((ev == MK_START) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
@@ -281,6 +285,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
     case MUI_LOG:
         if (ev == MK_START) { if ((uint16_t)(u->log_idx + 1U) < MLog_Count(u->log)) u->log_idx++; }               /* older */
         else if (ev == MK_STOP) { if (u->log_idx > 0U) u->log_idx--; }                                           /* newer */
+        else if ((ev == MK_MENU_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE)) { u->screen = (uint8_t)MUI_RUN; u->page = 1U; u->t_page = now; }     /* the way to the service pages */
         else if ((ev == MK_LOG_SHORT) || (ev == MK_MENU_SHORT) || (ev == MK_COMBO)) u->screen = (uint8_t)MUI_RUN;
         break;
     case MUI_PW:
@@ -297,7 +302,11 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
     case MUI_SET:
     {
         const MItem_t *it = item_of(u->item);
-        if (ev == MK_COMBO) leave_set_saved(u, now);
+        if (ev == MK_COMBO)
+        {   /* MENU+LOG saves the live edit without a MENU commit: a Set Voltage or Max Correction typed on the item must still move the limits that follow their defaults, exactly as a MENU would */
+            if ((it->id == 3U) || (it->id == 4U)) { MSettings_t before = u->work; item_set(&before, it->id, u->ed_backup); MS_Rederive(&u->work, &before, u->lim); }
+            leave_set_saved(u, now);
+        }
         else if (ev == MK_MENU_SHORT) set_commit(u, now);
         else if (ev == MK_START)
         {
@@ -341,6 +350,10 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
         f_put(f, 2U, 0U, "Load"); tenths_put(f, 2U, 5U, d->load_da[0], 5U, (uint8_t)(ok && d->load_ok[0])); f_put(f, 2U, 10U, "A");
         tenths_put(f, 2U, 12U, d->freq_chz / 10U, 6U, (uint8_t)(ok && d->freq_chz != 0U)); f_put(f, 2U, 18U, "Hz");
         f_put(f, 3U, 0U, (d->fault[0] != 0U) ? full_text(d->fault[0]) : ((ok == 0U) ? "Slave Link Lost" : (d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"))));
+        if ((d->fault[0] == (uint8_t)MLOG_T_MAINS) || (d->fault[0] == (uint8_t)MLOG_T_POWER_STAGE) || (d->fault[0] == (uint8_t)MLOG_T_INRUSH))
+        {   /* the slave's fault code next to the text: "Mains Unstable   F16" */
+            if (d->fcode[0] != 0U) { char cd[4]; cd[0] = 'F'; cd[1] = (char)('0' + ((d->fcode[0] / 10U) % 10U)); cd[2] = (char)('0' + (d->fcode[0] % 10U)); cd[3] = '\0'; f_put_right(f, 3U, cd); }
+        }
         return;
     }
     if (u->page == 0U)
@@ -425,6 +438,10 @@ void MUI_Tick(MUI_t *u, const MUIRun_t *d, uint32_t now, Frame_t out)
         uint8_t shown = 0U, p;
         for (p = 0U; p < 3U; p++) if (d->fault[p] != 0U && MF_Rank(d->fault[p]) >= MF_Rank(shown)) shown = d->fault[p];
         if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = 2U; u->t_page = now; }    /* a new fault jumps to the status page */
+        if (u->live->mode == (uint8_t)M_MODE_SINGLE)
+        {   /* a new fault, or a minute without a key, takes a service page back to THE Run screen, where the parameters and the fault are */
+            if (u->page != 0U && (((shown != 0U) && (shown != u->prev_shown)) || ((uint32_t)(now - u->t_key) >= MUI_SERVICE_IDLE_MS))) u->page = 0U;
+        }
         u->prev_shown = shown;
         if ((u->live->mode != (uint8_t)M_MODE_SINGLE) && (u->live->scroll != 0U) && ((uint32_t)(now - u->t_page) >= ((uint32_t)u->live->scroll_time * 1000UL)))
         { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }

@@ -175,3 +175,21 @@ so a real polarity problem (it fails on EVERY half-cycle) still stops the unit w
 Tested: one and two glitches tolerated, the third within 2 s is F16, a persistent tiny signal is F04 within 0.1 s, a glitch every 100 s for 20 simulated minutes never stops the unit, and with the real master six glitches in ten minutes leave the contactor closed with nothing logged while three in a row open it and log F16.
 **This hides a symptom, not the cause:** something still disturbs the zero-cross sample about once every 100 s (noise on the AC_IN sensing or the zero-cross detector, a mains disturbance, ringing near the crossing). The skipped half-cycle costs one half-cycle of injection (10 ms). Look at the zero-cross detector output and AC_IN with a scope on a trigger of the slave's PB0 events to find it.
 Flash the SLAVE (and use the updated config) for this change; the master is unchanged.
+
+
+## First release of the settings round (v0.9.17): limits model, one Run screen, works from 90 V
+**1. The limits model (Set-Mode).** The unit works from 90 V to 300 V of input. The WINDOW is **Set Voltage minus/plus Max Correction**, never outside 90..300 V (Max Correction 0 = not set: the whole 90..300 V; otherwise at least 10 V).
+* **I/P LV** and **I/P HV** default to the window's edges. You can move them INSIDE the window, but never closer than **10 V** to the Set Voltage.
+* **O/P LV** and **O/P HV** default **20 V inside** the input limits (O/P LV = I/P LV + 20, O/P HV = I/P HV - 20, but never closer than 10 V to the Set Voltage). You can move them between the input limit and 10 V from the Set Voltage.
+* So: `window low <= I/P LV <= O/P LV <= Set - 10` and `Set + 10 <= O/P HV <= I/P HV <= window high`. Example, Set 230 V, Max Correction 50 V: window 180..280 V, defaults I/P 180-280, O/P 200-260. Max Correction 40 V: I/P 190-270, O/P 210-250.
+* **Changing the Set Voltage or the Max Correction** moves the limits that were at their old defaults to the new defaults; a limit you moved yourself stays, clipped into the new window. The same happens if you leave Set-Mode with MENU+LOG straight after typing the value.
+* **Set Voltage is now 100..290 V** (the limits must fit 10 V either side inside 90..300 V). With the slave's 280 V output guard the highest usable Set Voltage is about 270 V (O/P HV must be at least 10 V above it and not above the guard). Move the guard first if you need more.
+* The default limits and Factory Reset are also kept inside what the slave announced in `$H` (window, output guard).
+* **Max Correction must be set to the transformer's range** for the window to mean anything: left at 0 the window is 90..300 V, the O/P limits 110..280 V.
+**2. The slave works from 90 V.** The three master-control configs now set `CTRL_VIN_MIN_V 80`: the slave's input trip is 80 V and it starts from 90 V (+10 V hysteresis); it announces 80..300 V in `$H`. The master's I/P LV can therefore be 90 V (it can still only START 5 V inside after a violation, so from 95 V).
+**HARDWARE IS NOT CONFIRMED AT 90 V** (see the comment in the config): the zero-cross IC only worked above about 70 V on the bench, the power board's 12 V / 3.3 V rails and the relay coils at 90 V are untested, and the transformer's correction range does not reach the Set Voltage from 90 V: the unit then simply cannot reach its set voltage there.
+The runner now refuses a master-control config whose input trip is above 80 V or that narrows the 300 V / 280 V limits.
+**3. One Run screen (single-phase).** The Run screen shows O/P voltage, I/P voltage, load, frequency and, in the bottom row, the status or the fault; for Mains Unstable, Power Stage and Inrush the slave's code is at the right end (`Mains Unstable   F16`). MENU does nothing on it.
+The service pages (monitor, diagnostics with the slave's echoed set voltage, Load Calibration) are reached through the log: **LOG, then MENU**; MENU cycles them (Load Calibration is the third: LOG, MENU, MENU, MENU), and they return to the Run screen by themselves after 60 s without a key or when a fault appears.
+(Older sections of this document say "MENU x2 / MENU x3": read that as "LOG, then MENU x2 / x3".)
+**4. Set-Mode stops the pulses.** Entering Set-Mode sends run = 0: measured in simulation the slave stops its inverter pulses in about 110 ms and the contactor opens at once.

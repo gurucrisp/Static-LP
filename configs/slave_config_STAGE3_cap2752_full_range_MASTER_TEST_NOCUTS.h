@@ -80,19 +80,20 @@
 
 /* ---- this file (v0.8.2): ---- */
 #define SLAVE_CONV_FIRST_AT_PEAK 1       /* the converter's first diagonal at the line peak (bench: starts reliably) */
-/* The MASTER owns the voltage limits: the slave's own outer envelope is NOT narrowed here. It keeps its built-in values (input trips below 140 V and above 300 V, it STARTS only from 150 V to 290 V;
+/* The MASTER owns the voltage limits: the slave's own outer envelope is NOT narrowed here. It keeps its built-in values (input trips below 80 V and above 300 V, it STARTS only from 90 V to 290 V;
  * output trips above 280 V), and announces them in its $H frame, so Set-Mode refuses limits outside them. The master's I/P LV, I/P HV, O/P LV and O/P HV settings, with the Volt Cut Delay, decide inside that envelope
  * (and a gross output over-voltage, 15 V above O/P HV, is cut within 0.2 s). The other full_range files narrow the slave to 195 / 275 / 265 V to mimic the old firmware: that is NOT wanted when the master is in control. */
 #define CTRL_STAGE3_MAX_EFF_TICKS 2752U   /* the cap: 2752 effective ticks, the duty ceiling: about 27 V at 200 V and 38 V at 250 V of correction; it reaches 230 V from about 202 V to 270 V (upper figure extrapolated) */
-/* Optional: the OLD firmware only ran the converter from about 180 V (its LV cut-out, +5 V hysteresis). To compare against it, remove the
+/* (not active) the OLD firmware only ran the converter from about 180 V (its LV cut-out, +5 V hysteresis). To compare against it you would replace the 80 V line below by this, and remove the
  * comment marks below: the converter then starts at 190 V and trips below 180 V. (Defaults: trip below 140 V, start from 150 V.) */
 /* #define CTRL_VIN_MIN_V 180.0f */
 
-/* LOW INPUT VOLTAGE: to start the converter from 90 V (and trip below 80 V) use this line INSTEAD (only ONE CTRL_VIN_MIN_V line active). Firmware margins:
+/* LOW INPUT VOLTAGE (the line below is ACTIVE here): the converter starts from 90 V and trips below 80 V. Firmware margins:
  * the polarity sign detection has 3.2x margin at 90 V (1.6x at 45 V); HARDWARE limits are NOT confirmed: the ZCD IC only worked above about 70 V on the bench,
  * and the power board's own 12 V / 3.3 V rails and the relay coils at 90 V mains are untested. The bench-proven start rule (positive half, low sides on)
  * was found at 197-245 V and is NOT verified at 90 V. Converter-only: regulating from 90 V (the inverter) is a separate question. See docs/POWER_STAGE_BRINGUP.md. */
-/* #define CTRL_VIN_MIN_V 80.0f */
+/* ACTIVE in the master-control files since v0.9.17: the unit is specified to work from 90 V, so the slave's input trip is 80 V and it starts from 90 V (+10 V hysteresis). It announces that in $H. */
+#define CTRL_VIN_MIN_V 80.0f
 
 #ifndef SLAVE_RELAYS_CONFIRMED
 #define SLAVE_RELAYS_CONFIRMED 0

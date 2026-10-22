@@ -174,6 +174,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     else if ((d->have != 0U) && (d->fault != 0U)) r.fault[0] = MF_SlaveFaultType(d->fault, d->vin_dv, a->settings.set_v);
     r.fcode[0] = (uint8_t)((d->have != 0U) ? d->fault : 0U);
     if (d->have == 0U) r.fault[0] = (uint8_t)(a->eout.fault[0] != 0U ? a->eout.fault[0] : 0U);
+    r.fcode[0] = (a->eout.fault[0] != 0U) ? a->eng.u[0].fcode : (((a->eout.appear[0] == 0U) && (d->have != 0U)) ? d->fault : 0U);      /* the slave code behind the fault shown */
     MUI_Tick(&a->ui, &r, now, frame);
 
     if (MUI_Take(&a->ui, MUI_REQ_SAVE))

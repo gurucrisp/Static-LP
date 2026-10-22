@@ -1,6 +1,8 @@
 /* Scenario tests of the master's fault and restart engine (master/Core/Src/m_faults.c). A small SLAVE MODEL sits between the engine's outputs and its inputs: it latches a fault code until the
  * clear counter changes (decision D5), reports IN_BAND a second after it is told to run, and reports nothing while it is not running. Time moves in 100 ms ticks. */
 #include <stdio.h>
+/* the limits the tests were written for (valid in the new limits model with Max Correction not set); the NEW defaults have their own tests */
+#define LEGACY_LIMITS(s) do { (s).ip_lv = 180U; (s).ip_hv = 280U; (s).op_lv = 200U; (s).op_hv = 250U; } while (0)
 #include <string.h>
 #include <stdint.h>
 #include "m_faults.h"
@@ -29,7 +31,7 @@ static void world(W_t *w, uint8_t mode, uint8_t restart_auto, uint32_t t0)
 {
     int p;
     memset(w, 0, sizeof *w);
-    MS_Defaults(&w->s); w->s.mode = mode; w->s.restart_auto = restart_auto;
+    MS_Defaults(&w->s); LEGACY_LIMITS(w->s); w->s.mode = mode; w->s.restart_auto = restart_auto;
     for (p = 0; p < 3; p++) { w->in.ph[p].link_ok = 1U; w->in.ph[p].vin_dv = 2000U; w->in.ph[p].vout_dv = 2300U; w->in.ph[p].load_da = 100U; }
     w->now = t0; w->clear_delay_ms = 200U;
     MF_Init(&w->f, &w->s, w->now);

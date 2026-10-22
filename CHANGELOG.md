@@ -2,7 +2,14 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.16 — a rare zero-cross glitch (F16 / F04) while running no longer opens the load (current)
+## v0.9.17 — limits model, one Run screen, works from 90 V (current)
+* MASTER limits model: the window is Set Voltage -/+ Max Correction inside 90..300 V; I/P LV and HV default to its edges and can be moved inside it but not closer than 10 V to the Set Voltage; O/P LV and HV default 20 V inside the input limits and can be moved between the input limit and 10 V from Set. Changing the Set Voltage or Max Correction
+  moves the limits that were at their defaults and clips the others; Set Voltage is 100..290 V; Max Correction 0 or 10..199 V; defaults and Factory Reset stay inside the slave's announced window and output guard. A refused edit now restores the WHOLE working set (it used to leave moved limits behind).
+* MASTER single-phase: ONE Run screen with the slave's fault code at the right of the status row (`Mains Unstable   F16`); MENU does nothing on it; the service pages (monitor, diagnostics, Load Calibration) are reached by LOG then MENU and return by themselves after 60 s or when a fault appears.
+* SLAVE configs: `CTRL_VIN_MIN_V 80` in the three master-control files (it starts from 90 V, trips below 80 V). Hardware at 90 V is NOT confirmed. The runner refuses a master-control config that narrows the envelope or does not reach 90 V.
+* Tests: settings 125 checks (the window, the defaults for 9 pairs, a 200,000-case property test that a rederived set is always valid), UI 263, application 212, whole master against the real slave 252 (starts and regulates from 96 V, refused at 88 V, hysteresis at the low edge, trips at its own I/P LV after its delay).
+
+## v0.9.16 — a rare zero-cross glitch (F16 / F04) while running no longer opens the load
 * Bench: "Mains Unstable" 6 times in 10 minutes in stable conditions, mostly F16 (the last-moment polarity check before a diagonal is energised), once F04 (sign too small to read). In master-control mode each of those latched the unit and the master opened the contactor.
 * NEW `SLAVE_GLITCH_SKIP` (default 0; 1 in the three master-control configs, enforced by the runner): while RUN a rare F16 or F04 skips ONE half-cycle (nothing energised) and is counted (`SlaveCtrl_GlitchSkips()`); more than 2 in 2 s is the fault as before; the start stays strict.
   The tracker infers the alternating sign across one unreadable event so F04 does not turn into F15. This hides a symptom: the cause (noise at the zero crossing) is still there.
