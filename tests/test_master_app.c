@@ -484,6 +484,29 @@ static void t_clock_app(void)
     printf("  clock in the application: faults stamped with the real-time clock (or the running time if it is not set), Date/Time start from the clock, one write request on save\n");
 }
 
+
+static void t_clock_page(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U];
+    /* the Clock page: LOG, then MENU x4 */
+    fresh(); set_clock(2026U, 10U, 21U, 14U, 32U, 1U); D.rtc_src = 1U; D.rtc_bdcr = 0x8303U; D.rtc_icsr = 0x00F0U; to_run(); run(500U);
+    tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); run(200U);
+    CHECK(MApp_ShowsClock(&A), "LOG, then MENU x4 opens the Clock page");
+    MApp_ClockPage(&A, T, fr);
+    CHECK(strncmp(fr[0], "Date 21/10/2026", 15) == 0, "row 0: the date ('%s')", fr[0]);
+    CHECK(strncmp(fr[1], "Time 14:32", 10) == 0, "row 1: the time ('%s')", fr[1]);
+    CHECK(strncmp(fr[2], "Src:Crystal Set:Y", 17) == 0, "row 2: the clock source and that it counts as set ('%s')", fr[2]);
+    CHECK(strncmp(fr[3], "BD:8303 IC:00F0", 15) == 0, "row 3: the raw registers ('%s')", fr[3]);
+    /* never set: the page says so, with the way to set it */
+    fresh(); set_clock(2000U, 1U, 1U, 0U, 0U, 0U); D.rtc_src = 2U; D.rtc_bdcr = 0x8101U; D.rtc_icsr = 0x0000U; to_run(); run(500U);
+    tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); run(200U); MApp_ClockPage(&A, T, fr);
+    CHECK(strncmp(fr[0], "Clock NOT SET", 13) == 0 && strncmp(fr[2], "Src:LSI !!! Set:N", 17) == 0 && strncmp(fr[3], "BD:8101 IC:0000", 15) == 0, "not set, running from the LSI: 'Clock NOT SET', 'Src:LSI !!! Set:N' and the raw bits ('%s' / '%s' / '%s')", fr[0], fr[2], fr[3]);
+    fresh(); set_clock(2000U, 1U, 1U, 0U, 0U, 0U); D.rtc_src = 0U; to_run(); run(500U); tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); run(200U); MApp_ClockPage(&A, T, fr);
+    CHECK(strncmp(fr[2], "Src:------- Set:N", 17) == 0, "no clock source: 'Src:-------' ('%s')", fr[2]);
+    tap(0, 100U); run(200U); CHECK(!MApp_ShowsClock(&A), "the next MENU leaves the Clock page");
+    printf("  clock page: the date and time, the source (crystal / LSI / none), whether it counts as set, the raw registers\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -528,6 +551,7 @@ int main(void)
     t_hello_and_echo();
     t_inrush_retries_app();
     t_clock_app();
+    t_clock_page();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

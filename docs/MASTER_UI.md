@@ -213,3 +213,13 @@ A date or time that does not exist (month 20, 31 April, 29 February 2025, hour 2
 **The log:** every new fault is stored with its date and time. In the log viewer (LOG key) row 3 shows `21/10/2026 14:32`; the load at the trip moved to row 2 (`L 12.3A`). An entry made while the clock was not set, or an older entry, shows `Run` and its running time as before. (The time is stored as minutes since 2000 with the top bit of the old run-minutes field set: the record format and its version are unchanged, so existing logs stay readable.)
 **Set-Mode now has 21 items** in single-phase with Auto restart (24 in Industrial). Navigation follows the table order; the item numbers are unchanged (Date 23, Time 24).
 **Not done:** no time zone or daylight saving, no drift calibration of the crystal. **Not proven on hardware:** the register driver is tested against a software model of the RTC, not on the real part: if the log shows no times after you have set them, or the time is lost at power-off, check the crystal and the battery, and `MRtc_UsingLse()`.
+
+
+## The Clock page: "the time does not show in the log" (v0.9.19)
+**First, the common reason:** only faults that happen AFTER the clock was set carry a time. Entries made earlier keep showing `Run` and their running time; nothing can re-stamp them. Set the clock, then make a NEW fault (or wait for one) and look at that entry (LOG key, entry 00 is the newest).
+**If a new fault still shows no time,** the master is not getting a valid clock reading from the RTC. The new **Clock page** shows why: LOG, then MENU x4 (the fifth MENU press returns to the Run screen; it returns by itself after 60 s):
+* row 0, 1: `Date 21/10/2026`, `Time 14:32` as the master reads them, or `Clock NOT SET` if it reads the RTC as never set (or lost);
+* row 2: `Src:Crystal Set:Y`: the clock source the backup domain reports (`Crystal` = the 32.768 kHz crystal, `LSI !!!` = the internal oscillator, the crystal did not start: the time then drifts, `-------` = the RTC is not running) and whether the reading counts as set;
+* row 3: `BD:8303 IC:00F0`: the raw RCC backup-domain register and RTC status register (low 16 bits), for diagnosis.
+Read it right after you set the date and time and again a minute later, and send me the four rows if the clock is not set or the time does not advance.
+The service pages are now five: monitor, diagnostics, Load Calibration, Clock (LOG, then MENU x1 to x4).

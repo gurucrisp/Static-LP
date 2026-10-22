@@ -58,6 +58,13 @@ void MRtc_Init(void)
 
 uint8_t MRtc_UsingLse(void) { return s_lse; }
 
+void MRtc_Status(uint8_t *src, uint16_t *bdcr, uint16_t *icsr)
+{
+    uint32_t sel = (RCC->BDCR >> 8) & 3UL;
+    *src = (uint8_t)((s_ok == 0U) ? 0U : ((sel == 1UL) ? 1U : ((sel == 2UL) ? 2U : 0U)));      /* what the backup domain says it uses, not what we hoped for */
+    *bdcr = (uint16_t)(RCC->BDCR & 0xFFFFUL); *icsr = (uint16_t)(RTC->ICSR & 0xFFFFUL);
+}
+
 uint8_t MRtc_Get(MDateTime_t *t)
 {
     uint32_t tr, dr;

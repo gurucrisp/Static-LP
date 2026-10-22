@@ -15,6 +15,7 @@ extern "C" {
 void    MRtc_Init(void);                       /* once at start-up */
 uint8_t MRtc_Get(MDateTime_t *t);              /* 1 = the clock has been set and *t is the date and time; 0 = never set (or lost) */
 void    MRtc_Set(const MDateTime_t *t);        /* set date and time (seconds become 0); t must be valid (MC_Valid) */
+void    MRtc_Status(uint8_t *src, uint16_t *bdcr, uint16_t *icsr);   /* for the Clock page: src 0 = not started, 1 = crystal (LSE), 2 = the internal LSI; the low 16 bits of RCC->BDCR and RTC->ICSR */
 uint8_t MRtc_UsingLse(void);                   /* 1 = running from the crystal, 0 = from the internal LSI (inaccurate) or not started */
 
 #ifdef __cplusplus

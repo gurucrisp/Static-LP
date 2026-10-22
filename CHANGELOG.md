@@ -2,7 +2,11 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.18 — the transformer-flip check at start, and the real-time clock (current)
+## v0.9.19 — the Clock page (current)
+* Report: the date and time could be set but did not show in the log. By the code the log stamp path is sound (tested end to end with a simulated clock); entries made BEFORE the clock was set cannot be re-stamped, and on the real unit the cause could be the RTC reading. NEW service page **Clock** (LOG, then MENU x4; the cycle is five pages now): the date and time as read, whether it counts as set,
+  the source the backup domain reports (crystal / LSI / none) and the raw RCC BDCR and RTC ICSR bits. `MRtc_Status()`. Tests: UI 319, application 233.
+
+## v0.9.18 — the transformer-flip check at start, and the real-time clock
 * "The flip test is not working at start": it did not exist in the stage-3 firmware (stage 1 only; stage 2 left a word; the slave never raised fault 17). NEW `SLAVE_TF_RUN_CHECK` (default 0, 1 in the three master-control configs, enforced by the runner): during the regulator's start the output must move the commanded way; the sensor offset is recorded first; about -1 V in two 100 ms windows (or -2.5 V in one) = connected backwards:
   fault 17 (`CF_TRANSFORMER_FLIP`), latched in every mode, never retried. The master already showed Transformer Flip with the buzzer. Wrong-way deviation before the stop in simulation: 0.7 V (boost), 1.5 V (buck).
 * MASTER real-time clock (crystal + battery on the board): new `m_clock` (pure calendar logic), `master_rtc` (register-level driver, LSE with an LSI fallback), Set-Mode items **Date** (dd/mm/yyyy) and **Time** (HH:MM) after Restart Time (written to the clock only when Set-Mode is saved and a change was typed), every new fault stored with its date and time (the log viewer shows `21/10/2026 14:32`, the load moved to row 2; older entries show their running time).

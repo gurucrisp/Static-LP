@@ -93,6 +93,7 @@ void     MUI_SetClock(MUI_t *u, const MDateTime_t *now, uint8_t valid);   /* the
 const MDateTime_t *MUI_ClockToSet(const MUI_t *u);                        /* after MUI_Take(MUI_REQ_SET_CLOCK): the date and time to write to the clock */
 uint16_t MUI_CalValue(const MUI_t *u);      /* the value typed on the Load Calibration page, tenths of an amp */
 uint8_t MUI_ShowsCal(const MUI_t *u);         /* single-phase, the fourth MENU page: Load Calibration (the UI draws it) */
+uint8_t MUI_ShowsClock(const MUI_t *u);       /* single-phase, the fifth service page (LOG, then MENU x4): the Clock page (the app draws it) */
 uint8_t MUI_ShowsDiag(const MUI_t *u);        /* single-phase, the third MENU page: the control diagnostics (the app draws them) */
 
 #ifdef __cplusplus

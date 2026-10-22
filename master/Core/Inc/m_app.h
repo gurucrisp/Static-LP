@@ -52,6 +52,8 @@ typedef struct
     uint8_t  clr_echo;           /* $E: the clear counter the slave last saw                           */
     MDateTime_t clock;           /* the real-time clock, read by the glue about once a second            */
     uint8_t  clock_ok;           /* the clock has been set (the RTC never returns 2000, and the battery kept it) */
+    uint8_t  rtc_src;            /* the RTC clock source: 0 none, 1 crystal (LSE), 2 internal LSI */
+    uint16_t rtc_bdcr, rtc_icsr; /* raw status bits, for the Clock page */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
     uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
@@ -109,6 +111,8 @@ uint8_t MApp_HelloDue(MApp_t *a, uint32_t now);
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
+uint8_t MApp_ShowsClock(const MApp_t *a);                       /* the Clock service page is shown (LOG, then MENU x4) */
+void    MApp_ClockPage(const MApp_t *a, uint32_t now, char out[4][21]);   /* draws it: the date and time, whether it counts as set, the clock source, the raw bits */
 void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */
 uint8_t MApp_ControlValid(const MApp_t *a);     /* 1 once the slave has been heard ($E) and the clear counter synced: only then is $M sent */
 const MFOut_t *MApp_Engine(const MApp_t *a);    /* contactors, buzzer, faults: what the glue must drive */

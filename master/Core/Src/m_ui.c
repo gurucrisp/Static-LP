@@ -222,6 +222,7 @@ void MUI_SetClock(MUI_t *u, const MDateTime_t *now, uint8_t valid) { u->clk_now 
 const MDateTime_t *MUI_ClockToSet(const MUI_t *u) { return &u->clk_set; }
 uint16_t MUI_CalValue(const MUI_t *u) { return u->cal_val; }
 uint8_t MUI_ShowsCal(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U) && (u->msg_on == 0U)); }
+uint8_t MUI_ShowsClock(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 4U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsDiag(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 2U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsMonitor(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 1U) && (u->msg_on == 0U)); }
 
@@ -323,7 +324,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         {
             if (u->live->mode == (uint8_t)M_MODE_SINGLE)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
-                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 4U); if (u->page == 3U) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
+                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 5U); if (u->page == 3U) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }

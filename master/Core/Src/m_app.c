@@ -258,5 +258,32 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U)) { char w[10]; copy(&t[14], "W:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (16U + i < 20U)) { t[16U + i] = w[i]; i++; } t[16U + i] = '\0'; } }
     for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
 }
+uint8_t MApp_ShowsClock(const MApp_t *a) { return MUI_ShowsClock(&a->ui); }
+
+/* the Clock service page (LOG, then MENU x4): what the real-time clock is doing, to find out why a fault carries no time */
+void MApp_ClockPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
+{
+    const MAppData_t *d = &a->last; char t[24]; uint32_t r, c, n; static const char HX[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
+    for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
+    (void)now;
+    if (d->clock_ok != 0U)
+    {   /* row 0: the date, row 1: the time */
+        copy(t, "Date 00/00/0000"); put2(&t[5], d->clock.day); put2(&t[8], d->clock.month); t[11] = (char)('0' + ((d->clock.year / 1000U) % 10U)); t[12] = (char)('0' + ((d->clock.year / 100U) % 10U)); t[13] = (char)('0' + ((d->clock.year / 10U) % 10U)); t[14] = (char)('0' + (d->clock.year % 10U));
+        for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
+        copy(t, "Time 00:00"); put2(&t[5], d->clock.hour); put2(&t[8], d->clock.minute);
+        for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
+    }
+    else { copy(t, "Clock NOT SET"); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n]; copy(t, "(Set-Mode: Date, Time)"); for (n = 0U; (t[n] != '\0') && (n < MUI_COLS); n++) frame[1][n] = t[n]; }
+    /* row 2: the clock source the backup domain reports, and whether the reading counts as set */
+    copy(t, "Src:");
+    { const char *sn = (d->rtc_src == 1U) ? "Crystal" : ((d->rtc_src == 2U) ? "LSI !!!" : "-------"); for (n = 0U; n < 7U; n++) t[4U + n] = sn[n]; }
+    t[11] = ' '; t[12] = 'S'; t[13] = 'e'; t[14] = 't'; t[15] = ':'; t[16] = (d->clock_ok != 0U) ? 'Y' : 'N'; t[17] = '\0';
+    for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
+    /* row 3: the raw registers, for me: RCC BDCR and RTC ICSR (low 16 bits each) */
+    copy(t, "BD:0000 IC:0000");
+    t[3] = HX[(d->rtc_bdcr >> 12) & 15U]; t[4] = HX[(d->rtc_bdcr >> 8) & 15U]; t[5] = HX[(d->rtc_bdcr >> 4) & 15U]; t[6] = HX[d->rtc_bdcr & 15U];
+    t[11] = HX[(d->rtc_icsr >> 12) & 15U]; t[12] = HX[(d->rtc_icsr >> 8) & 15U]; t[13] = HX[(d->rtc_icsr >> 4) & 15U]; t[14] = HX[d->rtc_icsr & 15U];
+    for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
+}
 const MFOut_t *MApp_Engine(const MApp_t *a) { return &a->eout; }
 uint8_t MApp_ShowsMonitor(const MApp_t *a) { return MUI_ShowsMonitor(&a->ui); }
