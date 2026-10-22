@@ -558,6 +558,11 @@ static void t_vcal_app(void)
     /* every refusal has its own words */
     { static const struct { uint8_t st; const char *l1; } E[] = { {1U, "Bad Value"}, {2U, "No Steady Signal"}, {3U, "Out Of Range"}, {4U, "Stop The Unit"}, {5U, "Save Failed"}, {6U, "Not Supported"}, {7U, "Slave Busy"}, {99U, "Calibration"} };
       unsigned q; for (q = 0U; q < sizeof E / sizeof E[0]; q++) { run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, E[q].st, 0); run(100U); CHECK(strstr(row(1), E[q].l1) != NULL, "status %u: '%s' ('%s')", E[q].st, E[q].l1, row(1)); } }
+    /* a flash failure carries the reason: stage 2, reason 3 (HAL error), dual bank, flags 0x0080 */
+    run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, 5U, 23100128); run(100U);
+    CHECK(strstr(row(1), "Save Failed") != NULL && strstr(row(2), "S2 R3 D1 E0080") != NULL, "FLASH_FAIL with a diagnostic: 'Save Failed' / 'S2 R3 D1 E0080' ('%s' / '%s')", row(1), row(2));
+    run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, 5U, 0); run(100U);
+    CHECK(strstr(row(2), "Flash Error") != NULL, "FLASH_FAIL without one: 'Flash Error'");
     /* only one at a time */
     run(2000U); tap(3, 100U); run(1700U); tap(3, 100U); run(50U); CHECK(strstr(row(1), "Busy") != NULL, "a second LOG while one is out: 'Busy' ('%s')", row(1)); run(3500U);
     /* typing 000.0 resets the channel */

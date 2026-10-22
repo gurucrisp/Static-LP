@@ -19,3 +19,8 @@ A gain change while the unit regulates would make the regulator see a different 
 * slave_cal_hw.c (the binding to g_meas / g_ctrl) and its call in main.c could not be compiled here (no slave HAL headers). Send me any build error.
 * The 1 s average assumes the main loop calls the link service every few milliseconds (it does in the current main loop).
 * The output sensor topology in bypass (step 2).
+
+## If the master says "Save Failed" (v0.9.22)
+The second line is a code: `S2 R3 D1 E0080` means: S = the store stage that failed (1 = erasing the page, 2 = writing the record, 3 = writing the commit word); R = the reason inside the flash driver (1 = the address was refused by the guard, 2 = misaligned, 3 = the HAL returned an error, its flags are in E,
+4 = the erase reported a failing page (E = its number), 5 = the erase said OK but the page is NOT blank (E = the offset of the first byte that is not blank)); D = 1 when the flash is in dual-bank mode, 0 single bank; E = four hex digits, the HAL error flags (or the page / offset).
+Send the whole line. To tell a bad page from a bad channel: calibrate the INPUT twice in a row. Each save goes to the other one of the two pages: if the second one fails, it is the second page, not the channel.

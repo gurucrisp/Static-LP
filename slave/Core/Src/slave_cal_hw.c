@@ -19,7 +19,14 @@ static void hw_set(uint8_t ch, uint16_t ratio)
     g_meas_cal[ch].calibrated = (uint8_t)((ratio != 10000U) ? 1U : g_meas_cal[ch].calibrated);
 }
 static int hw_load(uint16_t r[2]) { uint8_t b[4]; if (SStore_Load(&s_store, b) == 0U) return -1; r[0] = (uint16_t)(b[0] | (b[1] << 8)); r[1] = (uint16_t)(b[2] | (b[3] << 8)); return 0; }
-static int hw_save(const uint16_t r[2]) { uint8_t b[4]; b[0] = (uint8_t)r[0]; b[1] = (uint8_t)(r[0] >> 8); b[2] = (uint8_t)r[1]; b[3] = (uint8_t)(r[1] >> 8); return SStore_Save(&s_store, b); }
+static int hw_save(const uint16_t r[2])
+{
+    uint8_t b[4]; int st;
+    b[0] = (uint8_t)r[0]; b[1] = (uint8_t)(r[0] >> 8); b[2] = (uint8_t)r[1]; b[3] = (uint8_t)(r[1] >> 8);
+    st = SStore_Save(&s_store, b);                                            /* 0 = ok, 1 = the erase failed, 2 = the record, 3 = the commit word */
+    if (st == 0) return 0;
+    return (int)(((uint32_t)st * 10000000UL) + SlaveFlash_Diag());            /* stage x 10,000,000 + the driver's reason / flash mode / flags (see slave_flash.h) */
+}
 
 static const SlaveCalHw_t HW = { hw_raw, hw_count, hw_stopped, hw_nominal, hw_set, hw_load, hw_save };
 

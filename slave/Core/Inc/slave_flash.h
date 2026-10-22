@@ -16,6 +16,8 @@ extern "C" {
 #define SFLASH_CAL_PAGE_B   0x0807F800UL
 
 extern const SFlash_t g_slave_flash;
+uint32_t SlaveFlash_Diag(void);            /* why the LAST failed erase / program failed, packed in decimal: reason x 1,000,000 + dual-bank flag x 100,000 + the HAL error flags or the failing page (16 bits).
+                                              reason 1 = address refused by the guard, 2 = misaligned, 3 = the HAL returned an error (the flags are HAL_FLASH_GetError()), 4 = the erase reported a failing page */
 uint32_t SlaveFlash_ImageEnd(void);        /* the first address after the program image in flash: the calibration pages must lie above it */
 
 #ifdef __cplusplus

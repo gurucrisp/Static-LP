@@ -6,6 +6,8 @@ static const SlaveCalHw_t *s_hw;
 static uint16_t s_ratio[2] = { 10000U, 10000U };
 static struct { uint8_t active, ch; uint32_t t0, last_cnt, n; float sum, mn, mx; int32_t meter_dv; } s_job;
 
+static int32_t s_diag;                         /* the store's diagnostic of the last failed save (answer value of a FLASH_FAIL) */
+
 static uint8_t ratio_ok(uint16_t r) { return (uint8_t)((r >= SCAL_RATIO_MIN) && (r <= SCAL_RATIO_MAX)); }
 
 void SlaveCal_Init(const SlaveCalHw_t *hw)
@@ -25,7 +27,7 @@ static uint8_t commit(uint8_t ch, uint16_t ratio)
     uint16_t nr[2]; uint16_t old = s_ratio[ch];
     nr[0] = s_ratio[0]; nr[1] = s_ratio[1]; nr[ch] = ratio;
     s_hw->set_ratio(ch, ratio);
-    if (s_hw->store_save(nr) != 0) { s_hw->set_ratio(ch, old); return (uint8_t)LINKV2_ST_FLASH_FAIL; }
+    { int sv = s_hw->store_save(nr); if (sv != 0) { s_diag = (sv > 0) ? (int32_t)sv : 0; s_hw->set_ratio(ch, old); return (uint8_t)LINKV2_ST_FLASH_FAIL; } }
     s_ratio[ch] = ratio;
     return (uint8_t)LINKV2_ST_OK;
 }
@@ -39,7 +41,7 @@ int SlaveCal_Command(uint8_t cmd, int32_t num_dv, char letter, uint8_t *status, 
     {
         uint8_t ch = (letter == 'V') ? 0U : ((letter == 'O') ? 1U : 2U);
         if (ch > 1U) { *status = (uint8_t)LINKV2_ST_BAD_ARG; return 1; }
-        *status = commit(ch, 10000U); *value = (*status == (uint8_t)LINKV2_ST_OK) ? 10000 : (int32_t)s_ratio[ch];
+        *status = commit(ch, 10000U); *value = (*status == (uint8_t)LINKV2_ST_OK) ? 10000 : s_diag;
         return 1;
     }
     if (((cmd != SCAL_CMD_CALV) && (cmd != SCAL_CMD_CALO)) || (num_dv < 500) || (num_dv > 4000)) { *status = (uint8_t)LINKV2_ST_BAD_ARG; return 1; }
@@ -75,6 +77,6 @@ int SlaveCal_Poll(uint8_t *status, int32_t *value, uint32_t now_ms)
     *value = (int32_t)ratio;
     if ((ratio < SCAL_RATIO_MIN) || (ratio > SCAL_RATIO_MAX)) { *status = (uint8_t)LINKV2_ST_OUT_OF_RANGE; return 1; }
     *status = commit(s_job.ch, (uint16_t)ratio);
-    if (*status != (uint8_t)LINKV2_ST_OK) *value = (int32_t)s_ratio[s_job.ch];
+    if (*status != (uint8_t)LINKV2_ST_OK) *value = s_diag;                           /* FLASH_FAIL: why the flash refused */
     return 1;
 }

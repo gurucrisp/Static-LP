@@ -12,7 +12,7 @@ extern FLASH_TypeDef flash_m;
 #define FLASH_TYPEPROGRAM_DOUBLEWORD 0x01U
 #define FLASH_BANK_1 1U
 #define FLASH_BANK_2 2U
-void HAL_FLASH_Unlock(void); void HAL_FLASH_Lock(void);
+void HAL_FLASH_Unlock(void); void HAL_FLASH_Lock(void); uint32_t HAL_FLASH_GetError(void);
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t addr, uint64_t data);
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *e, uint32_t *err);
 #endif

@@ -9,8 +9,11 @@ static int tot = 0, bad = 0;
 FLASH_TypeDef flash_m; uint32_t _sidata, _sdata, _edata;
 static uint8_t mem[0x80000]; static uint32_t image_end = 0x08020000UL; static int unlocked = 0, last_banks = 0; static uint32_t last_page = 0; static int erase_calls = 0, prog_calls = 0, fail_next_prog = 0;
 uint32_t SlaveFlash_ImageEnd(void) { return image_end; }
+uint8_t SlaveFlashTest_Rd8(uint32_t a) { return mem[a - 0x08000000UL]; }
+static int erase_noop = 0;
 void HAL_FLASH_Unlock(void) { unlocked = 1; }
 void HAL_FLASH_Lock(void) { unlocked = 0; }
+static uint32_t hal_err = 0U; uint32_t HAL_FLASH_GetError(void) { return hal_err; }
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t addr, uint64_t data)
 {
     uint32_t o = addr - 0x08000000UL, i; (void)type; prog_calls++;
@@ -21,7 +24,7 @@ HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t addr, uint64_t data)
 }
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *e, uint32_t *err)
 {
-    uint32_t base = 0U; erase_calls++; last_banks = (int)e->Banks; last_page = e->Page; *err = 0xFFFFFFFFUL;
+    uint32_t base = 0U; erase_calls++; if (erase_noop) { *err = 0xFFFFFFFFUL; return HAL_OK; }                  /* the model of a HAL that says OK and does nothing */ last_banks = (int)e->Banks; last_page = e->Page; *err = 0xFFFFFFFFUL;
     if (!unlocked) return HAL_ERROR;
     if (flash_m.OPTR & FLASH_OPTR_DBANK) base = (e->Banks == FLASH_BANK_2) ? 0x40000UL : 0U;
     else if (e->Banks == FLASH_BANK_2) return HAL_ERROR;
@@ -65,6 +68,15 @@ int main(void)
       CHECK(SStore_Load(&st, got) == 0U, "nothing stored yet");
       CHECK(SStore_Save(&st, pay) == 0 && SStore_Load(&st, got) != 0U && memcmp(pay, got, 4U) == 0, "a record is saved and read back through the store");
       { int cur1 = st.cur; pay[0] = 0x11; CHECK(SStore_Save(&st, pay) == 0 && st.cur != cur1 && SStore_Load(&st, got) != 0U && got[0] == 0x11U, "the second save goes to the other slot (%d -> %d)", cur1, st.cur); } }
+    /* the diagnostic: why the last failure happened, packed as reason x 1,000,000 + dual x 100,000 + flags */
+    fresh(1); hal_err = 0x0080U; fail_next_prog = 1; (void)g_slave_flash.prog(0x0807F800UL, in, 8U);
+    CHECK(SlaveFlash_Diag() == 3U * 1000000UL + 100000UL + 0x0080UL, "a HAL program error with flags 0x0080 in dual-bank mode: reason 3, dual 1, flags 0080 (%lu)", (unsigned long)SlaveFlash_Diag());
+    fresh(0); (void)g_slave_flash.prog(0x0807F001UL, in, 8U); CHECK(SlaveFlash_Diag() == 2U * 1000000UL, "misaligned, single bank: reason 2, dual 0 (%lu)", (unsigned long)SlaveFlash_Diag());
+    fresh(1); (void)g_slave_flash.erase(0x08000000UL); CHECK(SlaveFlash_Diag() == 1U * 1000000UL + 100000UL, "refused by the guard: reason 1 (%lu)", (unsigned long)SlaveFlash_Diag());
+    /* an erase the HAL reports as OK that did not blank the page: caught, with the offset of the first byte that is not blank */
+    fresh(1); erase_noop = 0; (void)g_slave_flash.erase(0x0807F800UL); memcpy(&mem[0x7F800 + 40], in, 16); erase_noop = 1;
+    CHECK(g_slave_flash.erase(0x0807F800UL) != 0 && SlaveFlash_Diag() == 5U * 1000000UL + 100000UL + 40U, "an erase that did nothing: refused with reason 5 and offset 40 (%lu)", (unsigned long)SlaveFlash_Diag());
+    erase_noop = 0; CHECK(g_slave_flash.erase(0x0807F800UL) == 0 && mem[0x7F800 + 40] == 0xFFU, "a working erase passes the blank check");
     printf("  slave flash driver (against a HAL model): bank and page arithmetic in both modes, double-word programming, only the two calibration pages, the image check, the store on top\n");
     printf("  %d checks, %d failures\n  RESULT: %s\n", tot, bad, bad ? "FAILURES" : "ALL PASSED");
     return bad ? 1 : 0;

@@ -29,7 +29,7 @@ typedef struct
     float    (*nominal_gain)(uint8_t ch);                 /* volts per count of the NOMINAL (uncalibrated) chain                                            */
     void     (*set_ratio)(uint8_t ch, uint16_t ratio);    /* apply: gain = nominal x ratio / 10000                                                         */
     int      (*store_load)(uint16_t ratio[2]);            /* 0 = a valid stored record was read into ratio[0..1]                                           */
-    int      (*store_save)(const uint16_t ratio[2]);      /* 0 = stored                                                                                    */
+    int      (*store_save)(const uint16_t ratio[2]);      /* 0 = stored; else a POSITIVE diagnostic code that is passed to the master in the answer's value (FLASH_FAIL)              */
 } SlaveCalHw_t;
 
 void     SlaveCal_Init(const SlaveCalHw_t *hw);            /* load the stored ratios (if any) and apply them */

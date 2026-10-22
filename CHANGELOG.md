@@ -2,7 +2,12 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.21 — the overheat input is switched OFF (current)
+## v0.9.22 — the flash failure explains itself (current)
+* Report: the first calibration saves, later ones fail with "Save Failed / Flash Error". The slave now reports WHERE it failed in the answer: the master shows e.g. `Save Failed` / `S2 R3 D1 E0080` = store stage (1 erase, 2 write, 3 commit word), driver reason (1 address refused, 2 misaligned,
+  3 HAL error with its flags, 4 the erase reported a failing page, 5 the erase said OK but the page is not blank: the number is the offset of the first byte that is not blank), D = dual-bank flash mode, E = the HAL error flags in hex. A blank check after every erase was added (an erase that does nothing would explain "writes once, never again").
+* The cause is NOT yet known. Send me the `S R D E` line.
+
+## v0.9.21 — the overheat input is switched OFF
 * Report: the overheat input stopped the master from starting. A pin that reads low (floating, no pull-up fitted, or used for something else) means permanent overheat, and an overheated unit never starts (by design). `MASTER_HEAT_INPUT` is now 0: PA5 is not configured or read, the heat flag is never set.
   The rules themselves (trip after the delay, auto restart after the Restart Time, 3 trips in 30 min) stay in the engine and are tested. Switch it on again only after measuring PA5: it must read HIGH when cool.
 

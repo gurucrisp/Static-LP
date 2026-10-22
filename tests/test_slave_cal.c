@@ -18,7 +18,7 @@ static uint8_t h_stopped(void) { return (uint8_t)stopped; }
 static float h_nominal(uint8_t ch) { (void)ch; return 0.1f; }
 static void h_set(uint8_t ch, uint16_t r) { applied[ch] = r; set_calls++; }
 static int h_load(uint16_t r[2]) { if (!have_store) return -1; r[0] = stored[0]; r[1] = stored[1]; return 0; }
-static int h_save(const uint16_t r[2]) { if (save_fail) return -1; stored[0] = r[0]; stored[1] = r[1]; have_store = 1; saves++; return 0; }
+static int h_save(const uint16_t r[2]) { if (save_fail) return 20310080;  stored[0] = r[0]; stored[1] = r[1]; have_store = 1; saves++; return 0; }
 static const SlaveCalHw_t HW = { h_raw, h_cnt, h_stopped, h_nominal, h_set, h_load, h_save };
 /* run one command to its answer: the main loop polls every few ms, new results every 10 ms */
 static int run(uint8_t cmd, int32_t dv, char letter, uint8_t *st, int32_t *val, uint32_t *t_ms)
@@ -70,7 +70,7 @@ int main(void)
     reset_world(); CHECK(run(SCAL_CMD_CALV, 499, 0, &st, &v, &t) == 1 && st == LINKV2_ST_BAD_ARG && run(SCAL_CMD_CALV, 4001, 0, &st, &v, &t) == 1 && st == LINKV2_ST_BAD_ARG, "a meter value outside 50.0 to 400.0 V: BAD_ARG");
     reset_world(); CHECK(run(9, 2302, 0, &st, &v, &t) == 1 && st == LINKV2_ST_BAD_ARG, "an unknown command code: BAD_ARG");
     /* a failed store: the old value stays, FLASH_FAIL */
-    reset_world(); CHECK(run(SCAL_CMD_CALV, 2302, 0, &st, &v, &t) == 1 && st == LINKV2_ST_OK, "a good calibration first"); { uint16_t good = SlaveCal_Ratio(0); save_fail = 1; CHECK(run(SCAL_CMD_CALV, 2250, 0, &st, &v, &t) == 1 && st == LINKV2_ST_FLASH_FAIL && SlaveCal_Ratio(0) == good && applied[0] == good, "the flash write fails: FLASH_FAIL and the OLD calibration stays in force (applied %u)", (unsigned)applied[0]); }
+    reset_world(); CHECK(run(SCAL_CMD_CALV, 2302, 0, &st, &v, &t) == 1 && st == LINKV2_ST_OK, "a good calibration first"); { uint16_t good = SlaveCal_Ratio(0); save_fail = 1; CHECK(run(SCAL_CMD_CALV, 2250, 0, &st, &v, &t) == 1 && st == LINKV2_ST_FLASH_FAIL && SlaveCal_Ratio(0) == good && applied[0] == good, "the flash write fails: FLASH_FAIL and the OLD calibration stays in force (applied %u)", (unsigned)applied[0]); CHECK(v == 20310080, "the answer's value carries the flash diagnostic (%d)", (int)v); }
     /* one at a time */
     reset_world(); { uint32_t tt = 100000U, k; uint8_t st2; int32_t v2; SlaveCal_Command(SCAL_CMD_CALV, 2302, 0, &st, &v, tt); CHECK(SlaveCal_Busy() == 1U, "busy while averaging"); CHECK(SlaveCal_Command(SCAL_CMD_CALO, 2302, 0, &st2, &v2, tt) == 1 && st2 == LINKV2_ST_NOT_ALLOWED, "a second command while one is averaging: NOT_ALLOWED");
       for (k = 0U; k < 300U; k++) { tt += 5U; if (tt % 10U == 0U) counter++; if (SlaveCal_Poll(&st, &v, tt) == 1) break; } CHECK(st == LINKV2_ST_OK && SlaveCal_Busy() == 0U, "the first one still finishes"); }

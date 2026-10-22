@@ -290,7 +290,19 @@ static void vcal_message(MApp_t *a, uint8_t status, int32_t value)
     case 2U: MUI_Notify(&a->ui, "No Steady Signal", "Min 50 V", now); break;
     case 3U: MUI_Notify(&a->ui, "Out Of Range", "Max +/-10 %", now); break;
     case 4U: MUI_Notify(&a->ui, "Stop The Unit", "First", now); break;
-    case 5U: MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); break;
+    case 5U:
+    {   /* FLASH_FAIL: the value says where: stage x 10,000,000 + reason x 1,000,000 + dual-bank flag x 100,000 + 16 bits of HAL error flags: "S2 R3 D1 E0080" */
+        static const char HX[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F' };
+        if (value > 0)
+        {
+            uint32_t v = (uint32_t)value, e = v % 100000UL;
+            l2[n++] = 'S'; l2[n++] = (char)('0' + ((v / 10000000UL) % 10U)); l2[n++] = ' '; l2[n++] = 'R'; l2[n++] = (char)('0' + ((v / 1000000UL) % 10U)); l2[n++] = ' ';
+            l2[n++] = 'D'; l2[n++] = (char)('0' + ((v / 100000UL) % 10U)); l2[n++] = ' '; l2[n++] = 'E'; l2[n++] = HX[(e >> 12) & 15U]; l2[n++] = HX[(e >> 8) & 15U]; l2[n++] = HX[(e >> 4) & 15U]; l2[n++] = HX[e & 15U]; l2[n] = '\0';
+            MUI_Notify(&a->ui, "Save Failed", l2, now);
+        }
+        else MUI_Notify(&a->ui, "Save Failed", "Flash Error", now);
+        break;
+    }
     case 6U: MUI_Notify(&a->ui, "Not Supported", "Update The Slave", now); break;
     case 7U: MUI_Notify(&a->ui, "Slave Busy", "Try Again", now); break;
     default: MUI_Notify(&a->ui, "Calibration", "Failed", now); break;
