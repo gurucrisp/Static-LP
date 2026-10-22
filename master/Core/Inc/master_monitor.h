@@ -62,6 +62,10 @@ extern "C" {
  * 3 = the approved rule (D27). 0 = latch at the FIRST trip: use 0 while a repaired power stage is being commissioned, so that no retry ever re-energises a stage that may still be faulty. */
 #define MASTER_INRUSH_RETRIES   0
 
+/* The real-time clock (STM32G070 RTC, 32.768 kHz crystal, backup battery on VBAT) for the fault-log time stamps and the Date / Time items in Set-Mode. 1 = on. The driver (master_rtc.c) uses direct register access: it does NOT need the HAL RTC
+ * module or a CubeMX RTC configuration, but the board must have the crystal on PC14/PC15 and a battery on VBAT. If the crystal does not start within 3 s the internal LSI (inaccurate) is used. 0 = no clock: the log shows the running time. */
+#define MASTER_RTC_ENABLED      1
+
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
  * scale and 3 A offset). Zero: Set-Mode "Calibration" = Yes (no load). Span: the Load Calibration page (MENU x3 in Run-Mode), typing the clamp-meter reading while the load runs. */
 #define MASTER_CT_SAMPLES       200U

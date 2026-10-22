@@ -50,6 +50,8 @@ typedef struct
     uint8_t  heat;               /* the slave's OVERHEAT flag (not available yet: 0)                   */
     uint8_t  ct_peak;            /* the CT reached full scale (not measured yet: 0)                    */
     uint8_t  clr_echo;           /* $E: the clear counter the slave last saw                           */
+    MDateTime_t clock;           /* the real-time clock, read by the glue about once a second            */
+    uint8_t  clock_ok;           /* the clock has been set (the RTC never returns 2000, and the battery kept it) */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
     uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
@@ -74,6 +76,8 @@ typedef struct
     uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
     uint8_t      lim_set;
     uint8_t      retries_cfg;
+    uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */
+    MDateTime_t  clk_set;
     uint8_t      hello_n;
     uint32_t     t_hello;
     uint8_t      ctl_valid;            /* $M may be sent: the slave was heard ($E), or its $S frames have been arriving for 3 s */
@@ -101,6 +105,8 @@ void    MApp_InitCal(MApp_t *a, uint32_t page_a, uint32_t page_b);
 void    MApp_SetInrushRetries(MApp_t *a, uint8_t n);
 /* The slave announces its limits ($H) only at its own power-up. If the master started later it asks: returns 1 (at most every 2 s) while the slave's $E is heard but no $H has arrived; the glue then sends a $K HELLO. */
 uint8_t MApp_HelloDue(MApp_t *a, uint32_t now);
+/* a Date or Time saved in Set-Mode: returns 1 once, with the value to write to the real-time clock (seconds are set to 0 by the glue) */
+uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
 void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */

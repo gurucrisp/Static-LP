@@ -2,9 +2,11 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.18 — the transformer-flip check at start (current)
+## v0.9.18 — the transformer-flip check at start, and the real-time clock (current)
 * "The flip test is not working at start": it did not exist in the stage-3 firmware (stage 1 only; stage 2 left a word; the slave never raised fault 17). NEW `SLAVE_TF_RUN_CHECK` (default 0, 1 in the three master-control configs, enforced by the runner): during the regulator's start the output must move the commanded way; the sensor offset is recorded first; about -1 V in two 100 ms windows (or -2.5 V in one) = connected backwards:
   fault 17 (`CF_TRANSFORMER_FLIP`), latched in every mode, never retried. The master already showed Transformer Flip with the buzzer. Wrong-way deviation before the stop in simulation: 0.7 V (boost), 1.5 V (buck).
+* MASTER real-time clock (crystal + battery on the board): new `m_clock` (pure calendar logic), `master_rtc` (register-level driver, LSE with an LSI fallback), Set-Mode items **Date** (dd/mm/yyyy) and **Time** (HH:MM) after Restart Time (written to the clock only when Set-Mode is saved and a change was typed), every new fault stored with its date and time (the log viewer shows `21/10/2026 14:32`, the load moved to row 2; older entries show their running time).
+  Set-Mode navigation now follows the table order (the item numbers are unchanged). Tests: date/time 31 checks (every day of 2001..2099, 200,000 random minutes), RTC driver 19 checks against a register model, UI 318, application 225; 7 of 8 breakages caught (the 8th is an equivalent mutation).
 * Tests: group `flip check` with the real master (18 checks: correct boost/buck pass, backwards boost/buck latch, no verdict when nothing needs correcting, offsets of +-0.8, +-2 and +-5 V, +-0.6 V noise, +-2 V noise with a 1 V correction), group `flip standalone` (3 checks). 7 of 8 breakages caught; "two windows in a row instead of one" is not proven by a test.
 
 ## v0.9.17 — limits model, one Run screen, works from 90 V

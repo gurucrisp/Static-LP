@@ -448,6 +448,42 @@ static void t_hello_and_echo(void)
     printf("  hello request and set-voltage echo: asked every 2 s until $H arrives, never without $E; T230 on the diagnostics page, ! when the slave disagrees\n");
 }
 
+
+static void set_clock(uint16_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi, uint8_t ok) { D.clock.year = y; D.clock.month = mo; D.clock.day = d; D.clock.hour = h; D.clock.minute = mi; D.clock_ok = ok; }
+static void t_clock_app(void)
+{
+    MLogRec_t r; MDateTime_t back, nt; int n;
+    /* a fault is logged with the REAL-TIME CLOCK when it is set */
+    fresh(); set_clock(2026U, 10U, 21U, 14U, 32U, 1U); to_run(); run(12000U);
+    D.state = 3U; D.fault = 8U; run(300U);
+    CHECK(MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && MC_IsStamp(r.run_min), "a trip with the clock set is logged with a clock stamp");
+    MC_FromMinutes(MC_StampMinutes(r.run_min), &back);
+    CHECK(back.year == 2026U && back.month == 10U && back.day == 21U && back.hour == 14U && back.minute == 32U, "and it reads 21/10/2026 14:32 (%u/%u/%u %u:%u)", back.day, back.month, back.year, back.hour, back.minute);
+    /* the time of the trip is the time AT the trip: a later trip gets the later time */
+    D.fault = 0U; D.state = 2U; set_clock(2026U, 10U, 21U, 15U, 5U, 1U); run(12000U); D.state = 3U; D.fault = 2U; run(300U);
+    CHECK(MLog_Count(&A.log) >= 2U && MLog_Get(&A.log, 0U, &r) == 0 && MC_IsStamp(r.run_min), "a second trip is stamped too");
+    MC_FromMinutes(MC_StampMinutes(r.run_min), &back); CHECK(back.hour == 15U && back.minute == 5U, "with ITS time, 15:05 (%u:%u)", back.hour, back.minute);
+    /* the clock was never set (or the battery was lost): the log keeps using the running minutes, as before */
+    fresh(); set_clock(2000U, 1U, 1U, 0U, 0U, 0U); to_run(); run(12000U); D.state = 3U; D.fault = 8U; run(300U);
+    CHECK(MLog_Count(&A.log) == 1U && MLog_Get(&A.log, 0U, &r) == 0 && !MC_IsStamp(r.run_min), "a trip with the clock NOT set is logged with its running time, no stamp (%lu)", (unsigned long)r.run_min);
+    /* Date and Time in Set-Mode start from the application's clock; typing a date and saving gives ONE write request to the driver */
+    fresh(); set_clock(2026U, 10U, 21U, 14U, 32U, 1U); to_run(); run(500U);
+    combo(); for (n = 0; n < 40 && A.ui.item != 23U; n++) { tap(0, 100U); run(1600U); }
+    CROW(1, "Date"); CROW(2, "21/10/2026");
+    tap(1, 100U); CROW(2, "31/10/2026"); tap(0, 100U); run(100U); CROW(1, "Time");
+    combo(); run(300U);
+    CHECK(MApp_TakeClockSet(&A, &nt) == 1U && nt.year == 2026U && nt.month == 10U && nt.day == 31U && nt.hour == 14U && nt.minute == 32U, "saving: the driver is asked to set 31/10/2026 14:32");
+    CHECK(MApp_TakeClockSet(&A, &nt) == 0U, "and only once");
+    /* passing through without typing: no request */
+    fresh(); set_clock(2026U, 10U, 21U, 14U, 32U, 1U); to_run(); run(500U);
+    combo(); for (n = 0; n < 40 && A.ui.item != 23U; n++) { tap(0, 100U); run(1600U); } tap(0, 100U); run(100U); tap(0, 100U); run(100U); combo(); run(300U);
+    CHECK(MApp_TakeClockSet(&A, &nt) == 0U, "passing through Date and Time without typing: the clock is not touched");
+    /* a clock that is not set: the entry starts from a placeholder, and saving the placeholder as typed is a normal write */
+    fresh(); set_clock(2000U, 1U, 1U, 0U, 0U, 0U); to_run(); run(500U);
+    combo(); for (n = 0; n < 40 && A.ui.item != 23U; n++) { tap(0, 100U); run(1600U); } CROW(2, "01/01/2026");
+    printf("  clock in the application: faults stamped with the real-time clock (or the running time if it is not set), Date/Time start from the clock, one write request on save\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -491,6 +527,7 @@ int main(void)
     t_inverter_off();
     t_hello_and_echo();
     t_inrush_retries_app();
+    t_clock_app();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

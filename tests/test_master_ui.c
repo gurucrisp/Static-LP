@@ -162,6 +162,109 @@ static void t_screens(void)
     printf("  screens: splash, single-phase page and every fault text, Industrial pages, a missing phase or link\n");
 }
 
+
+/* ---- Date and Time in Set-Mode, and the time stamp in the fault log ---- */
+static void goto_item(uint8_t id) { int n; for (n = 0; n < 40 && U.item != id; n++) key(MK_MENU_SHORT); }
+static void with_clock(uint16_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi, uint8_t valid) { MDateTime_t c; c.year = y; c.month = mo; c.day = d; c.hour = h; c.minute = mi; MUI_SetClock(&U, &c, valid); }
+
+static void t_clock_items(void)
+{
+    int i, n = 0; uint8_t ids[40];
+    /* the order of the items: ... Restart Mode (17), Restart Time (18), Date (23), Time (24), Re-tune (19) ... Factory Reset (22) last. The ids stay what they were. */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set();
+    do { ids[n++] = U.item; key(MK_MENU_SHORT); } while (U.item != ids[0] && n < 40 && MUI_SetModeOpen(&U));
+    { int p18 = -1, p23 = -1, p24 = -1, p19 = -1; for (i = 0; i < n; i++) { if (ids[i] == 18U) p18 = i; if (ids[i] == 23U) p23 = i; if (ids[i] == 24U) p24 = i; if (ids[i] == 19U) p19 = i; }
+      CHECK(p18 >= 0 && p23 == p18 + 1 && p24 == p23 + 1 && p19 == p24 + 1 && ids[n - 1] == 22U, "the order is ... Restart Time, Date, Time, Re-tune ... Factory Reset (last)"); }
+    /* the items start from the clock and are drawn centred */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    CROW(1, "Date"); CROW(2, "21/10/2026"); key(MK_MENU_SHORT); CROW(1, "Time"); CROW(2, "14:32");
+    /* a clock that was never set: the entry starts from a placeholder, 01/01/2026 00:00 */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2000U, 1U, 1U, 0U, 0U, 0U); enter_set(); goto_item(23U); CROW(2, "01/01/2026"); key(MK_MENU_SHORT); CROW(2, "00:00");
+    /* editing: START adds one to the digit under the cursor, STOP moves the cursor over the digits (the separators are skipped), 9 wraps to 0 */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_START); CROW(2, "31/10/2026");                                                             /* the day's tens: 2 -> 3 */
+    key(MK_STOP);                                                                                      /* the cursor moves to the day's units */
+    for (i = 0; i < 9; i++) { key(MK_START); } CROW(2, "30/10/2026");                                       /* the day's units: 1 + 9 presses wraps to 0 */
+    key(MK_STOP); key(MK_START); CROW(2, "30/20/2026");                                                 /* the cursor moves to the month's tens: 1 -> 2 */
+    key(MK_MENU_SHORT); CROW(1, "Invalid Value"); tick(1600U); CROW(1, "Date"); CROW(2, "21/10/2026");
+    CHECK(!MUI_Take(&U, MUI_REQ_SET_CLOCK), "month 20 does not exist: refused, the whole date put back, still on the item");
+    /* a day that does not exist in that month: 30/04 + 1 = 31/04 */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 4U, 30U, 9U, 0U, 1U); enter_set(); goto_item(23U);
+    key(MK_STOP); key(MK_START); CROW(2, "31/04/2026"); key(MK_MENU_SHORT); CROW(1, "Invalid Value"); tick(1600U); CROW(2, "30/04/2026");
+    CHECK(1, "31 April is refused");
+    /* leap years: 29/02/2024 is good, 29/02/2025 is not */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2024U, 2U, 28U, 9U, 0U, 1U); enter_set(); goto_item(23U);
+    key(MK_STOP); key(MK_START); CROW(2, "29/02/2024"); key(MK_MENU_SHORT); CROW(1, "Time");
+    CHECK(1, "29 February 2024 is accepted: it moves on to Time");
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2025U, 2U, 28U, 9U, 0U, 1U); enter_set(); goto_item(23U);
+    key(MK_STOP); key(MK_START); CROW(2, "29/02/2025"); key(MK_MENU_SHORT); CROW(1, "Invalid Value");
+    CHECK(1, "29 February 2025 is refused");
+    /* a time: 14:32 -> 24:32 refused, 14:32 -> 15:32 accepted */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(24U);
+    key(MK_START); CROW(2, "24:32"); key(MK_MENU_SHORT); CROW(1, "Invalid Value"); tick(1600U); CROW(1, "Time"); CROW(2, "14:32");
+    key(MK_STOP); key(MK_START); CROW(2, "15:32");                                                       /* the hour's units: 4 -> 5 */
+    key(MK_MENU_SHORT); CROW(1, "Re-tune");
+    CHECK(1, "15:32 is accepted: it moves on to Re-tune");
+    printf("  Date and Time items: order, display, a clock never set, digit editing with wrap, impossible dates, months, leap years and times refused and put back\n");
+}
+
+
+static void add_log(uint8_t type, uint8_t ph, uint8_t code, uint16_t vin, uint16_t vout, uint16_t load, uint32_t min);
+static int clk_is(const MDateTime_t *c, uint16_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi) { return c->year == y && c->month == mo && c->day == d && c->hour == h && c->minute == mi; }
+static void t_clock_save(void)
+{
+    /* passing through Date and Time without typing changes nothing: the settings are saved, the clock is NOT touched */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U); key(MK_MENU_SHORT); key(MK_MENU_SHORT);
+    key(MK_COMBO); tick(100U);
+    CHECK(!MUI_SetModeOpen(&U) && !MUI_Take(&U, MUI_REQ_SET_CLOCK) && MUI_Take(&U, MUI_REQ_SAVE), "visiting Date and Time without typing: the settings are saved, the clock is NOT touched");
+    /* a new date, committed with MENU, then saved with MENU+LOG: ONE request, with the new date and the OLD time */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_START); key(MK_MENU_SHORT); CROW(1, "Time"); key(MK_COMBO); tick(100U);
+    CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SET_CLOCK) && clk_is(MUI_ClockToSet(&U), 2026U, 10U, 31U, 14U, 32U) && !MUI_Take(&U, MUI_REQ_SET_CLOCK), "a new date saved: one request, 31/10/2026 14:32 (the time untouched)");
+    CHECK(MUI_Take(&U, MUI_REQ_SAVE), "and the settings are saved with it");
+    /* a new time */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(24U);
+    key(MK_STOP); key(MK_START); key(MK_MENU_SHORT); key(MK_COMBO); tick(100U);
+    CHECK(MUI_Take(&U, MUI_REQ_SET_CLOCK) && clk_is(MUI_ClockToSet(&U), 2026U, 10U, 21U, 15U, 32U), "a new time saved: 21/10/2026 15:32 (the date untouched)");
+    /* typed but not committed with MENU, saved straight away with MENU+LOG: the typed value counts, as for every other item */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_START); key(MK_COMBO); tick(100U);
+    CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SET_CLOCK) && clk_is(MUI_ClockToSet(&U), 2026U, 10U, 31U, 14U, 32U), "a date typed and saved with MENU+LOG at once: it is used");
+    /* an impossible one typed, then MENU+LOG: refused, still in Set-Mode, nothing requested */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_STOP); key(MK_STOP); key(MK_START); CROW(2, "21/20/2026"); key(MK_COMBO);
+    CHECK(MUI_SetModeOpen(&U) && strstr(row(1), "Invalid Value") != NULL && !MUI_Take(&U, MUI_REQ_SET_CLOCK) && !MUI_Take(&U, MUI_REQ_SAVE), "month 20 typed, MENU+LOG: refused ('%s'), nothing saved, nothing requested", row(1));
+    /* Discard Changes: the typed date is NOT written */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_START); key(MK_MENU_SHORT); goto_item(21U); CROW(1, "Discard Changes"); key(MK_START); key(MK_MENU_SHORT); tick(100U);
+    CHECK(!MUI_SetModeOpen(&U) && !MUI_Take(&U, MUI_REQ_SET_CLOCK) && !MUI_Take(&U, MUI_REQ_SAVE), "Discard Changes: the typed date is not written to the clock");
+    /* the 30 s idle timeout: not written either */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
+    key(MK_START); key(MK_MENU_SHORT); tick(31000U);
+    CHECK(!MUI_SetModeOpen(&U) && !MUI_Take(&U, MUI_REQ_SET_CLOCK), "the 30 s idle timeout: not written");
+    /* the next Set-Mode session starts from the clock again, not from the earlier edit */
+    ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U); key(MK_START); key(MK_MENU_SHORT); key(MK_COMBO); tick(100U); (void)MUI_Take(&U, MUI_REQ_SET_CLOCK); (void)MUI_Take(&U, MUI_REQ_SAVE);
+    with_clock(2026U, 10U, 31U, 14U, 32U, 1U); enter_set(); goto_item(23U); CROW(2, "31/10/2026"); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_COMBO); tick(100U);
+    CHECK(!MUI_Take(&U, MUI_REQ_SET_CLOCK), "a later session that types nothing sends no request");
+    printf("  clock save: only a typed change reaches the clock, only on save (MENU or MENU+LOG), never after Discard or a timeout, an impossible one is refused\n");
+}
+
+static void t_log_stamp(void)
+{
+    MDateTime_t dt; dt.year = 2026U; dt.month = 10U; dt.day = 21U; dt.hour = 14U; dt.minute = 32U;
+    ui_reset(M_MODE_SINGLE); to_run();
+    add_log(MLOG_T_HEAT, 0U, 0U, 2250U, 2300U, 123U, 7425U);                       /* an old record: its running time, no stamp */
+    add_log(MLOG_T_IP_LV, 0U, 0U, 1700U, 1700U, 66U, MC_Stamp(&dt));               /* a record with the real-time clock */
+    key(MK_LOG_SHORT); ROW(0, "Fault Log 00/01");
+    ROW(3, "21/10/2026 14:32"); CHECK(strstr(row(2), "L  6.6A") != NULL || strstr(row(2), "6.6") != NULL, "the newest has its date and time, and the load at the trip is on row 2 ('%s' / '%s')", row(2), row(3));
+    key(MK_START); ROW(0, "Fault Log 01/01");
+    CHECK(strncmp(row(3), "Run", 3) == 0 && strstr(row(3), "123h45m") != NULL && strstr(row(2), "12.3") != NULL, "the older one has no clock time: it shows its running time ('%s')", row(3));
+    { MDateTime_t late; late.year = 2099U; late.month = 12U; late.day = 31U; late.hour = 23U; late.minute = 59U; add_log(MLOG_T_HEAT, 0U, 0U, 2250U, 2300U, 123U, MC_Stamp(&late)); }
+    key(MK_STOP); key(MK_STOP); ROW(3, "31/12/2099 23:59");
+    CHECK(1, "the last minute of the range is shown in full");
+    printf("  fault log time: a record with a clock stamp shows dd/mm/yyyy HH:MM, an older one its running time\n");
+}
+
 static void t_cal_page(void)
 {
     ui_reset(M_MODE_SINGLE); to_run(); D.load_da[0] = 66U; D.load_ok[0] = 1U; tick(100U);
@@ -217,7 +320,7 @@ static void t_log_viewer(void)
     key(MK_LOG_SHORT);
     ROW(0, "Fault Log 00/02"); ROW(1, "B Mains Unstable F08"); CHECK(strstr(row(2), "225") != NULL, "00 is the newest: B, Mains Unstable with the slave's code F08, 225 V ('%s' / '%s')", row(1), row(2));
     CHECK(strstr(row(3), "150h00m") != NULL, "the running time is shown in hours and minutes: 9000 min = 150h00m ('%s')", row(3));
-    key(MK_START); ROW(0, "Fault Log 01/02"); CHECK(strstr(row(1), "Y Overload") != NULL && strstr(row(3), "125h00m") != NULL && strstr(row(3), "120.0") != NULL, "START goes to an older one: Y, Overload, 120.0 A ('%s' / '%s')", row(1), row(3));
+    key(MK_START); ROW(0, "Fault Log 01/02"); CHECK(strstr(row(1), "Y Overload") != NULL && strstr(row(3), "125h00m") != NULL && strstr(row(2), "120.0") != NULL, "START goes to an older one: Y, Overload, 120.0 A (the load is on row 2 now) ('%s' / '%s')", row(1), row(3));
     key(MK_START); ROW(0, "Fault Log 02/02"); CHECK(strstr(row(1), "R Input LV") != NULL && strstr(row(3), "123h45m") != NULL, "the oldest: R, Input LV, 7425 min = 123h45m ('%s' / '%s')", row(1), row(3));
     key(MK_START); ROW(0, "Fault Log 02/02");
     CHECK(1, "START at the oldest stays");
@@ -243,7 +346,7 @@ static void t_setmode_nav(void)
     CHECK(ids[0] == 1U && ids[1] == 2U && ids[2] == 3U && ids[3] == 4U && ids[4] == 5U, "the first items are Mode, Calibration, Set Voltage, Max Correction, I/P LV");
     for (m = 0; m < n; m++) if (ids[m] == 13U || ids[m] == 14U || ids[m] == 15U) break;
     CHECK(m == n, "Single mode: Phase Sequence, Display Scroll and Scroll Time are not offered");
-    CHECK(n == 19, "Single mode with Auto restart offers 19 items (%d)", n);
+    CHECK(n == 21, "Single mode with Auto restart offers 21 items: the 19 before plus Date and Time (%d)", n);
     CHECK(ids[n - 1] == 22U, "the last is Factory Reset");
     CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SAVE), "one round of the items is complete: the MENU press on the last one LEAVES Set-Mode (saving), it does not start again");
     CHECK(strstr(row(0), "O/P") != NULL, "and Run-Mode is shown");
@@ -252,11 +355,11 @@ static void t_setmode_nav(void)
     ui_reset(M_MODE_INDUSTRIAL); to_run(); enter_set();
     n = walk(ids);
     { int has13 = 0, has14 = 0, has15 = 0; for (m = 0; m < n; m++) { if (ids[m] == 13U) has13 = 1; if (ids[m] == 14U) has14 = 1; if (ids[m] == 15U) has15 = 1; }
-      CHECK(has13 && has14 && has15 && n == 22, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 22 items (%d)", n); }
+      CHECK(has13 && has14 && has15 && n == 24, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 24 items (%d)", n); }
     /* Domestic: no Phase Sequence */
     ui_reset(M_MODE_DOMESTIC); to_run(); enter_set();
     n = walk(ids);
-    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 21, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 21 items (%d)", n); }
+    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 23, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 23 items (%d)", n); }
     /* Manual restart hides Restart Time; Scroll No hides Scroll Time */
     ui_reset(M_MODE_INDUSTRIAL); S.restart_auto = 0U; S.scroll = 0U; to_run(); enter_set();
     n = walk(ids);
@@ -457,6 +560,9 @@ int main(void)
     t_keys_fuzz();
     t_screens();
     t_pages();
+    t_clock_items();
+    t_clock_save();
+    t_log_stamp();
     t_cal_page();
     t_log_viewer();
     t_setmode_nav();

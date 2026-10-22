@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "master_monitor.h"
+#if (MASTER_RTC_ENABLED == 1)
+#include "master_rtc.h"
+#endif
 #include "lcd.h"
 #include "link_v2.h"
 
@@ -517,6 +520,7 @@ void MasterApp_Run(void)
     MonLcd_t      lcd;
     uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
     uint16_t      ct_x16 = 0U;
+    MDateTime_t   clk = { 0U, 0U, 0U, 0U, 0U }; uint8_t clk_ok = 0U; uint32_t t_clk = 0U;      /* the real-time clock as last read, and when */
     uint8_t       seq_tx = 0U, have_last = 0U, k_id = 1U;
     MCtlOut_t     last;
 
@@ -525,6 +529,9 @@ void MasterApp_Run(void)
     MonLcd_Init(&lcd);
     last.run = 0U; last.clr = 0U; last.setv_dv = 0U; last.maxc_dv = 0U;
     MApp_Init(&app, MFlashG0_Iface(), MAPP_PAGE_SETTINGS_A, MAPP_PAGE_SETTINGS_B, MAPP_PAGE_LOG_A, MAPP_PAGE_LOG_B, HAL_GetTick());
+#if (MASTER_RTC_ENABLED == 1)
+    MRtc_Init();                                                            /* the real-time clock: crystal + battery; a running clock is left alone */
+#endif
     MApp_InitCal(&app, MAPP_PAGE_CALIB_A, MAPP_PAGE_CALIB_B);
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
     MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
@@ -565,8 +572,15 @@ void MasterApp_Run(void)
                 t_ct = now; ct_x16 = ct_read_x16();
             }
             d.ct_x16 = ct_x16; d.ct_raw = (uint8_t)(t_ct != 0U); d.load_da = 0U; d.load_ok = 0U;
+#if (MASTER_RTC_ENABLED == 1)
+            if (((uint32_t)(now - t_clk) >= 1000U) || (t_clk == 0U)) { t_clk = now; clk_ok = MRtc_Get(&clk); }        /* about once a second */
+#endif
+            d.clock = clk; d.clock_ok = clk_ok;
             MApp_Step(&app, key_down(MKEY_MENU_PORT, MKEY_MENU_PIN), key_down(MKEY_START_PORT, MKEY_START_PIN), key_down(MKEY_STOP_PORT, MKEY_STOP_PIN),
                       key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);
+#if (MASTER_RTC_ENABLED == 1)
+            {   MDateTime_t nt; if (MApp_TakeClockSet(&app, &nt) != 0U) { MRtc_Set(&nt); clk = nt; clk_ok = 1U; t_clk = now; } }      /* a Date or Time saved in Set-Mode */
+#endif
             if (MApp_ShowsMonitor(&app) != 0U) Mon_Compose(&g_mon, now, want);       /* the monitor diagnostics, one MENU press away */
             if (MApp_ShowsDiag(&app) != 0U) MApp_Diag(&app, now, want);               /* the control diagnostics, two MENU presses away */
             {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction or the clear counter changes (Set-Mode = run 0 = the slave stops its PWM) */

@@ -14,6 +14,7 @@
 #include "m_keys.h"
 #include "m_settings.h"
 #include "m_log.h"
+#include "m_clock.h"
 #include "m_faults.h"
 #ifdef __cplusplus
 extern "C" {
@@ -33,7 +34,8 @@ extern "C" {
 #define MUI_REQ_RETUNE      0x08U
 #define MUI_REQ_START       0x10U   /* the START key in Run-Mode */
 #define MUI_SERVICE_IDLE_MS 60000U   /* a service page (monitor, diagnostics, load calibration) returns to the Run screen after this long without a key */
-#define MUI_REQ_STOP        0x20U   /* the STOP key in Run-Mode  */
+#define MUI_REQ_STOP        0x20U
+#define MUI_REQ_SET_CLOCK   0x80U   /* Set-Mode was saved with a new Date or Time: the value is MUI_ClockToSet() */   /* the STOP key in Run-Mode  */
 #define MUI_REQ_CAL_SAVE    0x40U   /* LOG on the Load Calibration page: the entered meter value is MUI_CalValue() */
 /* what the app can do: a request the app cannot serve is answered "Not Available" on the screen */
 #define MUI_FEAT_CALIBRATE  0x01U
@@ -62,6 +64,8 @@ typedef struct
     const MLimits_t *lim;             /* what the slave announced (NULL until it has)                            */
     MLog_t      *log;                 /* the fault log                                                           */
     uint8_t      screen, item, cursor, page, req, features;
+    MDateTime_t  clk_now, clk_work, clk_backup, clk_set;   /* the real-time clock now; the Date/Time being edited, its backup at item entry; what is to be written to the clock on save */
+    uint8_t      clk_now_valid, clk_active, clk_dirty, clk_pending;    /* the clock is set; an edit session is open; a digit was typed on this item; a changed value waits for the save */
     uint8_t      cal_cursor, cal_init;  /* the Load Calibration page: which digit is being edited; the entry starts from the reading */
     uint16_t     cal_val;               /* the entered meter value, tenths of an amp */
     uint8_t      pw[3], yn;           /* the password being typed; the Yes/No of an action item                  */
@@ -85,6 +89,8 @@ uint8_t MUI_Take(MUI_t *u, uint8_t req);         /* 1 once if that request is pe
 void    MUI_Notify(MUI_t *u, const char *line1, const char *line2, uint32_t now_ms);   /* a message for 1.5 s (for example "Save Failed") */
 /* single-phase Run-Mode: MENU toggles between the Run screen and the monitor diagnostics (the app draws those) */
 uint8_t MUI_ShowsMonitor(const MUI_t *u);
+void     MUI_SetClock(MUI_t *u, const MDateTime_t *now, uint8_t valid);   /* the application tells the UI the real-time clock every step (valid = the RTC has been set) */
+const MDateTime_t *MUI_ClockToSet(const MUI_t *u);                        /* after MUI_Take(MUI_REQ_SET_CLOCK): the date and time to write to the clock */
 uint16_t MUI_CalValue(const MUI_t *u);      /* the value typed on the Load Calibration page, tenths of an amp */
 uint8_t MUI_ShowsCal(const MUI_t *u);         /* single-phase, the fourth MENU page: Load Calibration (the UI draws it) */
 uint8_t MUI_ShowsDiag(const MUI_t *u);        /* single-phase, the third MENU page: the control diagnostics (the app draws them) */

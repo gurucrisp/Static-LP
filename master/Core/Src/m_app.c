@@ -148,7 +148,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         in.ph[0].heat = d->heat; in.ph[0].ct_peak = d->ct_peak;
         in.ph[0].slave_state = d->state; in.ph[0].state_valid = d->have;                    /* PWM off = load off */
         /* the Y and B slaves have no link yet: in Industrial and Domestic they count as missing, so those modes do not start */
-        in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = now / 60000UL;
+        in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : (now / 60000UL);       /* the log time: the real-time clock when it is set, else the running minutes */
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
         {   MSettings_t es = a->settings;                                                /* what the engine judges by */
             if (a->no_cuts != 0U) { es.ip_lv = 1U; es.ip_hv = 999U; es.op_lv = 1U; es.op_hv = 999U; }   /* TEST: no voltage limits */
@@ -183,6 +183,8 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         else a->settings_from_flash = 1U;
     }
     if (MUI_Take(&a->ui, MUI_REQ_CLEAR_LOG)) (void)MLog_Clear(&a->log);
+    MUI_SetClock(&a->ui, &d->clock, d->clock_ok);                                       /* the Date and Time items start from the clock */
+    if (MUI_Take(&a->ui, MUI_REQ_SET_CLOCK)) { a->clk_set = *MUI_ClockToSet(&a->ui); a->clk_set_pending = 1U; }
     if (MUI_Take(&a->ui, MUI_REQ_CALIBRATE))
     {   /* ZERO: Set-Mode "Calibration" = Yes. The output is off in Set-Mode, so there is no load: the reading now IS the zero. */
         if ((d->ct_raw == 0U) || (a->cstore.fl == 0)) MUI_Notify(&a->ui, "Calibration", "Not Available", now);
@@ -209,6 +211,7 @@ uint8_t MApp_SetModeOpen(const MApp_t *a) { return MUI_SetModeOpen(&a->ui); }
 const MCtlOut_t *MApp_Control(const MApp_t *a) { return &a->ctl_out; }
 uint8_t MApp_ControlValid(const MApp_t *a) { return a->ctl_valid; }
 void MApp_NoteFrameSent(MApp_t *a) { a->m_sent++; }
+uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out) { if (a->clk_set_pending == 0U) return 0U; *out = a->clk_set; a->clk_set_pending = 0U; return 1U; }
 uint8_t MApp_HelloDue(MApp_t *a, uint32_t now)
 {
     if ((a->last.e_valid == 0U) || (a->last.h_valid != 0U)) { a->hello_n = 0U; return 0U; }

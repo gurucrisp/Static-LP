@@ -94,9 +94,9 @@ static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
 static const char *mode_text(uint8_t m) { return (m == (uint8_t)M_MODE_INDUSTRIAL) ? "Industrial" : ((m == (uint8_t)M_MODE_DOMESTIC) ? "Domestic" : "Single Phase"); }
 
 /* ---------------------------------------------------------------------------------------------------- Set-Mode items */
-typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN } MKind_t;
+typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN, K_DATE, K_TIME } MKind_t;
 typedef struct { uint8_t id; const char *name; uint8_t kind, digits; char unit; } MItem_t;
-#define N_ITEMS 22U
+#define N_ITEMS 24U
 static const MItem_t ITEMS[N_ITEMS] =
 {
     {  1, "Mode",                K_MODE,    0U, ' ' }, {  2, "Calibration",         K_YN,   0U, ' ' }, {  3, "Set Voltage",         K_NUM,  3U, 'V' },
@@ -105,6 +105,7 @@ static const MItem_t ITEMS[N_ITEMS] =
     { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' },
     { 13, "Phase Sequence",      K_YN,      0U, ' ' }, { 14, "Display Scroll",      K_YN,   0U, ' ' }, { 15, "Scroll Time",         K_NUM,  2U, 's' },
     { 16, "Password",            K_NUM,     3U, ' ' }, { 17, "Restart Mode",        K_AUTOMAN, 0U, ' ' }, { 18, "Restart Time",     K_NUM,  3U, 's' },
+    { 23, "Date",                K_DATE,    8U, ' ' }, { 24, "Time",                K_TIME, 4U, ' ' },
     { 19, "Re-tune",             K_YN,      0U, ' ' }, { 20, "Clear Fault Log",     K_YN,   0U, ' ' }, { 21, "Discard Changes",     K_YN,   0U, ' ' },
     { 22, "Factory Reset",       K_YN,      0U, ' ' }
 };
@@ -153,17 +154,55 @@ static uint8_t item_of_error(MSErr_t e)
 }
 
 static uint8_t first_item(const MUI_t *u) { uint8_t i; for (i = 1U; i <= N_ITEMS; i++) if (visible(&u->work, i)) return i; return 1U; }
-static uint8_t next_item(const MUI_t *u, uint8_t from) { uint8_t i = from, n; for (n = 0U; n < N_ITEMS; n++) { i = (uint8_t)((i % N_ITEMS) + 1U); if (visible(&u->work, i)) return i; } return from; }
+static uint8_t item_index(uint8_t id) { uint32_t i; for (i = 0U; i < N_ITEMS; i++) if (ITEMS[i].id == id) return (uint8_t)i; return 0U; }
+/* the next VISIBLE item in the order of the table (the ids are fixed, the order is not: Date and Time sit after Restart Time) */
+static uint8_t next_item(const MUI_t *u, uint8_t from) { uint8_t i = item_index(from), n; for (n = 0U; n < N_ITEMS; n++) { i = (uint8_t)((i + 1U) % N_ITEMS); if (visible(&u->work, ITEMS[i].id)) return ITEMS[i].id; } return from; }
 
 static void enter_item(MUI_t *u, uint8_t id)
 {
-    u->item = id; u->cursor = 0U; u->yn = 0U;
+    u->item = id; u->cursor = 0U; u->yn = 0U; u->clk_dirty = 0U;
     u->ed_backup = item_get(&u->work, id);
+    if ((id == 23U) || (id == 24U))
+    {   /* Date and Time are edited on one working copy that starts from the clock (or a placeholder if it was never set); it is written to the clock only when Set-Mode is SAVED */
+        if (u->clk_active == 0U)
+        {
+            if (u->clk_now_valid != 0U) u->clk_work = u->clk_now;
+            else { u->clk_work.year = 2026U; u->clk_work.month = 1U; u->clk_work.day = 1U; u->clk_work.hour = 0U; u->clk_work.minute = 0U; }
+            u->clk_active = 1U; u->clk_pending = 0U;
+        }
+        u->clk_backup = u->clk_work;
+    }
+}
+/* the part of the working Date or Time that item `id` edits is valid */
+static uint8_t clk_part_valid(const MUI_t *u, uint8_t id)
+{
+    const MDateTime_t *t = &u->clk_work;
+    if (id == 24U) return (uint8_t)((t->hour <= 23U) && (t->minute <= 59U));
+    return (uint8_t)((t->year >= MC_YEAR_MIN) && (t->year <= MC_YEAR_MAX) && (t->month >= 1U) && (t->month <= 12U) && (t->day >= 1U) && (t->day <= MC_DaysInMonth(t->year, t->month)));
+}
+/* one digit up (9 wraps to 0, no carry), the digits of dd/mm/yyyy or HH:MM */
+static void clk_digit_inc(MUI_t *u, uint8_t id)
+{
+    MDateTime_t *t = &u->clk_work; uint8_t dg[8]; uint16_t y;
+    if (id == 23U)
+    {
+        y = t->year; dg[0] = (uint8_t)((t->day / 10U) % 10U); dg[1] = (uint8_t)(t->day % 10U); dg[2] = (uint8_t)((t->month / 10U) % 10U); dg[3] = (uint8_t)(t->month % 10U);
+        dg[4] = (uint8_t)((y / 1000U) % 10U); dg[5] = (uint8_t)((y / 100U) % 10U); dg[6] = (uint8_t)((y / 10U) % 10U); dg[7] = (uint8_t)(y % 10U);
+        dg[u->cursor & 7U] = (uint8_t)((dg[u->cursor & 7U] + 1U) % 10U);
+        t->day = (uint8_t)(dg[0] * 10U + dg[1]); t->month = (uint8_t)(dg[2] * 10U + dg[3]); t->year = (uint16_t)(dg[4] * 1000U + dg[5] * 100U + dg[6] * 10U + dg[7]);
+    }
+    else
+    {
+        dg[0] = (uint8_t)((t->hour / 10U) % 10U); dg[1] = (uint8_t)(t->hour % 10U); dg[2] = (uint8_t)((t->minute / 10U) % 10U); dg[3] = (uint8_t)(t->minute % 10U);
+        dg[u->cursor & 3U] = (uint8_t)((dg[u->cursor & 3U] + 1U) % 10U);
+        t->hour = (uint8_t)(dg[0] * 10U + dg[1]); t->minute = (uint8_t)(dg[2] * 10U + dg[3]);
+    }
+    u->clk_dirty = 1U;
 }
 
 static void open_set(MUI_t *u, uint32_t now)
 {
-    u->work = *u->live; u->screen = (uint8_t)MUI_SET; u->t_key = now; u->msg_on = 0U;
+    u->work = *u->live; u->screen = (uint8_t)MUI_SET; u->t_key = now; u->msg_on = 0U; u->clk_active = 0U; u->clk_pending = 0U; u->clk_dirty = 0U;
     enter_item(u, first_item(u));
 }
 
@@ -179,6 +218,8 @@ void MUI_SetFeatures(MUI_t *u, uint8_t feat) { u->features = feat; }
 uint8_t MUI_SetModeOpen(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_SET) || (u->screen == (uint8_t)MUI_PW)); }
 uint8_t MUI_Take(MUI_t *u, uint8_t req) { if ((u->req & req) != 0U) { u->req = (uint8_t)(u->req & ~req); return 1U; } return 0U; }
 void MUI_Notify(MUI_t *u, const char *l1, const char *l2, uint32_t now) { msg_set(u, l1, l2, now, 0U); }
+void MUI_SetClock(MUI_t *u, const MDateTime_t *now, uint8_t valid) { u->clk_now = *now; u->clk_now_valid = (uint8_t)(valid != 0U); }
+const MDateTime_t *MUI_ClockToSet(const MUI_t *u) { return &u->clk_set; }
 uint16_t MUI_CalValue(const MUI_t *u) { return u->cal_val; }
 uint8_t MUI_ShowsCal(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsDiag(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 2U) && (u->msg_on == 0U)); }
@@ -194,11 +235,14 @@ static void leave_set_saved(MUI_t *u, uint32_t now)
         return;
     }
     *u->live = u->work; u->req |= MUI_REQ_SAVE;
+    if ((u->clk_pending != 0U) && (MC_Valid(&u->clk_work) != 0U)) { u->clk_set = u->clk_work; u->req |= MUI_REQ_SET_CLOCK; }      /* a changed Date or Time goes to the clock now, with the settings */
+    u->clk_active = 0U; u->clk_pending = 0U; u->clk_dirty = 0U;
     u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
     msg_set(u, "Settings", "Saved", now, 1U);
 }
 static void leave_set_discard(MUI_t *u, uint32_t now, const char *l1, const char *l2)
 {
+    u->clk_active = 0U; u->clk_pending = 0U; u->clk_dirty = 0U;                          /* a Date or Time edit is discarded with everything else */
     u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
     msg_set(u, l1, l2, now, 1U);
 }
@@ -212,7 +256,7 @@ static void digit_inc(MUI_t *u, const MItem_t *it)
     item_set(&u->work, it->id, v);
 }
 
-static uint8_t is_last_item(const MUI_t *u) { return (uint8_t)(next_item(u, u->item) <= u->item); }     /* the next visible item would wrap round to the first */
+static uint8_t is_last_item(const MUI_t *u) { return (uint8_t)(item_index(next_item(u, u->item)) <= item_index(u->item)); }     /* the next visible item would wrap round to the first */
 
 static void set_commit(MUI_t *u, uint32_t now)
 {
@@ -229,6 +273,17 @@ static void set_commit(MUI_t *u, uint32_t now)
             else if (it->id == 22U) { MS_Defaults(&u->work); MS_ApplyLim(&u->work, u->lim); }
         }
         if (is_last_item(u)) { leave_set_saved(u, now); return; }          /* one round is complete: leave Set-Mode (saving), do not start again */
+        enter_item(u, next_item(u, u->item));
+        return;
+    }
+    if ((it->id == 23U) || (it->id == 24U))
+    {
+        if (u->clk_dirty != 0U)
+        {
+            if (clk_part_valid(u, it->id) == 0U) { u->clk_work = u->clk_backup; u->clk_dirty = 0U; msg_set(u, "Invalid Value", it->name, now, 0U); return; }      /* e.g. 31/02: put back, stay */
+            u->clk_pending = 1U;
+        }
+        if (is_last_item(u)) { leave_set_saved(u, now); return; }
         enter_item(u, next_item(u, u->item));
         return;
     }
@@ -305,6 +360,11 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         if (ev == MK_COMBO)
         {   /* MENU+LOG saves the live edit without a MENU commit: a Set Voltage or Max Correction typed on the item must still move the limits that follow their defaults, exactly as a MENU would */
             if ((it->id == 3U) || (it->id == 4U)) { MSettings_t before = u->work; item_set(&before, it->id, u->ed_backup); MS_Rederive(&u->work, &before, u->lim); }
+            if (((it->id == 23U) || (it->id == 24U)) && (u->clk_dirty != 0U))
+            {   /* the same as a MENU on the item: a typed Date or Time that does not exist is refused, a good one waits for the save */
+                if (clk_part_valid(u, it->id) == 0U) { u->clk_work = u->clk_backup; u->clk_dirty = 0U; msg_set(u, "Invalid Value", it->name, now, 0U); break; }
+                u->clk_pending = 1U;
+            }
             leave_set_saved(u, now);
         }
         else if (ev == MK_MENU_SHORT) set_commit(u, now);
@@ -313,9 +373,10 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
             else if (it->kind == (uint8_t)K_MODE) { item_set(&u->work, 1U, (uint16_t)((u->work.mode + 1U) % 3U)); }
             else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
+            else if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME)) clk_digit_inc(u, it->id);
             else digit_inc(u, it);
         }
-        else if (ev == MK_STOP) { if (it->kind == (uint8_t)K_NUM) u->cursor = (uint8_t)((u->cursor + 1U) % it->digits); }
+        else if (ev == MK_STOP) { if ((it->kind == (uint8_t)K_NUM) || (it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME)) u->cursor = (uint8_t)((u->cursor + 1U) % it->digits); }
         break;
     }
     default: break;
@@ -398,8 +459,18 @@ static void render_log(const MUI_t *u, Frame_t f)
           {   char cd[6]; f_put(f, 1U, 2U, (r.type == MLOG_T_MAINS) ? "Mains Unstable" : "Power Stage"); cd[0] = 'F'; cd[1] = (char)('0' + ((r.slave_code / 10U) % 10U)); cd[2] = (char)('0' + (r.slave_code % 10U)); cd[3] = '\0'; f_put_right(f, 1U, cd); }
           else f_put(f, 1U, 2U, full_text(r.type)); }
         f_put(f, 2U, 0U, "I"); int_put(f, 2U, 1U, r.vin_dv, 4U, 1U); f_put(f, 2U, 6U, "O"); int_put(f, 2U, 7U, r.vout_dv, 4U, 1U);
+        f_put(f, 2U, 12U, "L"); tenths_put(f, 2U, 13U, r.load_da, 5U, 1U); f_put(f, 2U, 18U, "A");                  /* the load at the trip */
+        if (MC_IsStamp(r.run_min) != 0U)
+        {   /* the real-time clock stamp: "21/10/2026 14:32" */
+            MDateTime_t dt; char t[20]; MC_FromMinutes(MC_StampMinutes(r.run_min), &dt);
+            t[0] = (char)('0' + (dt.day / 10U)); t[1] = (char)('0' + (dt.day % 10U)); t[2] = '/'; t[3] = (char)('0' + (dt.month / 10U)); t[4] = (char)('0' + (dt.month % 10U)); t[5] = '/';
+            t[6] = (char)('0' + ((dt.year / 1000U) % 10U)); t[7] = (char)('0' + ((dt.year / 100U) % 10U)); t[8] = (char)('0' + ((dt.year / 10U) % 10U)); t[9] = (char)('0' + (dt.year % 10U)); t[10] = ' ';
+            t[11] = (char)('0' + (dt.hour / 10U)); t[12] = (char)('0' + (dt.hour % 10U)); t[13] = ':'; t[14] = (char)('0' + (dt.minute / 10U)); t[15] = (char)('0' + (dt.minute % 10U)); t[16] = '\0';
+            f_put(f, 3U, 0U, t);
+        }
+        else
         { uint32_t h = r.run_min / 60U, m = r.run_min % 60U; uint32_t k, n2 = 0U; char t[16];
-          f_put(f, 3U, 0U, "L"); tenths_put(f, 3U, 1U, r.load_da, 5U, 1U);
+          f_put(f, 3U, 0U, "Run");                                                                                       /* no clock time: how long the unit had been running */
           { char d[12]; uint32_t q = h; if (q == 0U) d[n2++] = '0'; while (q > 0U) { d[n2++] = (char)('0' + (q % 10U)); q /= 10U; } for (k = 0U; k < n2; k++) t[k] = d[n2 - 1U - k]; }
           t[n2++] = 'h'; t[n2++] = (char)('0' + (m / 10U)); t[n2++] = (char)('0' + (m % 10U)); t[n2++] = 'm'; t[n2] = '\0'; f_put_right(f, 3U, t); }
         (void)c; }
@@ -416,6 +487,24 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
     if (it->kind == (uint8_t)K_MODE) { f_center(f, 2U, mode_text(u->work.mode)); return; }
     if (it->kind == (uint8_t)K_YN) { f_center(f, 2U, (item_get(&u->work, it->id) != 0U) ? "Yes" : "No"); return; }
     if (it->kind == (uint8_t)K_AUTOMAN) { f_center(f, 2U, (u->work.restart_auto != 0U) ? "Auto" : "Manual"); return; }
+    if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME))
+    {   /* dd/mm/yyyy or HH:MM, centred, the blinking underscore under the digit being edited */
+        const MDateTime_t *t = &u->clk_work; char s[12]; uint32_t len, pos, col0;
+        if (it->kind == (uint8_t)K_DATE)
+        {
+            s[0] = (char)('0' + ((t->day / 10U) % 10U)); s[1] = (char)('0' + (t->day % 10U)); s[2] = '/'; s[3] = (char)('0' + ((t->month / 10U) % 10U)); s[4] = (char)('0' + (t->month % 10U)); s[5] = '/';
+            s[6] = (char)('0' + ((t->year / 1000U) % 10U)); s[7] = (char)('0' + ((t->year / 100U) % 10U)); s[8] = (char)('0' + ((t->year / 10U) % 10U)); s[9] = (char)('0' + (t->year % 10U)); s[10] = '\0'; len = 10U;
+            pos = (u->cursor < 2U) ? u->cursor : ((u->cursor < 4U) ? (u->cursor + 1U) : (u->cursor + 2U));
+        }
+        else
+        {
+            s[0] = (char)('0' + ((t->hour / 10U) % 10U)); s[1] = (char)('0' + (t->hour % 10U)); s[2] = ':'; s[3] = (char)('0' + ((t->minute / 10U) % 10U)); s[4] = (char)('0' + (t->minute % 10U)); s[5] = '\0'; len = 5U;
+            pos = (u->cursor < 2U) ? u->cursor : (u->cursor + 1U);
+        }
+        f_center(f, 2U, s); col0 = (MUI_COLS - len) / 2U;
+        if (blink_on(u, now) != 0U) f_put(f, 3U, col0 + pos, "_");
+        return;
+    }
     {   char z[8]; fmt_zero(z, item_get(&u->work, it->id), it->digits);
         for (i = 0U; z[i] != '\0'; i++) v[n++] = z[i];
         if (it->unit != ' ') { v[n++] = ' '; v[n++] = it->unit; }
