@@ -223,3 +223,16 @@ A date or time that does not exist (month 20, 31 April, 29 February 2025, hour 2
 * row 3: `BD:8303 IC:00F0`: the raw RCC backup-domain register and RTC status register (low 16 bits), for diagnosis.
 Read it right after you set the date and time and again a minute later, and send me the four rows if the clock is not set or the time does not advance.
 The service pages are now five: monitor, diagnostics, Load Calibration, Clock (LOG, then MENU x1 to x4).
+
+
+## Overheat, inrush restarts and the countdown (v0.9.20)
+**Overheat (PA5, active low):** the pin must stay low for the *Overheat Trip Delay* (Set-Mode item 12) before the unit trips ("Heat", logged, buzzer per mode). While it is low nothing counts down. When it has been high for the *Restart Time* the unit restarts by itself (Restart Mode Auto);
+in Manual only START restarts it. The third trip within 30 minutes needs START even in Auto (a failing fan or a blocked vent would otherwise heat the unit up again every few minutes). If your thermostat releases right at its trip point it will trip again after every restart: use a longer Restart Time or a thermostat with hysteresis.
+**Inrush / power stage:** the first trip is retried after the Restart Time (never less than 30 s), up to the retry count (3 by default; `MASTER_INRUSH_RETRIES`). Then a 5-minute wait and ONE more attempt; if that trips too, the unit latches. START restarts at once. With `MASTER_INRUSH_RETRIES 0` (commissioning) the first trip latches until power off and on.
+**The status row** shows `Inrush      Rst 4:32` (Power Stage, Heat likewise) while the automatic restart counts down; a latched fault shows its code.
+
+## Voltage calibration (v0.9.20)
+LOG, then MENU x5 = **I/P Calibration**; MENU = **O/P Calibration**; MENU again = the Run screen after the next page... (the seven service pages are: monitor, diagnostics, Load Calibration, Clock, I/P Calibration, O/P Calibration, back to the Run screen).
+Each page shows the slave's reading (`Reading 226.8 V`) and the value you type (`Actual 230.2 V`): START changes the digit, STOP moves the cursor, LOG sends it. **The unit must be stopped**: while it runs the page says `Press STOP first` and STOP stops it.
+Typing **000.0** and LOG resets that channel to nominal. Answers: `Calibrated  I/P +1.50 %` (the total correction against nominal), `No Steady Signal Min 50 V`, `Out Of Range Max +/-10 %`, `Stop The Unit First`, `Save Failed Flash Error`, `Not Supported Update The Slave`, `No Answer From The Slave` (after 3 s).
+See docs/VOLTAGE_CALIBRATION.md for the bench procedure.

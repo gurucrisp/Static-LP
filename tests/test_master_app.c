@@ -507,6 +507,78 @@ static void t_clock_page(void)
     printf("  clock page: the date and time, the source (crystal / LSI / none), whether it counts as set, the raw registers\n");
 }
 
+
+static void t_heat_inrush_app(void)
+{
+    /* overheat through the application: the pin must stay low for the Overheat Trip Delay (10 s), then "Heat"; the countdown only runs once the pin is high again */
+    fresh(); to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running");
+    D.heat = 1U; run(8000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "the pin low for 8 s: nothing yet");
+    run(2500U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && strncmp(row(3), "Heat", 4) == 0 && strstr(row(3), "Rst") == NULL, "after the 10 s delay: tripped, 'Heat', no countdown while the pin is still low (%s)", row(3));
+    D.heat = 0U; run(1500U); CHECK(strncmp(row(3), "Heat", 4) == 0 && strstr(row(3), "Rst 0:0") != NULL, "the pin high: the Restart Time counts down on the screen (%s)", row(3));
+    run(5000U); CHECK(MApp_Control(&A)->run == 1U, "and it restarts by itself when it reaches zero");
+    /* inrush: the retry is 30 s away, counted on the screen; the first inrush of a commissioning build (0 retries) latches and shows its code */
+    fresh(); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(300U);
+    CHECK(strncmp(row(3), "Inrush", 6) == 0 && (strstr(row(3), "Rst 0:2") != NULL || strstr(row(3), "Rst 0:30") != NULL), "an inrush trip with retries allowed: 'Inrush ... Rst 0:30' counting down (%s)", row(3));
+    fresh(); MApp_SetInrushRetries(&A, 0U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(300U);
+    ROW(3, "Inrush           F02");
+    D.fault = 0U; D.state = 0U; run(120000U); ROW(3, "Inrush           F02");
+    CHECK(MApp_Control(&A)->run == 0U, "commissioning (0 retries): latched, no countdown, no restart (the code stays on the screen)");
+    printf("  heat and inrush in the application: the delay, the countdown, the restart, and the latch of a commissioning build\n");
+}
+
+
+static void vcal_open(uint8_t page_menus) { int q; tap(3, 100U); for (q = 0; q < (int)page_menus; q++) tap(0, 100U); run(200U); }
+static void stop_unit(void) { tap(2, 100U); D.state = 0U; run(500U); }
+static void t_vcal_app(void)
+{
+    MCalK_t k; int n; uint8_t id1;
+    /* the unit is RUNNING: refused on the master, nothing is sent */
+    fresh(); D.vin_dv = 2268U; D.vout_dv = 2275U; to_run(); run(12000U); vcal_open(5);
+    CHECK(MUI_ShowsVCal(&A.ui) == 1U, "the I/P Calibration page is open");
+    tap(3, 100U); run(100U);
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && strstr(row(1), "Stop The Unit") != NULL, "unit running: 'Stop The Unit First', no command is sent ('%s')", row(1));
+    /* stopped: LOG sends CALV with the typed value, then retries with the SAME id every 200 ms, three times in all */
+    run(2000U); stop_unit(); CHECK(A.eout.run[0] == 0U, "STOP stopped the unit");
+    tap(1, 100U); run(100U);                                                                         /* still on the I/P page: 226.8 -> 227.8 */
+    tap(3, 100U); run(50U);
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_CALV && k.num == 2278, "stopped: LOG sends CALV with 2278 (227.8 V) (cmd %u, num %d)", k.cmd, (int)k.num);
+    id1 = k.id; CHECK(MApp_TakeKCommand(&A, &k, T) == 0U, "and not again at once");
+    n = 1; { uint32_t g; uint8_t same = 1U; for (g = 0U; g < 2900U; g += 10U) { run(10U); if (MApp_TakeKCommand(&A, &k, T)) { n++; if (k.id != id1) same = 0U; } } CHECK(n == 3 && same, "it is sent 3 times in all, 200 ms apart, always with the same id (%d times)", n); }
+    run(200U); CHECK(strstr(row(1), "No Answer") != NULL, "after 3 s without an answer: 'No Answer From The Slave' ('%s')", row(1));
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 0U, "and nothing more is sent");
+    /* the answer */
+    run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); id1 = k.id;                  /* still on the I/P page */
+    MApp_OnKResult(&A, (uint8_t)(id1 + 1U), 0U, 10152); run(100U); CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && strstr(row(1), "Calibrated") == NULL, "an answer with another id is ignored");
+    MApp_OnKResult(&A, id1, 0U, 10152); run(100U);
+    CHECK(strstr(row(1), "Calibrated") != NULL && strstr(row(2), "I/P +1.52 %") != NULL, "R,id,0,10152: 'Calibrated', 'I/P +1.52 %%' ('%s' / '%s')", row(1), row(2));
+    run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, 0U, 9920U); run(100U);
+    CHECK(strstr(row(2), "I/P -0.80 %") != NULL, "a correction below nominal: 'I/P -0.80 %%' ('%s')", row(2));
+    run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, 0U, 11000U); run(100U);
+    CHECK(strstr(row(2), "I/P +10.00 %") != NULL, "+10.00 %% fits ('%s')", row(2));
+    /* every refusal has its own words */
+    { static const struct { uint8_t st; const char *l1; } E[] = { {1U, "Bad Value"}, {2U, "No Steady Signal"}, {3U, "Out Of Range"}, {4U, "Stop The Unit"}, {5U, "Save Failed"}, {6U, "Not Supported"}, {7U, "Slave Busy"}, {99U, "Calibration"} };
+      unsigned q; for (q = 0U; q < sizeof E / sizeof E[0]; q++) { run(2000U); tap(3, 100U); run(50U); (void)MApp_TakeKCommand(&A, &k, T); MApp_OnKResult(&A, k.id, E[q].st, 0); run(100U); CHECK(strstr(row(1), E[q].l1) != NULL, "status %u: '%s' ('%s')", E[q].st, E[q].l1, row(1)); } }
+    /* only one at a time */
+    run(2000U); tap(3, 100U); run(1700U); tap(3, 100U); run(50U); CHECK(strstr(row(1), "Busy") != NULL, "a second LOG while one is out: 'Busy' ('%s')", row(1)); run(3500U);
+    /* typing 000.0 resets the channel */
+    run(500U); A.ui.cal_val = 0U; tap(3, 100U); run(50U);
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_CALR && k.letter == 'V', "000.0 on the input page sends CALR V");
+    MApp_OnKResult(&A, k.id, 0U, 10000); run(100U); CHECK(strstr(row(1), "Reset To Nominal") != NULL, "and the answer says 'Reset To Nominal' ('%s')", row(1));
+    /* a value outside 50.0 to 400.0 V */
+    run(2000U); A.ui.cal_val = 400U; tap(3, 100U); run(50U); CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && strstr(row(1), "Enter 50.0-400.0 V") != NULL, "40.0 V: 'Enter 50.0-400.0 V', nothing sent ('%s')", row(1));
+    run(2000U); A.ui.cal_val = 4001U; tap(3, 100U); run(50U); CHECK(MApp_TakeKCommand(&A, &k, T) == 0U, "400.1 V: nothing sent");
+    /* the output page uses CALO and its own letter */
+    run(2000U); tap(0, 100U); run(200U); CHECK(MUI_ShowsVCal(&A.ui) == 2U, "the O/P Calibration page"); A.ui.cal_val = 2250U; tap(3, 100U); run(50U);
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_CALO && k.num == 2250, "LOG on the output page sends CALO 2250");
+    MApp_OnKResult(&A, k.id, 0U, 9920U); run(100U); CHECK(strstr(row(2), "O/P -0.80 %") != NULL, "answered 'O/P -0.80 %%' ('%s')", row(2));
+    run(2000U); A.ui.cal_val = 0U; tap(3, 100U); run(50U); CHECK(MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_CALR && k.letter == 'O', "000.0 on the output page sends CALR O");
+    /* no slave link */
+    run(4000U); D.have = 0U; D.link_ok = 0U; run(300U); A.ui.cal_val = 2250U; tap(3, 100U); run(50U); CHECK(MApp_TakeKCommand(&A, &k, T) == 0U, "no slave link: nothing is sent");
+    /* one id counter for every $K: they never repeat in a row and wrap from 255 to 1 */
+    fresh(); { uint8_t a1 = MApp_NextKId(&A), a2 = MApp_NextKId(&A); A.k_id = 255U; { uint8_t b1 = MApp_NextKId(&A), b2 = MApp_NextKId(&A); CHECK(a1 == 1U && a2 == 2U && b1 == 255U && b2 == 1U, "ids 1, 2 ... 255, then 1 again, never 0 (%u %u %u %u)", a1, a2, b1, b2); } }
+    printf("  voltage calibration in the application: refused while running, CALV / CALO / CALR with the typed value, 3 sends with one id, the timeout, every answer in words, one at a time\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -552,6 +624,8 @@ int main(void)
     t_inrush_retries_app();
     t_clock_app();
     t_clock_page();
+    t_heat_inrush_app();
+    t_vcal_app();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

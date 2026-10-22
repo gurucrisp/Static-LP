@@ -2,7 +2,19 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.19 — the Clock page (current)
+## v0.9.20 — overheat input, the inrush restart rules, voltage calibration (current)
+* **Overheat (PA5, active low, external pull-up):** read as a plain input (`MASTER_HEAT_INPUT`, `MHEAT_PORT/PIN` in m_board.h). It must stay low for the Overheat Trip Delay (item 12); then the unit trips ("Heat"). Once the pin has been high for the Restart Time the unit restarts BY ITSELF in Auto restart mode (START in Manual).
+  Three trips within 30 minutes need a manual START (even in Auto); trips more than 30 minutes apart never add up. New fault class FC_HEAT. (Before: overheat needed START.)
+* **Inrush / power-stage retries:** the retry interval is the Restart Time but never under 30 s. After the retries are used up: a 5-minute wait, then ONE more attempt; if that trips too, the unit latches. START restarts at once (a fresh start), also from the latch, EXCEPT in commissioning mode (`MASTER_INRUSH_RETRIES 0`: the first trip latches until power off and on, as before).
+* **Status row countdown:** `Inrush      Rst 4:32`, `Power Stage Rst 0:30`, `Heat        Rst 0:05` while an automatic restart counts down (`MF_RestartLeftS`). Nothing counts while the pin is still low, while latched, or while running.
+* **Voltage calibration (single point, STOPPED ONLY):** the master sends the meter reading (`$K CALV / CALO / CALR`); the slave averages the raw reading for 1 s, computes the total correction against NOMINAL (so repeating it never compounds), accepts +-10 % and a reading of at least 50 V and a steady signal (+-2 %),
+  applies it and stores it in two CRC-protected flash pages (0x0807F000, 0x0807F800 of the G0B1; `SLAVE_VOLTAGE_CAL 1`, set in the master-control configs). A failed store puts the old value back. New master service pages **I/P Calibration** and **O/P Calibration** (LOG, then MENU x5 / x6; seven service pages now);
+  typing 000.0 resets a channel. On those pages STOP stops a running unit (otherwise it moves the cursor). `$K` ids come from ONE counter in the application (a repeated id is a retry for the slave).
+  New files: slave_cal.c/.h, slave_cal_hw.c/.h, slave_store.c/.h (renamed copy of the master store), slave_flash.c/.h. The limits are +-10 % / 50 V (D8 said 0.80..1.25 / 20 V: changed on request).
+* Tests: engine 157, UI 345, application 273, slave calibration logic 33, slave flash driver 18, slave link 61, end-to-end calibration 15 (master application, real slave link and calibration logic). Mutation checks: 9 of 9 (heat/inrush rules), 11 of 11 (calibration).
+* NOT tested on hardware: the PA5 input, the G0B1 flash driver (tested against a model of the HAL API only), `slave_cal_hw.c` and its call in main.c (they need the slave's HAL headers: not compiled here), the master glue.
+
+## v0.9.19 — the Clock page
 * Report: the date and time could be set but did not show in the log. By the code the log stamp path is sound (tested end to end with a simulated clock); entries made BEFORE the clock was set cannot be re-stamped, and on the real unit the cause could be the RTC reading. NEW service page **Clock** (LOG, then MENU x4; the cycle is five pages now): the date and time as read, whether it counts as set,
   the source the backup domain reports (crystal / LSI / none) and the raw RCC BDCR and RTC ICSR bits. `MRtc_Status()`. Tests: UI 319, application 233.
 

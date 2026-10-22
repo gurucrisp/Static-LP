@@ -104,11 +104,15 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     MK_Init(&a->keys);
     MF_Init(&a->eng, &a->settings, now);
     a->retries_cfg = (uint8_t)MF_RETRIES;
-    cal_defaults(&a->cal);                                                  /* until MApp_InitCal: the original firmware's scale and 3 A offset */                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
+    cal_defaults(&a->cal);                                                  /* until MApp_InitCal: the original firmware's scale and 3 A offset */
+    a->k_id = 1U;                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
     MUI_Init(&a->ui, &a->settings, &a->log, now);
     MUI_SetLimits(&a->ui, 0);                                              /* the slave's window and output guard come with its $H frame (stage 7c) */
     MUI_SetFeatures(&a->ui, 0U);                                           /* calibration and re-tune are not available yet */
 }
+
+static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now);
+static void vcal_service(MApp_t *a, uint32_t now);
 
 void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
 {
@@ -174,6 +178,8 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     else if ((d->have != 0U) && (d->fault != 0U)) r.fault[0] = MF_SlaveFaultType(d->fault, d->vin_dv, a->settings.set_v);
     r.fcode[0] = (uint8_t)((d->have != 0U) ? d->fault : 0U);
     if (d->have == 0U) r.fault[0] = (uint8_t)(a->eout.fault[0] != 0U ? a->eout.fault[0] : 0U);
+    r.vin_raw_dv = d->vin_dv; r.vout_raw_dv = d->vout_dv; r.active = (uint8_t)((a->eout.run[0] != 0U) || (d->state != 0U));       /* for the Voltage Calibration pages */
+    r.wait_s[0] = (a->eout.fault[0] != 0U) ? MF_RestartLeftS(&a->eng, 0U) : 0U;                                      /* the automatic restart countdown for the status row */
     r.fcode[0] = (a->eout.fault[0] != 0U) ? a->eng.u[0].fcode : (((a->eout.appear[0] == 0U) && (d->have != 0U)) ? d->fault : 0U);      /* the slave code behind the fault shown */
     MUI_Tick(&a->ui, &r, now, frame);
 
@@ -184,6 +190,9 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     }
     if (MUI_Take(&a->ui, MUI_REQ_CLEAR_LOG)) (void)MLog_Clear(&a->log);
     MUI_SetClock(&a->ui, &d->clock, d->clock_ok);                                       /* the Date and Time items start from the clock */
+    a->t_now = now;
+    if (MUI_Take(&a->ui, MUI_REQ_VCAL_SAVE)) vcal_request(a, d, now);
+    vcal_service(a, now);
     if (MUI_Take(&a->ui, MUI_REQ_SET_CLOCK)) { a->clk_set = *MUI_ClockToSet(&a->ui); a->clk_set_pending = 1U; }
     if (MUI_Take(&a->ui, MUI_REQ_CALIBRATE))
     {   /* ZERO: Set-Mode "Calibration" = Yes. The output is off in Set-Mode, so there is no load: the reading now IS the zero. */
@@ -258,6 +267,73 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U)) { char w[10]; copy(&t[14], "W:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (16U + i < 20U)) { t[16U + i] = w[i]; i++; } t[16U + i] = '\0'; } }
     for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
 }
+
+/* ---------------- voltage calibration over the link ---------------- */
+uint8_t MApp_NextKId(MApp_t *a) { uint8_t id = a->k_id; a->k_id = (uint8_t)((a->k_id >= 255U) ? 1U : (a->k_id + 1U)); return id; }
+
+static void vcal_message(MApp_t *a, uint8_t status, int32_t value)
+{
+    char l2[21]; uint32_t n = 0U; const uint32_t now = a->t_now; const char *ch = (a->vcal_ch == 0U) ? "I/P" : "O/P";
+    switch (status)
+    {
+    case 0U:
+        if (a->vcal_cmd == MAPP_KCMD_CALR) { l2[0] = '\0'; MUI_Notify(&a->ui, "Reset To Nominal", ch, now); break; }
+        {   /* the total correction against nominal, 10000 = 0 %: "I/P +1.52 %" */
+            int32_t d = value - 10000; uint32_t ad = (uint32_t)((d < 0) ? -d : d);
+            l2[n++] = ch[0]; l2[n++] = ch[1]; l2[n++] = ch[2]; l2[n++] = ' '; l2[n++] = (d < 0) ? '-' : '+';
+            if ((ad / 100U) >= 10U) l2[n++] = (char)('0' + ((ad / 1000U) % 10U));
+            l2[n++] = (char)('0' + ((ad / 100U) % 10U)); l2[n++] = '.'; l2[n++] = (char)('0' + ((ad / 10U) % 10U)); l2[n++] = (char)('0' + (ad % 10U)); l2[n++] = ' '; l2[n++] = '%'; l2[n] = '\0';
+            MUI_Notify(&a->ui, "Calibrated", l2, now);
+        }
+        break;
+    case 1U: MUI_Notify(&a->ui, "Bad Value", "50.0 - 400.0 V", now); break;
+    case 2U: MUI_Notify(&a->ui, "No Steady Signal", "Min 50 V", now); break;
+    case 3U: MUI_Notify(&a->ui, "Out Of Range", "Max +/-10 %", now); break;
+    case 4U: MUI_Notify(&a->ui, "Stop The Unit", "First", now); break;
+    case 5U: MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); break;
+    case 6U: MUI_Notify(&a->ui, "Not Supported", "Update The Slave", now); break;
+    case 7U: MUI_Notify(&a->ui, "Slave Busy", "Try Again", now); break;
+    default: MUI_Notify(&a->ui, "Calibration", "Failed", now); break;
+    }
+}
+
+/* LOG on a Voltage Calibration page */
+static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
+{
+    uint16_t entered = MUI_CalValue(&a->ui); uint8_t ch = (a->ui.page == 6U) ? 1U : 0U;
+    if (a->vcal_wait != 0U) { MUI_Notify(&a->ui, "Busy", "Wait For The Answer", now); return; }
+    if (d->have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
+    if ((a->eout.run[0] != 0U) || (d->state != 0U)) { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }          /* never while it regulates: a gain change would make the output jump */
+    a->vcal_ch = ch;
+    if (entered == 0U) { a->vcal_cmd = MAPP_KCMD_CALR; a->vcal_letter = (ch == 0U) ? 'V' : 'O'; a->vcal_num = 0; }          /* typing 000.0 resets the channel to nominal */
+    else if ((entered < 500U) || (entered > 4000U)) { MUI_Notify(&a->ui, "Enter 50.0-400.0 V", "Or 000.0 To Reset", now); return; }
+    else { a->vcal_cmd = (ch == 0U) ? MAPP_KCMD_CALV : MAPP_KCMD_CALO; a->vcal_letter = '\0'; a->vcal_num = (int32_t)entered; }
+    a->vcal_id = MApp_NextKId(a); a->vcal_tx_n = 0U; a->vcal_t0 = now; a->vcal_t_tx = now; a->vcal_due = 1U; a->vcal_wait = 1U;
+    MUI_Notify(&a->ui, "Calibrating", "Wait...", now);
+}
+
+static void vcal_service(MApp_t *a, uint32_t now)
+{
+    if (a->vcal_wait == 0U) return;
+    if ((a->vcal_due == 0U) && (a->vcal_tx_n > 0U) && (a->vcal_tx_n < 3U) && ((uint32_t)(now - a->vcal_t_tx) >= MAPP_VCAL_RETRY_MS)) a->vcal_due = 1U;       /* the same id again */
+    if ((uint32_t)(now - a->vcal_t0) >= MAPP_VCAL_TIMEOUT_MS) { a->vcal_wait = 0U; a->vcal_due = 0U; MUI_Notify(&a->ui, "No Answer", "From The Slave", now); }
+}
+
+uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now)
+{
+    if ((a->vcal_wait == 0U) || (a->vcal_due == 0U)) return 0U;
+    out->id = a->vcal_id; out->cmd = a->vcal_cmd; out->num = a->vcal_num; out->letter = a->vcal_letter;
+    a->vcal_due = 0U; a->vcal_tx_n++; a->vcal_t_tx = now;
+    return 1U;
+}
+
+void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
+{
+    if ((a->vcal_wait == 0U) || (id != a->vcal_id)) return;                       /* not the answer to a calibration (a HELLO's, or a late one) */
+    a->vcal_wait = 0U; a->vcal_due = 0U;
+    vcal_message(a, status, value);
+}
+
 uint8_t MApp_ShowsClock(const MApp_t *a) { return MUI_ShowsClock(&a->ui); }
 
 /* the Clock service page (LOG, then MENU x4): what the real-time clock is doing, to find out why a fault carries no time */

@@ -46,6 +46,7 @@ void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms)
 }
 
 void MF_SetMaxRetries(MFaults_t *f, uint8_t n) { f->max_retries = n; }
+uint16_t MF_RestartLeftS(const MFaults_t *f, uint8_t unit) { return (unit < 3U) ? f->u[unit].left_s : 0U; }
 
 void MF_RetuneDone(MFaults_t *f)
 {
@@ -164,7 +165,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             if ((f->op_hv[p] != 0U) && (age(now, f->t_op_hv[p]) >= vdelay)) consider(&best, &have, MLOG_T_OP_HV, (uint8_t)FC_VOLT, p, 0U);
             if ((f->hv_fast[p] != 0U) && (age(now, f->t_hv_fast[p]) >= MF_OP_HV_FAST_MS)) consider(&best, &have, MLOG_T_OP_HV, (uint8_t)FC_VOLT, p, 0U);     /* a gross over-voltage: no waiting for the delay */
             if ((f->a_ovl[p] != 0U) && (age(now, f->t_ovl[p]) >= (uint32_t)s->ovl_cut_delay * 1000UL)) consider(&best, &have, MLOG_T_OVERLOAD, (uint8_t)FC_START, p, 0U);
-            if ((f->a_heat[p] != 0U) && (age(now, f->t_heat[p]) >= (uint32_t)s->heat_delay * 1000UL)) consider(&best, &have, MLOG_T_HEAT, (uint8_t)FC_START, p, 0U);
+            if ((f->a_heat[p] != 0U) && (age(now, f->t_heat[p]) >= (uint32_t)s->heat_delay * 1000UL)) consider(&best, &have, MLOG_T_HEAT, (uint8_t)FC_HEAT, p, 0U);
         }
         if ((f->mode == (uint8_t)M_MODE_INDUSTRIAL) && (s->phase_seq != 0U) && (in->seq_state != 0U))
         {
@@ -184,7 +185,17 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             }
             un->ftype = best.type; un->fclass = best.cls; un->fphase = best.phase; un->fcode = best.code; un->t_enter = now; un->clr_owed = 0U;
             un->st = (uint8_t)U_FAULT;
-            if (best.cls == (uint8_t)FC_RETRY) { un->retries++; if (un->retries > f->max_retries) un->st = (uint8_t)U_LATCHED; }
+            if (best.cls == (uint8_t)FC_RETRY)
+            {   /* inrush / power stage: 0 retries = latch at once (commissioning); else the retries, then ONE long wait and ONE extra attempt, then the latch */
+                if ((f->max_retries == 0U) || (un->final_try != 0U)) un->st = (uint8_t)U_LATCHED;
+                else { un->retries++; if (un->retries > f->max_retries) un->long_wait = 1U; }
+            }
+            if (best.cls == (uint8_t)FC_HEAT)
+            {   /* overheat: remember the trip; the third within 30 minutes needs a manual START */
+                uint8_t k, c = 0U; un->t_heat_trip[un->heat_n % 3U] = now; un->heat_n = (uint8_t)((un->heat_n + 1U) % 250U);
+                for (k = 0U; k < 3U; k++) if ((un->t_heat_trip[k] != 0U) && (age(now, un->t_heat_trip[k]) <= MF_HEAT_WINDOW_MS)) c++;
+                if (c >= MF_HEAT_MAX_TRIPS) un->heat_manual = 1U;
+            }
             if ((best.cls == (uint8_t)FC_LATCH) || (best.cls == (uint8_t)FC_RETUNE)) un->st = (uint8_t)U_LATCHED;
             if ((f->mode != (uint8_t)M_MODE_DOMESTIC) || (best.type == MLOG_T_FLIP)) f->buzzer = 1U;       /* D28: the flip sounds in Domestic too */
         }
@@ -219,7 +230,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
                 break;
             }
             case U_ON:
-                if ((un->retries > 0U) && (age(now, un->t_on) >= MF_FORGIVE_MS)) un->retries = 0U;
+                if ((un->retries > 0U) && (age(now, un->t_on) >= MF_FORGIVE_MS)) { un->retries = 0U; un->long_wait = 0U; un->final_try = 0U; }
                 break;
             case U_FAULT:
                 if (un->fclass == (uint8_t)FC_VOLT)
@@ -234,13 +245,33 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
                     if ((can_start != 0U) && (in->key_start != 0U)) attempt = 1U;               /* Overload and Heat: START only */
                 }
                 else if (un->fclass == (uint8_t)FC_RETRY)
-                {
-                    if (age(now, un->t_enter) >= MF_RETRY_MS) attempt = 1U;                      /* D27: every 30 s, Auto or Manual */
+                {   /* the retry interval is the Restart Time but never under 30 s; after the retries are used up: 5 minutes, then ONE more attempt. START restarts at once, as a fresh start. */
+                    uint32_t wait = (un->long_wait != 0U) ? MF_FINAL_WAIT_MS : ((rdelay > MF_RETRY_MS) ? rdelay : MF_RETRY_MS);
+                    if ((in->key_start != 0U) && (can_start != 0U)) { attempt = 1U; un->retries = 0U; un->long_wait = 0U; un->final_try = 0U; }
+                    else if (age(now, un->t_enter) >= wait) { attempt = 1U; if (un->long_wait != 0U) { un->long_wait = 0U; un->final_try = 1U; } }
+                }
+                else if (un->fclass == (uint8_t)FC_HEAT)
+                {   /* the pin is high again (can_start) for the Restart Time: restart by itself (Auto, and not after 3 trips in 30 min); START restarts too */
+                    uint8_t cool = can_start;
+                    if (cool == 0U) un->t_enter = now;
+                    if ((in->key_start != 0U) && (cool != 0U)) { uint8_t k; attempt = 1U; un->heat_manual = 0U; un->heat_n = 0U; for (k = 0U; k < 3U; k++) un->t_heat_trip[k] = 0U; }
+                    else if ((s->restart_auto != 0U) && (un->heat_manual == 0U) && (cool != 0U) && (age(now, un->t_enter) >= rdelay)) attempt = 1U;
                 }
                 break;
             case U_LATCHED:
+                /* an inrush / power-stage latch after the long wait and the extra attempt: START tries again (not in commissioning mode, 0 retries: that latch stays until power off and on) */
+                if ((un->fclass == (uint8_t)FC_RETRY) && (f->max_retries > 0U) && (in->key_start != 0U) && (can_start != 0U)) { attempt = 1U; un->retries = 0U; un->long_wait = 0U; un->final_try = 0U; }
+                break;
             default:
                 break;
+            }
+            un->left_s = 0U;                                                  /* for the screen: how long until the next automatic restart attempt */
+            if (un->st == (uint8_t)U_FAULT)
+            {
+                uint32_t wait = 0U, a = age(now, un->t_enter);
+                if (un->fclass == (uint8_t)FC_RETRY) wait = (un->long_wait != 0U) ? MF_FINAL_WAIT_MS : ((rdelay > MF_RETRY_MS) ? rdelay : MF_RETRY_MS);
+                else if ((un->fclass == (uint8_t)FC_HEAT) && (s->restart_auto != 0U) && (un->heat_manual == 0U) && (can_start != 0U)) wait = rdelay;
+                if ((wait != 0U) && (a < wait)) un->left_s = (uint16_t)(((wait - a) + 999UL) / 1000UL);
             }
             if ((attempt != 0U) && (in->setmode == 0U))
             {

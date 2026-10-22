@@ -42,6 +42,10 @@ typedef struct
     void    (*fill_h)(LinkH_t *h);
     /* queue one complete frame (with CR LF) for transmission: 1 = queued, 0 = no room */
     uint8_t (*tx)(const char *frame, uint32_t len);
+    /* voltage calibration ($K CALV / CALO / CALR): cmd is the LinkCmd_t value. Return 1 = the answer is ready (status, value); 0 = the averaging has started, the answer comes from cal_poll.
+     * NULL = this build has no calibration: the command is answered UNKNOWN_CMD. */
+    int     (*cal_command)(uint8_t cmd, int32_t num, char letter, uint8_t *status, int32_t *value, uint32_t now_ms);
+    int     (*cal_poll)(uint8_t *status, int32_t *value, uint32_t now_ms);                  /* 1 = the pending command is done */
 } SL2_Hooks_t;
 
 typedef struct

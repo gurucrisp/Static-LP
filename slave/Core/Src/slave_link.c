@@ -116,7 +116,19 @@ static uint8_t hk_tx(const char *frame, uint32_t n)
     g_link.frames_sent++;
     return 1U;
 }
-static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx };
+#if (SLAVE_VOLTAGE_CAL != 0)
+#include "slave_cal.h"
+/* voltage calibration over $K (SLAVE_VOLTAGE_CAL): the link's command code is translated to the calibration module's */
+static int hk_cal_command(uint8_t cmd, int32_t num, char letter, uint8_t *status, int32_t *value, uint32_t now_ms)
+{
+    uint8_t c = (cmd == (uint8_t)LINKCMD_CALV) ? SCAL_CMD_CALV : ((cmd == (uint8_t)LINKCMD_CALO) ? SCAL_CMD_CALO : SCAL_CMD_CALR);
+    return SlaveCal_Command(c, num, letter, status, value, now_ms);
+}
+static int hk_cal_poll(uint8_t *status, int32_t *value, uint32_t now_ms) { return SlaveCal_Poll(status, value, now_ms); }
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, hk_cal_command, hk_cal_poll };
+#else
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, 0, 0 };
+#endif
 
 static void capture_reset_cause(void)
 {

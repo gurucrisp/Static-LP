@@ -22,7 +22,7 @@ static uint8_t h_tx(const char *f, uint32_t n)
     memcpy(cap[ncap], f, n); cap[ncap][n] = '\0'; cap_len[ncap] = (int)n; ncap++;
     return 1U;
 }
-static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx };
+static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0 };
 
 static void reset_world(uint32_t t0)
 {
@@ -216,9 +216,59 @@ static void t_fuzz(void)
     CHECK(n_ctrl == (int)SL2_Stats()->m_ok, "every delivery is a counted valid $M (%d vs %u)", n_ctrl, (unsigned)SL2_Stats()->m_ok);
     CHECK(n_ctrl < 20, "random bytes (with a 1-in-256 chance per corrupted frame to pass the checksum) hardly ever deliver a control frame (%d of 2,000,000 bytes)", n_ctrl);
     /* NULL hooks must not crash */
-    {   SL2_Hooks_t none = { 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
+    {   SL2_Hooks_t none = { 0, 0, 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
     CHECK(1, "NULL hooks do not crash");
     printf("  fuzz: 2,000,000 random bytes: no crash, deliveries all counted and rare; NULL hooks are safe\n");
+}
+
+
+/* ---- voltage calibration over $K: started, answered later, retries not executed twice ---- */
+static int cal_calls, cal_polls, cal_immediate; static uint8_t cal_imm_status, cal_st, last_cmd; static int32_t cal_val, last_num; static char last_letter; static uint32_t cal_t0;
+static int h_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t *val, uint32_t now)
+{
+    cal_calls++; last_cmd = cmd; last_num = num; last_letter = letter;
+    if (cal_immediate) { *st = cal_imm_status; *val = 0; return 1; }
+    cal_t0 = now; return 0;
+}
+static int h_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { cal_polls++; if ((uint32_t)(now - cal_t0) >= 1000U) { *st = cal_st; *val = cal_val; return 1; } return 0; }
+static const SL2_Hooks_t HOOKS_CAL = { h_on_control, h_fill_e, h_fill_h, h_tx, h_cal_cmd, h_cal_poll };
+static int count_r(uint8_t id, int *status, int32_t *value) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (parse_cap(i, &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == id) { c++; *status = f.u.r.status; *value = f.u.r.value; } return c; }
+
+static void t_calibration(void)
+{
+    uint32_t t = 20000U; int st = -1; int32_t val = 0;
+    reset_world(t); SL2_Init(&HOOKS_CAL, t); cal_calls = cal_polls = 0; cal_immediate = 0; cal_st = 0U; cal_val = 10152;
+    SL2_Service(t); SL2_Service(t + 100U); SL2_Service(t + 200U); ncap = 0; t += 300U;
+    /* started: the hook gets the command and the number; NO answer yet */
+    feed_body("K,5,CALV,2302", t); SL2_Service(t);
+    CHECK(cal_calls == 1 && last_cmd == (uint8_t)LINKCMD_CALV && last_num == 2302, "$K CALV 2302 reaches the hook once with its number (calls %d, cmd %u, num %d)", cal_calls, last_cmd, (int)last_num);
+    CHECK(count_r(5, &st, &val) == 0, "and there is NO answer while the averaging runs");
+    SL2_Service(t + 500U); CHECK(count_r(5, &st, &val) == 0, "still none at 0.5 s");
+    /* the master's retry of the same id while it is pending: not executed again, not answered yet */
+    feed_body("K,5,CALV,2302", t + 600U); SL2_Service(t + 600U);
+    CHECK(cal_calls == 1 && count_r(5, &st, &val) == 0, "a retry of the id that is being worked on is NOT executed again and not answered yet (calls %d)", cal_calls);
+    SL2_Service(t + 1000U);
+    CHECK(count_r(5, &st, &val) == 1 && st == (int)LINKV2_ST_OK && val == 10152, "after 1 s the answer comes: R,5,0,10152 (found %d, status %d, value %d)", count_r(5, &st, &val), st, (int)val);
+    /* a retry after it was answered (the master missed the answer): the SAME answer again, still one execution */
+    ncap = 0; feed_body("K,5,CALV,2302", t + 1300U); SL2_Service(t + 1300U);
+    CHECK(count_r(5, &st, &val) == 1 && st == (int)LINKV2_ST_OK && val == 10152 && cal_calls == 1, "a retry after the answer gets the same answer again and is not executed twice");
+    /* another calibration while one is averaging: NOT_ALLOWED at once, the running one is not disturbed */
+    ncap = 0; t += 2000U; feed_body("K,6,CALO,2250", t); SL2_Service(t); ncap = 0;
+    feed_body("K,7,CALV,2302", t + 100U); SL2_Service(t + 100U);
+    CHECK(count_r(7, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_ALLOWED && cal_calls == 2, "a command while one is averaging: R,7,7 (NOT_ALLOWED) at once, the hook is not called again (status %d, calls %d)", st, cal_calls);
+    ncap = 0; SL2_Service(t + 1000U); CHECK(count_r(6, &st, &val) == 1 && st == (int)LINKV2_ST_OK, "the running one (id 6) still finishes");
+    /* an answer that is ready at once (NOT_STOPPED, BAD_ARG...) goes out in the same pass */
+    reset_world(t); SL2_Init(&HOOKS_CAL, t); cal_calls = 0; cal_immediate = 1; cal_imm_status = (uint8_t)LINKV2_ST_NOT_STOPPED;
+    SL2_Service(t); SL2_Service(t + 100U); SL2_Service(t + 200U); ncap = 0; t += 300U;
+    feed_body("K,9,CALV,2302", t); SL2_Service(t);
+    CHECK(count_r(9, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_STOPPED, "an immediate refusal is answered in the same pass: R,9,4");
+    /* CALR carries its letter */
+    cal_immediate = 1; cal_imm_status = 0U; ncap = 0; feed_body("K,10,CALR,O", t + 100U); SL2_Service(t + 100U);
+    CHECK(last_cmd == (uint8_t)LINKCMD_CALR && last_letter == 'O' && count_r(10, &st, &val) == 1 && st == 0, "CALR O reaches the hook with its letter");
+    /* a build without a calibration hook: UNKNOWN_CMD, as before */
+    reset_world(t); SL2_Service(t); SL2_Service(t + 100U); SL2_Service(t + 200U); ncap = 0; feed_body("K,11,CALV,2302", t + 300U); SL2_Service(t + 300U);
+    CHECK(count_r(11, &st, &val) == 1 && st == (int)LINKV2_ST_UNKNOWN_CMD, "without the hooks CALV is UNKNOWN_CMD");
+    printf("  $K calibration: started and answered after the averaging, a retry is never executed twice, another command meanwhile is NOT_ALLOWED, immediate refusals at once\n");
 }
 
 int main(void)
@@ -227,6 +277,7 @@ int main(void)
     t_extended();
     t_control();
     t_commands();
+    t_calibration();
     t_queues();
     t_wrap();
     t_fuzz();

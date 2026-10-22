@@ -39,6 +39,11 @@
  * then the signed change in the commanded direction is watched in 100 ms windows: about +1 V = correct (the check ends), about -1 V in two windows in a row (or -2.5 V in one) = the series transformer is connected BACKWARDS: fault 17, latched until the master clears it
  * (the wrong-way deviation is limited to a few volts). It only judges once the correction is large enough to see; a unit that needs no correction is not tested (and not at risk); it stops watching 60 s after the start.
  * 0 = no such check (every standalone build). The master-control configs set 1. */
+/* 1 = the voltage calibration over the link ($K CALV / CALO / CALR): single-point gain from the meter reading the master sends, only while the unit is STOPPED, averaged for 1 s, +-10 % of nominal, 50 V minimum,
+ * stored in two CRC-protected copies in the last two flash pages (0x0807F000 and 0x0807F800). 0 = no calibration commands (they are answered UNKNOWN_CMD). The master-control configs set 1. */
+#ifndef SLAVE_VOLTAGE_CAL
+#define SLAVE_VOLTAGE_CAL      0
+#endif
 #ifndef SLAVE_TF_RUN_CHECK
 #define SLAVE_TF_RUN_CHECK     0
 #endif
@@ -57,7 +62,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       919UL
+#define SLAVE_FW_VERSION       920UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

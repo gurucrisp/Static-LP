@@ -57,6 +57,10 @@
 #ifndef SLAVE_TF_RUN_CHECK
 #define SLAVE_TF_RUN_CHECK     1
 #endif
+/* Voltage calibration over the link ($K CALV / CALO / CALR from the master's Voltage Calibration pages): only while the unit is stopped, +-10 %, stored in two flash pages (0x0807F000 / 0x0807F800: the program must end below them). */
+#ifndef SLAVE_VOLTAGE_CAL
+#define SLAVE_VOLTAGE_CAL      1
+#endif
 #ifndef SLAVE_BENCH_AUTORUN
 #define SLAVE_BENCH_AUTORUN    0
 #endif

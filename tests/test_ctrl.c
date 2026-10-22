@@ -30,6 +30,10 @@
 #include <sys/wait.h>
 
 #include "slave_ctrl.h"
+#include "slave_features.h"
+#if (SLAVE_VOLTAGE_CAL != 0)
+#include "slave_cal.h"
+#endif
 #include "slave_ctrl_hw.h"
 #include "slave_power.h"
 #include "slave_relay.h"
@@ -2661,6 +2665,9 @@ int main(void)
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
     run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
+#if (SLAVE_VOLTAGE_CAL != 0)
+    run_isolated(t_mc_vcal,                   "master control: voltage calibration end to end");
+#endif
 #if (SLAVE_TF_RUN_CHECK != 0)
     run_isolated(t_mc_flip,                   "master control: the transformer flip check at start");
 #endif

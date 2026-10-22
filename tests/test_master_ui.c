@@ -138,7 +138,9 @@ static void t_screens(void)
     key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && MUI_ShowsDiag(&U), "MENU again: the control diagnostics page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsCal(&U) && !MUI_ShowsDiag(&U), "a third press: the Load Calibration page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsClock(&U) && !MUI_ShowsCal(&U), "a fourth press: the Clock page");
-    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U), "and a fifth: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 1U, "a fifth press: the I/P Calibration page");
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "a sixth: the O/P Calibration page");
+    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U) && MUI_ShowsVCal(&U) == 0U, "and a seventh: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
     /* a service page returns to the Run screen by itself after a minute, and at once when a fault appears */
     key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "on the monitor page again");
     tick(59000U); CHECK(MUI_ShowsMonitor(&U), "59 s without a key: still there"); tick(2000U); CHECK(!MUI_ShowsMonitor(&U), "61 s without a key: back on the Run screen");
@@ -266,6 +268,49 @@ static void t_log_stamp(void)
     printf("  fault log time: a record with a clock stamp shows dd/mm/yyyy HH:MM, an older one its running time\n");
 }
 
+
+static void t_wait_row(void)
+{
+    /* an automatic restart is counting down: the short name at the left, "Rst m:ss" at the right; the code is dropped while it counts */
+    ui_reset(M_MODE_SINGLE); to_run();
+    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 272U; tick(100U); ROW(3, "Inrush      Rst 4:32");
+    D.fault[0] = MLOG_T_POWER_STAGE; D.fcode[0] = 7U; D.wait_s[0] = 30U; tick(100U); ROW(3, "Power Stage Rst 0:30");
+    D.fault[0] = MLOG_T_HEAT; D.wait_s[0] = 5U; tick(100U); ROW(3, "Heat        Rst 0:05");
+    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 300U; tick(100U); ROW(3, "Inrush      Rst 5:00");
+    D.wait_s[0] = 0U; tick(100U); ROW(3, "Inrush           F02");                     /* nothing counting (latched): the text and the code, as before */
+    D.fault[0] = MLOG_T_OVERLOAD; D.wait_s[0] = 12U; tick(100U); ROW(3, "Overload");                    /* only Inrush, Power Stage and Heat count down */
+    printf("  restart countdown on the status row: Inrush, Power Stage and Heat show Rst m:ss, a latch shows its code\n");
+}
+
+
+static void t_vcal_pages(void)
+{
+    ui_reset(M_MODE_SINGLE); to_run(); D.vin_raw_dv = 2268U; D.vout_raw_dv = 2275U; D.active = 0U; tick(100U);
+    key(MK_LOG_SHORT); { int q; for (q = 0; q < 5; q++) key(MK_MENU_SHORT); } tick(100U);
+    CHECK(MUI_ShowsVCal(&U) == 1U, "LOG, then MENU x5 opens the I/P Calibration page");
+    ROW(0, "  I/P Calibration"); CHECK(strncmp(row(1), "Reading", 7) == 0 && strstr(row(1), "226.8") != NULL && row(1)[18] == 'V', "it shows the slave's reading, 226.8 V ('%s')", row(1));
+    CHECK(MUI_CalValue(&U) == 2268U, "the entry starts from the reading");
+    { uint32_t k; int seen = 0; for (k = 0U; k < 1200U; k += 50U) { tick(50U); if (strstr(row(2), "226.8") != NULL) seen = 1; } CHECK(seen, "the Actual row reads 226.8 ('%s')", row(2)); }
+    ROW(3, "LOG=Save  MENU=Next");
+    /* the cursor starts on the units of volts: START adds a volt, STOP moves to the tenths */
+    key(MK_START); CHECK(MUI_CalValue(&U) == 2278U && !MUI_Take(&U, MUI_REQ_START), "START adds 1 V (227.8) and does not start the unit");
+    key(MK_STOP); key(MK_START); CHECK(MUI_CalValue(&U) == 2279U, "STOP moves to the tenths, START adds 0.1 V (227.9)");
+    key(MK_LOG_SHORT); CHECK(MUI_Take(&U, MUI_REQ_VCAL_SAVE) && !MUI_Take(&U, MUI_REQ_CAL_SAVE) && MUI_ShowsVCal(&U) == 1U, "LOG makes one VOLTAGE save request (not the load one) and stays on the page");
+    /* the unit is running: the page asks for it to be stopped first */
+    D.active = 1U; tick(100U); ROW(3, "Press STOP first");
+    { uint32_t c0 = U.cal_cursor; key(MK_STOP); CHECK(MUI_Take(&U, MUI_REQ_STOP) && U.cal_cursor == c0, "while the unit runs, STOP on the page STOPS the unit and does not move the cursor"); }
+    D.active = 0U; tick(100U); { uint32_t c0 = U.cal_cursor; key(MK_STOP); CHECK(!MUI_Take(&U, MUI_REQ_STOP) && U.cal_cursor != c0, "once it is stopped, STOP moves the cursor again"); key(MK_STOP); key(MK_STOP); key(MK_STOP); }
+    D.active = 1U; tick(100U);
+    /* the output page */
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "MENU: the O/P Calibration page"); D.active = 0U; tick(100U);
+    ROW(0, "  O/P Calibration"); CHECK(strstr(row(1), "227.5") != NULL && MUI_CalValue(&U) == 2275U, "its own reading, 227.5 V ('%s')", row(1));
+    key(MK_LOG_SHORT); CHECK(MUI_Take(&U, MUI_REQ_VCAL_SAVE), "LOG saves the output value");
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 0U, "MENU leaves the pages");
+    /* a fault takes it back to the Run screen as for the other pages */
+    key(MK_LOG_SHORT); { int q; for (q = 0; q < 5; q++) key(MK_MENU_SHORT); } D.fault[0] = MLOG_T_MAINS; D.fcode[0] = 16U; tick(100U); CHECK(MUI_ShowsVCal(&U) == 0U, "a new fault takes it back to the Run screen"); D.fault[0] = 0U; D.fcode[0] = 0U; tick(100U);
+    printf("  voltage calibration pages: I/P and O/P, the live reading, digit editing, LOG = one voltage save request, a hint to stop the unit first\n");
+}
+
 static void t_cal_page(void)
 {
     ui_reset(M_MODE_SINGLE); to_run(); D.load_da[0] = 66U; D.load_ok[0] = 1U; tick(100U);
@@ -327,7 +372,7 @@ static void t_log_viewer(void)
     CHECK(1, "START at the oldest stays");
     key(MK_STOP); key(MK_STOP); key(MK_STOP); ROW(0, "Fault Log 00/02");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "MENU in the log opens the service pages (single-phase)");
-    key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "four more MENU presses cycle back to the Run screen");
+    { int q; for (q = 0; q < 6; q++) key(MK_MENU_SHORT); } CHECK(strstr(row(0), "O/P") != NULL, "six more MENU presses cycle back to the Run screen");
     key(MK_LOG_SHORT); key(MK_LOG_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "LOG leaves the log");
     key(MK_LOG_SHORT); tick(30100U); CHECK(strstr(row(0), "O/P") != NULL, "30 s with no key leaves the log by itself");
     { int i; for (i = 0; i < 130; i++) add_log(MLOG_T_HEAT, 0U, 0U, 2300U, 2300U, 100U, (uint32_t)i); key(MK_LOG_SHORT); ROW(0, "Fault Log 00/99"); CHECK(1, "with a long log the numbers run 00 to 99"); }
@@ -561,10 +606,12 @@ int main(void)
     t_keys_fuzz();
     t_screens();
     t_pages();
+    t_wait_row();
     t_clock_items();
     t_clock_save();
     t_log_stamp();
     t_cal_page();
+    t_vcal_pages();
     t_log_viewer();
     t_setmode_nav();
     t_cursor_and_layout();

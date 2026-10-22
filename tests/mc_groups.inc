@@ -279,7 +279,24 @@ static void t_mc_end_to_end(void)
 /* ---- the REAL master logic (m_ctl) against the REAL slave controller: what the master sends in $M frames, as bytes, is all the slave gets ---- */
 #include "m_ctl.h"
 static MCtl_t mm_c; static MSettings_t mm_s; static uint32_t mm_seq; static int mm_clr_changes; static uint8_t mm_last_clr;
-static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx };
+#if (SLAVE_VOLTAGE_CAL != 0)
+/* the slave's REAL calibration logic on a simulated chain: the nominal chain reads exactly the plant's voltages; the flash is a pair of variables */
+static uint16_t e2e_cal_applied[2], e2e_cal_stored[2]; static int e2e_cal_have_store, e2e_cal_saves, e2e_cal_fail_save;
+static float    e2e_h_raw(uint8_t ch, uint8_t *valid) { *valid = 1U; return ((ch == 0U) ? W.vin : W.vout) / 0.1f; }
+static uint32_t e2e_h_cnt(void) { return mc_ms() / 10U; }
+static uint8_t  e2e_h_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
+static float    e2e_h_nominal(uint8_t ch) { (void)ch; return 0.1f; }
+static void     e2e_h_set(uint8_t ch, uint16_t r) { e2e_cal_applied[ch] = r; }
+static int      e2e_h_load(uint16_t r[2]) { if (!e2e_cal_have_store) return -1; r[0] = e2e_cal_stored[0]; r[1] = e2e_cal_stored[1]; return 0; }
+static int      e2e_h_save(const uint16_t r[2]) { if (e2e_cal_fail_save) return -1; e2e_cal_stored[0] = r[0]; e2e_cal_stored[1] = r[1]; e2e_cal_have_store = 1; e2e_cal_saves++; return 0; }
+static const SlaveCalHw_t E2E_CAL_HW = { e2e_h_raw, e2e_h_cnt, e2e_h_stopped, e2e_h_nominal, e2e_h_set, e2e_h_load, e2e_h_save };
+static int e2e_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t *val, uint32_t now)
+{ return SlaveCal_Command((cmd == (uint8_t)LINKCMD_CALV) ? SCAL_CMD_CALV : ((cmd == (uint8_t)LINKCMD_CALO) ? SCAL_CMD_CALO : SCAL_CMD_CALR), num, letter, st, val, now); }
+static int e2e_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { return SlaveCal_Poll(st, val, now); }
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, e2e_cal_cmd, e2e_cal_poll };
+#else
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0 };
+#endif
 static void mm_start(uint8_t restart_auto)
 {
     mc_world(230000000ULL, 225.0f);
@@ -367,6 +384,9 @@ static void ma_start(uint8_t restart_auto, float vin)
 {
     mc_world(231000000ULL, vin);
     e2e_cnt = 0; e2e_seq_m = 0U; SL2_Init(&HK2, mc_ms());
+#if (SLAVE_VOLTAGE_CAL != 0)
+    e2e_cal_have_store = 0; e2e_cal_saves = 0; e2e_cal_fail_save = 0; SlaveCal_Init(&E2E_CAL_HW);
+#endif
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
     ma.settings.restart_auto = restart_auto; ma.settings.ip_lv = 180U; ma.settings.ip_hv = 280U; ma.settings.op_lv = 200U; ma.settings.op_hv = 250U;      /* the limits these tests were written for; the NEW default limits have their own tests */
@@ -382,9 +402,15 @@ static void ma_ms10(void)
     md.state = SlaveCtrl_LinkState(); md.fault = (uint8_t)SlaveCtrl_FaultCode();
     md.load_ok = 1U; md.load_da = 100U;
     if (e2e_last_e(&e)) { md.e_valid = 1U; md.in_band = (uint8_t)((e.flags2 & LINKV2_FLAG_IN_BAND) != 0U); md.clr_echo = e.clr; }
+    {   int ri; LinkV2Frame_t rf;                                                                 /* the slave's answers to a $K ($R) reach the master application */
+        for (ri = 0; ri < e2e_cnt; ri++) if ((LinkV2_Parse(e2e_f[ri], (uint32_t)e2e_n[ri], &rf) == LINK_OK) && (rf.type == LINKV2_R)) MApp_OnKResult(&ma, rf.u.r.id, rf.u.r.status, rf.u.r.value); }
     e2e_cnt = 0;                                                                                  /* keep only the NEWEST $E: the capture buffer must never fill up and go stale */
     MApp_Step(&ma, ma_k[0], ma_k[1], ma_k[2], ma_k[3], &md, now, ma_f);
     if (MApp_Engine(&ma)->buzzer != 0U) ma_buzz_seen = 1U;
+    {   MCalK_t ck; if (MApp_TakeKCommand(&ma, &ck, now) != 0U)                                    /* a calibration command (and its retries) goes to the slave */
+        {   LinkK_t k; char b[96]; int32_t n;
+            k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : LINKCMD_CALR); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
+            n = LinkV2_BuildK(b, sizeof b, &k); if (n > 0) e2e_bytes(b, (uint32_t)n); } }
     if ((MApp_ControlValid(&ma) != 0U) && (ma_mute_m == 0))
     {
         const MCtlOut_t *c = MApp_Control(&ma);
@@ -450,16 +476,21 @@ static void t_mc_master_app(void)
     CHECK(g_ctrl.state == CTRL_RUN, "after 30 s the master clears the slave and it runs again (RUN %u ms later)", (unsigned)t);
     t = ma_until(ma_c_contactor, 30000U); CHECK(ma_c_contactor(), "and the contactor closes once IN_BAND has held (%u ms)", (unsigned)t);
     CHECK(!MApp_Engine(&ma)->buzzer, "the buzzer is off again");
-    /* ---- three more inrush trips in a row: the fourth latches until power off and on ---- */
+    /* ---- three more inrush trips in a row: after the fourth the retries are used up: a 5-minute wait, then ONE more attempt; if that trips too it latches; START tries again ---- */
     for (k = 0U; k < 3U; k++)
     {
         ma_run(3000U); SlaveCtrl_OnFltIrq(); ma_run(500U);
         if (k < 2U) { (void)ma_until(ma_c_run, 40000U); ma_run(500U); }
     }
     ma_run(100000U);
-    CHECK(g_ctrl.state == CTRL_LATCHED && !ma_c_contactor() && ma.eng.u[0].st == (uint8_t)U_LATCHED, "after the 4th trip the master stops retrying: latched, contactor open, even 100 s later");
+    CHECK(g_ctrl.state == CTRL_LATCHED && !ma_c_contactor() && ma.eng.u[0].st == (uint8_t)U_FAULT && MF_RestartLeftS(&ma.eng, 0U) > 150U, "after the 4th trip the retries are used up: the long wait, not latched yet; the screen counts about 3 more minutes (%u s)", (unsigned)MF_RestartLeftS(&ma.eng, 0U));
+    t = ma_until(ma_c_run, 240000U);
+    CHECK(g_ctrl.state == CTRL_RUN, "after the 5 minutes the master makes ONE more attempt and the slave runs (%u ms)", (unsigned)t);
+    ma_run(3000U); SlaveCtrl_OnFltIrq(); ma_run(500U); ma_run(100000U);
+    CHECK(g_ctrl.state == CTRL_LATCHED && !ma_c_contactor() && ma.eng.u[0].st == (uint8_t)U_LATCHED, "that extra attempt trips too: latched, contactor open, even 100 s later");
     ma_tap(2, 100U); CHECK(!MApp_Engine(&ma)->buzzer && ma.eng.u[0].st == (uint8_t)U_LATCHED, "STOP silences the buzzer; the latch stays");
-    CHECK(MLog_Count(&ma.log) >= 4U, "every attempt was logged (%u entries)", (unsigned)MLog_Count(&ma.log));
+    CHECK(MLog_Count(&ma.log) >= 5U, "every attempt was logged (%u entries)", (unsigned)MLog_Count(&ma.log));
+    ma_tap(1, 100U); t = ma_until(ma_c_run, 40000U); CHECK(g_ctrl.state == CTRL_RUN, "START on the latched inrush tries again (%u ms)", (unsigned)t);
     /* ---- link lost: the contactor opens at once, and it restarts by itself when the link returns ---- */
     ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 60000U);
     ma_link_up = 0; ma_run(100U);
@@ -586,6 +617,51 @@ static void t_mc_from_90v(void)
     printf("  works from 90 V: starts and regulates from 96 V, refused at 88 V, the 5 V hysteresis at the low edge, the master trips at its own I/P LV after its own delay\n");
 }
 
+
+
+#if (SLAVE_VOLTAGE_CAL != 0)
+/* ---- voltage calibration end to end: the real master application -> $K frames -> the real slave link and calibration logic -> $R frames -> the master's screen ---- */
+static void ma_pages(int menus) { int q; ma_tap(3, 100U); for (q = 0; q < menus; q++) ma_tap(0, 100U); }       /* LOG, then MENU x menus */
+static int ma_msg_has(int row, const char *s) { return strstr(ma_f[row], s) != NULL; }
+static void t_mc_vcal(void)
+{
+    uint32_t t;
+    ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 90000U); ma_run(3000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN, "the unit is running with the contactor closed");
+    ma_pages(5); ma_run(200U); CHECK(MUI_ShowsVCal(&ma.ui) == 1U, "LOG, MENU x5: the I/P Calibration page");
+    /* running: refused by the master, nothing reaches the slave */
+    ma.ui.cal_val = 2302U; ma_tap(3, 100U); ma_run(200U);
+    CHECK(ma_msg_has(1, "Stop The Unit") && e2e_cal_saves == 0 && e2e_cal_applied[0] == 10000U, "running: 'Stop The Unit First' on the master, nothing stored (%s)", ma_f[1]);
+    /* STOP on the page stops the unit */
+    ma_run(1700U); ma_tap(2, 100U); t = ma_until(ma_c_latched, 100U); (void)t; { uint32_t g = 0U; while (g_ctrl.state != CTRL_OFF && g < 8000U) { ma_run(10U); g += 10U; } }
+    CHECK(g_ctrl.state == CTRL_OFF && !ma_c_contactor() && MUI_ShowsVCal(&ma.ui) == 1U, "STOP on the page stops the unit (slave state %d) and the page stays", g_ctrl.state);
+    W.vin = 226.8f; W.vout = 226.8f; ma_run(500U);
+    /* the input: the meter says 230.2 V where the nominal chain reads 226.8 V */
+    ma.ui.cal_val = 2302U; ma_tap(3, 100U);
+    { uint32_t g = 0U; while ((e2e_cal_saves == 0) && g < 4000U) { ma_run(10U); g += 10U; } CHECK(e2e_cal_saves == 1 && g >= 900U && g <= 2000U, "the slave averaged for about a second and stored once (%u ms, %d saves)", (unsigned)g, e2e_cal_saves); }
+    ma_run(300U);
+    CHECK(e2e_cal_applied[0] == 10150U && e2e_cal_applied[1] == 10000U && e2e_cal_stored[0] == 10150U, "the input ratio is 1.0150, the output untouched (%u %u)", e2e_cal_applied[0], e2e_cal_applied[1]);
+    CHECK(ma_msg_has(1, "Calibrated") && ma_msg_has(2, "I/P +1.50 %"), "the master shows 'Calibrated' and 'I/P +1.50 %%' ('%s' / '%s')", ma_f[1], ma_f[2]);
+    /* the output page */
+    ma_run(2000U); ma_tap(0, 100U); ma_run(200U); CHECK(MUI_ShowsVCal(&ma.ui) == 2U, "MENU: the O/P Calibration page");
+    ma.ui.cal_val = 2250U; ma_tap(3, 100U); ma_run(1800U);
+    CHECK(e2e_cal_applied[1] == 9921U && e2e_cal_applied[0] == 10150U && ma_msg_has(2, "O/P -0.79 %"), "the output: 225.0 V against 226.8 V is -0.79 %%, the input kept (%u, '%s')", e2e_cal_applied[1], ma_f[2]);
+    /* refused by the slave: out of range, nothing stored */
+    ma_run(2000U); { int s0 = e2e_cal_saves; ma.ui.cal_val = 2600U; ma_tap(3, 100U); ma_run(1800U); CHECK(ma_msg_has(1, "Out Of Range") && e2e_cal_saves == s0 && e2e_cal_applied[1] == 9921U, "260.0 V against 226.8 V: the slave answers OUT_OF_RANGE, the master says so, nothing changes ('%s')", ma_f[1]); }
+    /* a flash failure: the old value stays */
+    ma_run(2000U); e2e_cal_fail_save = 1; ma.ui.cal_val = 2250U; ma_tap(3, 100U); ma_run(1800U);
+    CHECK(ma_msg_has(1, "Save Failed") && e2e_cal_applied[1] == 9921U, "a failed flash write: 'Save Failed', the old calibration stays in force ('%s')", ma_f[1]); e2e_cal_fail_save = 0;
+    /* typing 000.0 resets a channel */
+    ma_run(2000U); ma.ui.cal_val = 0U; ma_tap(3, 100U); ma_run(500U);
+    CHECK(ma_msg_has(1, "Reset To Nominal") && e2e_cal_applied[1] == 10000U && e2e_cal_applied[0] == 10150U, "000.0 resets the OUTPUT only ('%s')", ma_f[1]);
+    /* a power cycle of the slave: the stored calibration is applied again */
+    { uint16_t keep = e2e_cal_stored[0]; e2e_cal_applied[0] = e2e_cal_applied[1] = 10000U; SlaveCal_Init(&E2E_CAL_HW); CHECK(e2e_cal_applied[0] == keep && e2e_cal_applied[1] == 10000U, "after a slave restart the stored calibration comes back (%u)", e2e_cal_applied[0]); }
+    /* the unit can be started again afterwards */
+    ma_run(2000U); ma_tap(0, 100U); ma_run(200U); CHECK(MUI_ShowsVCal(&ma.ui) == 0U, "MENU leaves the pages"); ma_tap(1, 100U); (void)ma_until(ma_c_contactor, 90000U);
+    CHECK(ma_c_contactor(), "START on the Run screen runs the unit again");
+    printf("  voltage calibration end to end: refused while running, STOP on the page, 1 s average, ratio and screen text, out of range, flash failure, reset, restart, run again\n");
+}
+#endif
 
 #if (SLAVE_TF_RUN_CHECK != 0)
 /* ---- the transformer-connection (FLIP) check at every start, with the real master ---- */

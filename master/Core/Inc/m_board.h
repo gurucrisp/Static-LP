@@ -17,5 +17,8 @@
 #define MKEY_STOP_PIN     GPIO_PIN_12
 #define MKEY_LOG_PORT     GPIOB
 #define MKEY_LOG_PIN      GPIO_PIN_13
+/* the OVERHEAT input: active LOW (the pin is pulled LOW when the heat sink / transformer thermostat says too hot); the board has an EXTERNAL pull-up */
+#define MHEAT_PORT        GPIOA
+#define MHEAT_PIN         GPIO_PIN_5
 
 #endif

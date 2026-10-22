@@ -66,6 +66,10 @@ extern "C" {
  * module or a CubeMX RTC configuration, but the board must have the crystal on PC14/PC15 and a battery on VBAT. If the crystal does not start within 3 s the internal LSI (inaccurate) is used. 0 = no clock: the log shows the running time. */
 #define MASTER_RTC_ENABLED      1
 
+/* The OVERHEAT input on PA5 (m_board.h MHEAT_PORT / MHEAT_PIN): active LOW, external pull-up on the board. 1 = read it (the master configures the pin as a plain input without a pull). The pin must stay low for the "Overheat Trip Delay"
+ * (Set-Mode item 12) before the unit trips; after it has been high for the Restart Time the unit restarts by itself (Auto restart mode), or on START (Manual); three trips within 30 minutes need START. 0 = no overheat input (the flag is never set). */
+#define MASTER_HEAT_INPUT       1
+
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
  * scale and 3 A offset). Zero: Set-Mode "Calibration" = Yes (no load). Span: the Load Calibration page (MENU x3 in Run-Mode), typing the clamp-meter reading while the load runs. */
 #define MASTER_CT_SAMPLES       200U
@@ -100,6 +104,9 @@ typedef struct
     uint8_t      h_valid;            /* a $H has arrived                              */
     uint16_t     h_win_lo_dv, h_win_hi_dv, h_vout_max_dv;
     uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
+    uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
+    int32_t      r_value;
+    uint32_t     r_n;                /* how many $R frames arrived */
 } MasterMon_t;
 
 extern MasterMon_t g_mon;

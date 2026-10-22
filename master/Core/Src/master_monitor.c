@@ -75,6 +75,7 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
             if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_t_ms = now_ms; }
+            else if (t2 == (int32_t)LINKV2_R) { g_mon.r_id = f2.u.r.id; g_mon.r_status = f2.u.r.status; g_mon.r_value = f2.u.r.value; g_mon.r_n++; }
             else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; }
         }
     }
@@ -521,7 +522,7 @@ void MasterApp_Run(void)
     uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
     uint16_t      ct_x16 = 0U;
     MDateTime_t   clk = { 0U, 0U, 0U, 0U, 0U }; uint8_t clk_ok = 0U, rtc_src = 0U; uint16_t rtc_bd = 0U, rtc_ic = 0U; uint32_t t_clk = 0U;      /* the real-time clock as last read, and when */
-    uint8_t       seq_tx = 0U, have_last = 0U, k_id = 1U;
+    uint8_t       seq_tx = 0U, have_last = 0U; uint32_t r_seen = 0U;
     MCtlOut_t     last;
 
     HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);
@@ -529,6 +530,10 @@ void MasterApp_Run(void)
     MonLcd_Init(&lcd);
     last.run = 0U; last.clr = 0U; last.setv_dv = 0U; last.maxc_dv = 0U;
     MApp_Init(&app, MFlashG0_Iface(), MAPP_PAGE_SETTINGS_A, MAPP_PAGE_SETTINGS_B, MAPP_PAGE_LOG_A, MAPP_PAGE_LOG_B, HAL_GetTick());
+#if (MASTER_HEAT_INPUT == 1)
+    {   GPIO_InitTypeDef hg = {0}; __HAL_RCC_GPIOA_CLK_ENABLE();                      /* PA5: a plain input; the board has the pull-up */
+        hg.Pin = MHEAT_PIN; hg.Mode = GPIO_MODE_INPUT; hg.Pull = GPIO_NOPULL; HAL_GPIO_Init(MHEAT_PORT, &hg); }
+#endif
 #if (MASTER_RTC_ENABLED == 1)
     MRtc_Init();                                                            /* the real-time clock: crystal + battery; a running clock is left alone */
 #endif
@@ -575,6 +580,9 @@ void MasterApp_Run(void)
 #if (MASTER_RTC_ENABLED == 1)
             if (((uint32_t)(now - t_clk) >= 1000U) || (t_clk == 0U)) { t_clk = now; clk_ok = MRtc_Get(&clk); MRtc_Status(&rtc_src, &rtc_bd, &rtc_ic); }        /* about once a second */
 #endif
+#if (MASTER_HEAT_INPUT == 1)
+            d.heat = key_down(MHEAT_PORT, MHEAT_PIN);                                  /* PA5 low = overheat */
+#endif
             d.clock = clk; d.clock_ok = clk_ok; d.rtc_src = rtc_src; d.rtc_bdcr = rtc_bd; d.rtc_icsr = rtc_ic;
             MApp_Step(&app, key_down(MKEY_MENU_PORT, MKEY_MENU_PIN), key_down(MKEY_START_PORT, MKEY_START_PIN), key_down(MKEY_STOP_PORT, MKEY_STOP_PIN),
                       key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);
@@ -598,9 +606,20 @@ void MasterApp_Run(void)
             if (MApp_HelloDue(&app, now) != 0U)
             {   /* the slave says hello only at ITS power-up: if this master started later, ask for the slave's limits ($K HELLO) */
                 LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
-                k.id = k_id; k_id = (uint8_t)((k_id >= 255U) ? 1U : (k_id + 1U)); k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
+                k.id = MApp_NextKId(&app); k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
                 n = LinkV2_BuildK(b, sizeof b, &k);
                 if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);
+            }
+            {   /* a voltage calibration command (and its retries, same id) */
+                MCalK_t ck;
+                if (MApp_TakeKCommand(&app, &ck, now) != 0U)
+                {
+                    LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
+                    k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : LINKCMD_CALR); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
+                    n = LinkV2_BuildK(b, sizeof b, &k);
+                    if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);
+                }
+                if (g_mon.r_n != r_seen) { r_seen = g_mon.r_n; MApp_OnKResult(&app, g_mon.r_id, g_mon.r_status, g_mon.r_value); }
             }
             {   const MFOut_t *eo = MApp_Engine(&app);
 #if (MASTER_DRIVE_CONTACTORS == 1)

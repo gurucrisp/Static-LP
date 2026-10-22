@@ -57,6 +57,10 @@
 #ifndef SLAVE_TF_RUN_CHECK
 #define SLAVE_TF_RUN_CHECK     1
 #endif
+/* Voltage calibration over the link ($K CALV / CALO / CALR from the master's Voltage Calibration pages): only while the unit is stopped, +-10 %, stored in two flash pages (0x0807F000 / 0x0807F800: the program must end below them). */
+#ifndef SLAVE_VOLTAGE_CAL
+#define SLAVE_VOLTAGE_CAL      1
+#endif
 /* ---- FAST SOFT START (the values of slave_config_STAGE3_cap2752_full_range_fast_start.h): the output reaches the set voltage about 1.4 s sooner from 205 V, and much sooner from a low input ---- */
 /* the soft-start ramp of the setpoint: 10 V/s for 0.5 s, then 30 V/s, then 10 V/s for the last 3 V (the standard values are 3 V/s for 2 s, 10 V/s, 5 V/s). Measured in simulation on the real regulator: no overshoot.
  * The 3 s the converter runs alone before the inverter starts is a separate delay and is not changed. A faster ramp is a faster rise of the load voltage. */

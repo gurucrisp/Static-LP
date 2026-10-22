@@ -4,7 +4,7 @@
   *          slave, clear-counter pulses, contactors, buzzer) and what to log and show. Called about every 100 ms. All rules come from the approved spec and decisions:
   *   Units:   Single = one unit (R). Industrial = ONE unit made of all three phases: one contactor, any phase fault trips all. Domestic = three independent units, per-phase contactors.
   *   Voltage faults (I/P LV/HV after Volt Cut Delay of continuous violation, O/P LV/HV the same while the output is live): clear 5 V back inside the limit; restart Auto after the Restart Time or Manual (START).
-  *   Overload and Heat: START only (Heat also needs the slave's OVERHEAT flag to be gone).
+  *   Overload: START only. Overheat: the pin must stay low for the Overheat Trip Delay; after it has been high for the Restart Time the unit restarts by itself (Auto), or on START (Manual); 3 trips within 30 min need START.
   *   Inrush (slave FLT/break codes or the master CT peak) and Power stage (slave codes 7, 12, 14): trip at once, retry 3 times 30 s apart, then latch until power off and on (D6, D27). Every attempt is logged.
   *   Mains group (slave codes 3, 4, 5, 8, 10, 11, 13, 15, 16): trip at once, restart like the voltage faults (D6). Slave code 9 shows as I/P LV or HV (D7); code 6 as O/P HV.
   *   Transformer flip (slave code 17): latched until power off and on, buzzer sounds in EVERY mode including Domestic (D28). Re-tune required (codes 18, 19): latched until MF_RetuneDone().
@@ -26,7 +26,10 @@ extern "C" {
 #define MF_OP_HV_FAST_V     15U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... */
 #define MF_OP_HV_FAST_MS    200UL     /* ... once it has lasted this long: the load must not sit on a gross over-voltage for the whole delay */
 #define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
-#define MF_RETRY_MS         30000UL   /* inrush and power-stage retries (D27) */
+#define MF_RETRY_MS         30000UL   /* the SHORTEST interval between inrush / power-stage retries (D27): the Restart Time is used if it is longer */
+#define MF_FINAL_WAIT_MS    300000UL  /* after the retries are used up: wait this long, then ONE more attempt; if that trips again the unit latches */
+#define MF_HEAT_WINDOW_MS   1800000UL /* overheat: this many trips (MF_HEAT_MAX_TRIPS) within this window need a manual START */
+#define MF_HEAT_MAX_TRIPS   3U
 #define MF_RETRIES          3U
 #define MF_HYST_V           5U        /* a voltage fault clears this far back inside its limit */
 #define MF_FORGIVE_MS       300000UL  /* the retry count is forgotten after the unit has run this long without tripping (my choice: to confirm) */
@@ -71,12 +74,16 @@ typedef struct
 } MFOut_t;
 
 typedef enum { U_OFF = 0, U_ONDELAY, U_STARTING, U_ON, U_FAULT, U_LATCHED } MUState_t;
-typedef enum { FC_NONE = 0, FC_VOLT, FC_START, FC_RETRY, FC_LATCH, FC_RETUNE } MFClass_t;
+typedef enum { FC_NONE = 0, FC_VOLT, FC_START, FC_RETRY, FC_LATCH, FC_RETUNE, FC_HEAT } MFClass_t;
 
 typedef struct
 {
     uint8_t  st, ftype, fclass, fphase, fcode, retries, clr_owed, inband_run;
+    uint8_t  long_wait, final_try;     /* inrush: the retries are used up and the long wait runs / the one extra attempt after it is under way */
+    uint8_t  heat_manual, heat_n;      /* overheat: 3 trips within 30 min: only START restarts / how many trips so far (ring index) */
+    uint16_t left_s;                   /* seconds until the next automatic restart attempt (0 = none or not counting), for the screen */
     uint32_t t_enter, t_inband, t_on;
+    uint32_t t_heat_trip[3];           /* when the last overheat trips happened */
 } MUnit_t;
 
 typedef struct
@@ -100,6 +107,7 @@ typedef struct
 /* power-up: the units start per the mode and restart mode */
 void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms);
 void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now_ms, MFOut_t *out);
+uint16_t MF_RestartLeftS(const MFaults_t *f, uint8_t unit);      /* seconds until the next automatic restart attempt of this unit (inrush / power stage / overheat), 0 = none */
 void MF_SetMaxRetries(MFaults_t *f, uint8_t n);   /* survives nothing: MF_Init sets it back to MF_RETRIES */
 void MF_RetuneDone(MFaults_t *f);     /* the user re-tuned: clears the Re-tune latch */
 uint8_t MF_Rank(uint8_t type);        /* display priority, higher = shown first */

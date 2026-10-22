@@ -78,6 +78,9 @@ typedef struct
     uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
     uint8_t      lim_set;
     uint8_t      retries_cfg;
+    uint8_t      k_id;                 /* the next $K id, 1..255 */
+    uint8_t      vcal_wait, vcal_due, vcal_id, vcal_cmd, vcal_ch, vcal_tx_n;   /* a calibration command is out: waiting for its $R; a (re)send is due; its id, command, channel, transmissions so far */
+    int32_t      vcal_num; char vcal_letter; uint32_t vcal_t0, vcal_t_tx, t_now;
     uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */
     MDateTime_t  clk_set;
     uint8_t      hello_n;
@@ -107,6 +110,17 @@ void    MApp_InitCal(MApp_t *a, uint32_t page_a, uint32_t page_b);
 void    MApp_SetInrushRetries(MApp_t *a, uint8_t n);
 /* The slave announces its limits ($H) only at its own power-up. If the master started later it asks: returns 1 (at most every 2 s) while the slave's $E is heard but no $H has arrived; the glue then sends a $K HELLO. */
 uint8_t MApp_HelloDue(MApp_t *a, uint32_t now);
+
+/* ---- voltage calibration over the link ($K CALV / CALO / CALR, answered by $R) ---- */
+typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /* cmd: MAPP_KCMD_* */
+#define MAPP_KCMD_CALV  1U            /* num = the true input voltage, tenths of a volt   */
+#define MAPP_KCMD_CALO  2U            /* num = the true output voltage, tenths of a volt  */
+#define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
+#define MAPP_VCAL_TIMEOUT_MS   3000UL /* the slave averages for 1 s: it has this long to answer                                   */
+#define MAPP_VCAL_RETRY_MS     200UL  /* a $K is repeated (same id) every 200 ms, three times in all                               */
+uint8_t MApp_NextKId(MApp_t *a);                                              /* ONE id counter for every $K (a repeated id is a retry for the slave): HELLO and calibration use it */
+uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now);             /* 1 = a $K frame is due now (first send or a retry): build and send it */
+void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived */
 /* a Date or Time saved in Set-Mode: returns 1 once, with the value to write to the real-time clock (seconds are set to 0 by the glue) */
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */

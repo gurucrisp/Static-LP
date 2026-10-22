@@ -170,14 +170,15 @@ static void t_overload_heat(void)
     CHECK(w.out.contactor[0] == 0U && w.out.shown == MLOG_T_HEAT && w.log[0].type == MLOG_T_HEAT, "after the Overheat Trip Delay (10 s) it trips");
     run_ms(&w, 60000U); press_start(&w); run_ms(&w, 300U);
     CHECK(w.out.run[0] == 0U, "START is refused while the heat flag is still set");
-    w.in.ph[0].heat = 0U; run_ms(&w, 60000U);
-    CHECK(w.out.run[0] == 0U, "heat is START only: the flag going away does not restart it by itself");
-    press_start(&w); run_ms(&w, 300U);
-    CHECK(w.out.run[0] == 1U, "START with the flag gone restarts it");
+    run_ms(&w, 600000U); CHECK(w.out.run[0] == 0U, "ten minutes with the heat flag still set: no restart, however long");
+    w.in.ph[0].heat = 0U; run_ms(&w, 4000U);
+    CHECK(w.out.run[0] == 0U, "the flag is high again: 4 s later (Restart Time 5 s) it has NOT restarted yet");
+    run_ms(&w, 1500U);
+    CHECK(w.out.run[0] == 1U, "after the Restart Time with the flag high it restarts by itself (Auto)");
     /* a hot heat sink at power-up blocks the start */
     world(&w, M_MODE_SINGLE, 1U, 11000U); w.in.ph[0].heat = 1U; run_ms(&w, 30000U);
     CHECK(w.out.run[0] == 0U && w.log[0].type != 0U ? 0 : (w.out.run[0] == 0U), "a hot unit at power-up does not start");
-    printf("  overload and heat: delays, START only, heat flag must be gone\n");
+    printf("  overload and heat: delays, overload START only, heat restarts by itself after the Restart Time with the pin high\n");
 }
 
 static void t_retry_groups(void)
@@ -188,24 +189,33 @@ static void t_retry_groups(void)
     step(&w); step(&w);
     CHECK(w.out.contactor[0] == 0U && w.out.shown == MLOG_T_INRUSH && w.n_log == 1 && w.log[0].type == MLOG_T_INRUSH && w.log[0].slave_code == 2U, "inrush: trips at once and is logged with the slave's code");
     w.stuck[0] = 2U;                                                        /* the cause comes straight back after every clear */
-    for (n = 0; n < 4; n++)
+    for (n = 0; n < 5; n++)
     {
         uint32_t waited = 0U; int clr0 = w.n_clr[0];
-        while (!w.out.run[0] && waited < 200000U) { step(&w); waited += 100U; }
-        waited = (w.out.run[0] != 0U) ? (uint32_t)(w.now - 100U - w.t_last_trip) : 200000U;           /* from the trip itself */
+        while (!w.out.run[0] && waited < 450000U) { step(&w); waited += 100U; }
+        waited = (w.out.run[0] != 0U) ? (uint32_t)(w.now - 100U - w.t_last_trip) : 450000U;           /* from the trip itself */
         if (n < 3)
         {
             CHECK(waited >= 29800U && waited <= 30400U && w.n_clr[0] == clr0 + 1, "retry %d comes 30 s after the trip (%u ms), with a clear pulse", n + 1, (unsigned)waited);
             run_ms(&w, 3000U);                                                /* it trips again straight away */
         }
+        else if (n == 3)
+        {
+            CHECK(waited >= 299800U && waited <= 300400U && w.n_clr[0] == clr0 + 1, "after the third retry has tripped the unit waits 5 minutes (%u ms), then makes ONE more attempt", (unsigned)waited);
+            run_ms(&w, 3000U);
+        }
         else
         {
-            CHECK(waited >= 200000U && w.out.run[0] == 0U, "after the third retry has tripped there is NO further retry: latched (waited %u ms)", (unsigned)waited);
+            CHECK(waited >= 450000U && w.out.run[0] == 0U, "after that extra attempt has tripped there is NO further automatic attempt: latched (waited %u ms)", (unsigned)waited);
         }
     }
-    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 4, "the unit is latched and exactly 4 trips were logged (%d)", w.n_log);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 5, "the unit is latched and exactly 5 trips were logged: the first, three retries, the extra attempt (%d)", w.n_log);
+    w.stuck[0] = 0U; press_start(&w); run_ms(&w, 300U);
+    CHECK(w.out.run[0] == 1U, "START on the latched inrush tries again, as a fresh start");
+    /* commissioning (0 retries): the latch stays until power off and on */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 0U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w);
     run_ms(&w, 600000U); press_start(&w); press_stop(&w);
-    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.out.run[0] == 0U, "ten minutes later, START and STOP change nothing: power off and on is the only way out");
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.out.run[0] == 0U, "commissioning (0 retries): ten minutes later, START and STOP change nothing: power off and on is the only way out");
     CHECK(w.out.buzzer == 0U && w.out.shown == MLOG_T_INRUSH, "STOP silenced the buzzer; the fault is still shown");
     /* a retry that works, run long enough, forgives the count */
     world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w);
@@ -301,8 +311,8 @@ static void t_no_retry(void)
     CHECK(unit_st(&w, 0) == (int)U_FAULT && w.f.max_retries == 3U, "by default the first inrush is a normal trip that retries (state %d, max %u)", unit_st(&w, 0), (unsigned)w.f.max_retries);
     /* 1 retry: exactly one */
     world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 1U); to_on(&w); run_ms(&w, 4000U); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w);
-    run_ms(&w, 120000U);
-    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 2, "1 retry: one retry, then the latch (%d trips logged)", w.n_log);
+    run_ms(&w, 450000U);
+    CHECK(unit_st(&w, 0) == (int)U_LATCHED && w.n_log == 3, "1 retry: one retry, the long wait, one extra attempt, then the latch (%d trips logged)", w.n_log);
     printf("  retries: 0 latches at the first inrush / break / power-stage trip, 1 retries once, the default is the approved 3\n");
 }
 
@@ -354,6 +364,74 @@ static void t_fast_hv(void)
     w.in.ph[0].vout_dv = 2800U; run_ms(&w, 1000U);
     CHECK(unit_st(&w, 0) == (int)U_ON, "O/P HV = 270 V: 280 V is not a gross over-voltage (the fast cut is above 285 V)");
     printf("  fast output-high cut: 15 V over O/P HV for 0.2 s opens the contactor, exactly 15 V over and short spikes follow the normal rules\n");
+}
+
+
+static void t_heat_rules(void)
+{
+    W_t w; int k; uint32_t g;
+    /* the cycle: hot for longer than the Overheat Trip Delay trips; the pin back high for the Restart Time restarts it by itself (Auto) */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w); w.in.ph[0].heat = 1U; run_ms(&w, 10500U);
+    CHECK(w.out.contactor[0] == 0U && w.out.shown == MLOG_T_HEAT, "hot for 10.5 s: tripped, contactor open, 'Heat' shown, logged");
+    w.in.ph[0].heat = 0U; run_ms(&w, 5500U); CHECK(w.out.run[0] == 1U, "pin high for the 5 s Restart Time: it restarts by itself");
+    /* a dip shorter than the delay does nothing */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w); w.in.ph[0].heat = 1U; run_ms(&w, 6000U); w.in.ph[0].heat = 0U; run_ms(&w, 20000U);
+    CHECK(w.out.contactor[0] == 1U && w.n_log == 0, "the pin low for 6 s (the delay is 10 s): nothing happens, nothing is logged");
+    /* the restart waits for the pin: it does not count while the pin is still low */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w); w.in.ph[0].heat = 1U; run_ms(&w, 10500U); run_ms(&w, 120000U);
+    CHECK(w.out.run[0] == 0U, "two minutes with the pin still low: no restart");
+    /* Manual restart mode: the pin going high is not enough, START is needed */
+    world(&w, M_MODE_SINGLE, 0U, 11000U); to_on(&w); w.in.ph[0].heat = 1U; run_ms(&w, 10500U); w.in.ph[0].heat = 0U; run_ms(&w, 120000U);
+    CHECK(w.out.run[0] == 0U, "Manual restart mode: the pin high for two minutes does not restart it");
+    press_start(&w); run_ms(&w, 300U); CHECK(w.out.run[0] == 1U, "START restarts it");
+    /* three trips within 30 minutes: only START restarts it, even in Auto */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w);
+    for (k = 0; k < 3; k++)
+    {
+        w.in.ph[0].heat = 1U; run_ms(&w, 10500U); w.in.ph[0].heat = 0U;
+        if (k < 2) { run_ms(&w, 5500U); CHECK(w.out.run[0] == 1U, "trip %d: it restarts by itself", k + 1); for (g = 0U; g < 500U && !w.out.contactor[0]; g++) step(&w); }
+    }
+    run_ms(&w, 600000U); CHECK(w.out.run[0] == 0U && w.n_log == 3, "the THIRD trip within 30 minutes: ten minutes with the pin high and it has not restarted (%d logged)", w.n_log);
+    press_start(&w); run_ms(&w, 300U); CHECK(w.out.run[0] == 1U, "START restarts it");
+    for (g = 0U; g < 500U && !w.out.contactor[0]; g++) step(&w);
+    w.in.ph[0].heat = 1U; run_ms(&w, 10500U); w.in.ph[0].heat = 0U; run_ms(&w, 5500U);
+    CHECK(w.out.run[0] == 1U, "after the manual START the count starts again: the next trip restarts by itself");
+    /* trips more than 30 minutes apart never add up */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w);
+    for (k = 0; k < 4; k++)
+    {
+        w.in.ph[0].heat = 1U; run_ms(&w, 10500U); w.in.ph[0].heat = 0U; run_ms(&w, 5500U);
+        CHECK(w.out.run[0] == 1U, "trip %d, 31 minutes after the one before: still restarts by itself", k + 1);
+        for (g = 0U; g < 500U && !w.out.contactor[0]; g++) step(&w);
+        run_ms(&w, 1860000U);
+    }
+    printf("  overheat: trips after the delay, restarts after the Restart Time with the pin high (Auto), START only in Manual and after 3 trips in 30 min, trips 31 min apart never add up\n");
+}
+
+static void t_restart_left(void)
+{
+    W_t w;
+    /* the seconds the screen counts down */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w); step(&w);
+    CHECK(MF_RestartLeftS(&w.f, 0) >= 29U && MF_RestartLeftS(&w.f, 0) <= 30U, "after an inrush trip the next retry is 30 s away (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    run_ms(&w, 10000U); CHECK(MF_RestartLeftS(&w.f, 0) >= 19U && MF_RestartLeftS(&w.f, 0) <= 20U, "10 s later 20 (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    /* a longer Restart Time is used when it is longer than 30 s */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); w.s.restart_time = 90U; w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w); step(&w);
+    CHECK(MF_RestartLeftS(&w.f, 0) >= 89U && MF_RestartLeftS(&w.f, 0) <= 90U, "a Restart Time of 90 s: the retry is 90 s away (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    world(&w, M_MODE_SINGLE, 1U, 20000U); w.s.restart_time = 5U; to_on(&w); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w); step(&w);
+    CHECK(MF_RestartLeftS(&w.f, 0) >= 29U && MF_RestartLeftS(&w.f, 0) <= 30U, "a Restart Time of 5 s is raised to the 30 s minimum for inrush (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    /* the long wait after the retries are used up: 5 minutes */
+    { int n; for (n = 0; n < 3; n++) { uint32_t g = 0U; while (!w.out.run[0] && g < 60000U) { step(&w); g += 100U; } run_ms(&w, 3000U); } }
+    CHECK(MF_RestartLeftS(&w.f, 0) >= 295U && MF_RestartLeftS(&w.f, 0) <= 300U, "after the third retry has tripped: the long wait, 5 minutes (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    /* nothing to count: running, and a latch */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); CHECK(MF_RestartLeftS(&w.f, 0) == 0U, "running: nothing counts");
+    world(&w, M_MODE_SINGLE, 1U, 20000U); MF_SetMaxRetries(&w.f, 0U); to_on(&w); w.code[0] = 2U; w.stuck[0] = 2U; step(&w); step(&w); step(&w);
+    CHECK(MF_RestartLeftS(&w.f, 0) == 0U, "latched (commissioning): nothing counts");
+    /* heat: counts only while the pin is high */
+    world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w); w.in.ph[0].heat = 1U; run_ms(&w, 10500U);
+    CHECK(MF_RestartLeftS(&w.f, 0) == 0U, "overheat, pin still low: nothing counts");
+    w.in.ph[0].heat = 0U; run_ms(&w, 1000U); CHECK(MF_RestartLeftS(&w.f, 0) >= 3U && MF_RestartLeftS(&w.f, 0) <= 5U, "pin high: the Restart Time counts down (%u)", (unsigned)MF_RestartLeftS(&w.f, 0));
+    printf("  restart countdown: 30 s minimum, a longer Restart Time wins, 5 minutes after the retries, nothing while running / latched / hot\n");
 }
 
 static void t_modes(void)
@@ -505,6 +583,8 @@ int main(void)
     t_inverter_off();
     t_fast_hv();
     t_no_retry();
+    t_heat_rules();
+    t_restart_left();
     t_setmode_and_stale();
     t_priority();
     t_fuzz();

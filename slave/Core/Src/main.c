@@ -43,6 +43,8 @@
 #include "slave_config.h"      /* SLAVE_POWER_STAGE, BRINGUP_* switches */
 #include "slave_zc.h"
 #include "slave_meas.h"
+#include "slave_features.h"
+#include "slave_cal_hw.h"
 #include "slave_link.h"
 #include "slave_power.h"       /* TIM1/TIM15 setup now lives here (htim1, htim15, POWER_*) */
 #if (SLAVE_POWER_STAGE >= 1)
@@ -368,6 +370,9 @@ int main(void)
     MX_USART1_UART_Init();
     SlaveZC_Init();      /* TIM2 1 MHz timebase + ZCD (PB0) edge capture - see slave_zc.h */
     SlaveMeas_Init();    /* TIM3 20 kHz trigger + ADC1 + circular DMA - see slave_meas.h  */
+#if (SLAVE_VOLTAGE_CAL != 0)
+    SlaveCalHw_Init();   /* the stored voltage calibration (two copies, CRC) is applied to the measurement */
+#endif
     SlaveLink_Init();    /* status frame to the master every 10 ms - see slave_link.h    */
 
 #if (SLAVE_POWER_STAGE >= 1)

@@ -57,6 +57,10 @@
 #ifndef SLAVE_TF_RUN_CHECK
 #define SLAVE_TF_RUN_CHECK     1
 #endif
+/* Voltage calibration over the link ($K CALV / CALO / CALR from the master's Voltage Calibration pages): only while the unit is stopped, +-10 %, stored in two flash pages (0x0807F000 / 0x0807F800: the program must end below them). */
+#ifndef SLAVE_VOLTAGE_CAL
+#define SLAVE_VOLTAGE_CAL      1
+#endif
 /* ---- TEST ONLY: NO VOLTAGE CUTS IN THE SLAVE ---------------------------------------------------------------------------------------------------------------------
  * The input-range trip, the input start window and the output-high trip are OFF, and $H announces a 0 to 650 V window so the master accepts any cut-off. The hardware over-current protection stays.
  * For bench testing only: do not leave a unit running on this file. The standard MASTER file keeps every limit.

@@ -18,6 +18,8 @@ static uint8_t  s_h_pending;         /* a HELLO asked for one                   
 static LinkR_t  s_rq[SL2_R_QUEUE];   /* responses waiting to be sent, oldest first      */
 static uint8_t  s_rq_n;
 static uint8_t  s_last_id;           /* the id of the last $K handled; 0 = none yet      */
+static uint32_t s_now_ms;            /* the time of the last SL2_Service / SL2_Rx call, for the hooks */
+static uint8_t  s_cal_pending, s_cal_id;   /* a calibration is averaging: the id it will be answered with */
 static LinkR_t  s_last_resp;         /* what it was answered with, so a retry gets the same answer */
 
 /* wrap-safe "now has reached t" for a free-running 32-bit millisecond counter */
@@ -43,13 +45,14 @@ void SL2_Init(const SL2_Hooks_t *hooks, uint32_t now_ms)
     s_h_boot_left = (uint8_t)SL2_H_BOOT_COUNT;
     s_h_pending = 0U;
     s_rq_n = 0U;
-    s_last_id = 0U;
+    s_last_id = 0U; s_cal_pending = 0U; s_cal_id = 0U;
     s_last_resp.id = 0U; s_last_resp.status = 0U; s_last_resp.value = 0;
 }
 
 static void handle_k(const LinkK_t *k)
 {
     s_st.k_ok++;
+    if ((s_cal_pending != 0U) && (k->id == s_cal_id)) { s_st.k_repeat++; return; }      /* the master's retry of the command that is being worked on: it is answered when it is done */
     if ((k->id == s_last_id) && (s_last_id != 0U))
     {   /* the master's retry: answer again with the SAME answer, execute nothing */
         s_st.k_repeat++;
@@ -60,6 +63,15 @@ static void handle_k(const LinkK_t *k)
         uint8_t status = LINKV2_ST_UNKNOWN_CMD;      /* every command except HELLO is not in this firmware version */
         int32_t value = 0;
         if (k->cmd == LINKCMD_HELLO) { s_h_pending = 1U; status = LINKV2_ST_OK; }
+        else if (((k->cmd == LINKCMD_CALV) || (k->cmd == LINKCMD_CALO) || (k->cmd == LINKCMD_CALR)) && (s_hk.cal_command != 0))
+        {
+            if (s_cal_pending != 0U) { status = LINKV2_ST_NOT_ALLOWED; }                          /* another calibration is averaging */
+            else if (s_hk.cal_command((uint8_t)k->cmd, k->num, k->letter, &status, &value, s_now_ms) == 0)
+            {   /* started: no answer yet; the id is remembered so that a retry is not executed twice */
+                s_cal_pending = 1U; s_cal_id = k->id; s_last_id = k->id;
+                return;
+            }
+        }
         s_last_id = k->id;
         s_last_resp.id = k->id; s_last_resp.status = status; s_last_resp.value = value;
         push_r(k->id, status, value);
@@ -68,6 +80,7 @@ static void handle_k(const LinkK_t *k)
 
 void SL2_Rx(uint8_t byte, uint32_t now_ms)
 {
+    s_now_ms = now_ms;
     LinkV2Frame_t f;
     int32_t t = LinkV2Rx_Feed(&s_rx, byte, &f);
     if (t == (int32_t)LINKV2_M)
@@ -96,6 +109,13 @@ void SL2_Service(uint32_t now_ms)
     char    b[LINKV2_MAX_LEN + 8U];
     int32_t n;
 
+    s_now_ms = now_ms;
+    /* 0. a calibration that is averaging: poll it, and queue its answer when it is done */
+    if ((s_cal_pending != 0U) && (s_hk.cal_poll != 0))
+    {
+        uint8_t cst = 0U; int32_t cval = 0;
+        if (s_hk.cal_poll(&cst, &cval, now_ms) != 0) { s_cal_pending = 0U; s_last_resp.id = s_cal_id; s_last_resp.status = cst; s_last_resp.value = cval; push_r(s_cal_id, cst, cval); }
+    }
     /* 1. responses first: a command is answered as soon as the queue has room */
     while (s_rq_n > 0U)
     {
