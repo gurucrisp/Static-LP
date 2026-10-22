@@ -68,7 +68,7 @@ extern "C" {
 
 /* The OVERHEAT input on PA5 (m_board.h MHEAT_PORT / MHEAT_PIN): active LOW, external pull-up on the board. 1 = read it (the master configures the pin as a plain input without a pull). The pin must stay low for the "Overheat Trip Delay"
  * (Set-Mode item 12) before the unit trips; after it has been high for the Restart Time the unit restarts by itself (Auto restart mode), or on START (Manual); three trips within 30 minutes need START. 0 = no overheat input (the flag is never set). */
-#define MASTER_HEAT_INPUT       1
+#define MASTER_HEAT_INPUT       0        /* OFF since v0.9.21: with the pin read as low (floating, no pull-up fitted, or another function) the master saw permanent overheat and would not start. Set 1 only after checking PA5 with a meter: it must read HIGH (3.3 V) when cool. */
 
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
  * scale and 3 A offset). Zero: Set-Mode "Calibration" = Yes (no load). Span: the Load Calibration page (MENU x3 in Run-Mode), typing the clamp-meter reading while the load runs. */

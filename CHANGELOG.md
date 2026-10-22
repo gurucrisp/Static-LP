@@ -2,7 +2,11 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.20 — overheat input, the inrush restart rules, voltage calibration (current)
+## v0.9.21 — the overheat input is switched OFF (current)
+* Report: the overheat input stopped the master from starting. A pin that reads low (floating, no pull-up fitted, or used for something else) means permanent overheat, and an overheated unit never starts (by design). `MASTER_HEAT_INPUT` is now 0: PA5 is not configured or read, the heat flag is never set.
+  The rules themselves (trip after the delay, auto restart after the Restart Time, 3 trips in 30 min) stay in the engine and are tested. Switch it on again only after measuring PA5: it must read HIGH when cool.
+
+## v0.9.20 — overheat input, the inrush restart rules, voltage calibration
 * **Overheat (PA5, active low, external pull-up):** read as a plain input (`MASTER_HEAT_INPUT`, `MHEAT_PORT/PIN` in m_board.h). It must stay low for the Overheat Trip Delay (item 12); then the unit trips ("Heat"). Once the pin has been high for the Restart Time the unit restarts BY ITSELF in Auto restart mode (START in Manual).
   Three trips within 30 minutes need a manual START (even in Auto); trips more than 30 minutes apart never add up. New fault class FC_HEAT. (Before: overheat needed START.)
 * **Inrush / power-stage retries:** the retry interval is the Restart Time but never under 30 s. After the retries are used up: a 5-minute wait, then ONE more attempt; if that trips too, the unit latches. START restarts at once (a fresh start), also from the latch, EXCEPT in commissioning mode (`MASTER_INRUSH_RETRIES 0`: the first trip latches until power off and on, as before).
