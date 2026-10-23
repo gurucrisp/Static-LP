@@ -26,10 +26,13 @@
 ## Done: the profile storage (v0.9.29, slave_profile.c, 80 PC checks)
 Two CRC-protected copies in flash pages 124 and 125, validated on load, a power cut at any point leaves the old or the new profile. `SLAVE_AUTOTUNE 1` (default 0) initialises it at start and makes `$H tuned` follow it.
 
+## Done: the link (v0.9.32, slave_tune_link.c, 30 PC checks)
+`$K TUNE` (refusals with reasons: 4 NOT_STOPPED; 7 with 1 no tune mode / 2 no Max Correction / 3 busy / 4 already running), `$K TABORT`, the `$T` frames (the result repeated 6 times), `$E` BUSY / NOT_TUNED, the profile stored before FINISHED is reported.
+Tune mode is still refused ("no tune mode"): the controller does not apply the duty yet.
+
 ## Not done yet (in this order)
-1. **Link**: `$K TUNE / TABORT / TPARAM / TSAVE`, the `$T` frames, `$E` NOT_TUNED / BUSY and the reach.
-2. **Master**: the automatic first tune after the Restart Time, the screens, the password-protected Re-tune item, "Re-tune Required".
-3. **Controller integration**: a tune mode in the controller (the normal start sequence up to RUN, but the duty is the tune's open-loop boost request and the regulator is off); applying the cap and the gain scale; refusing closed loop until tuned (code 19); the model check during the soft start; the loop-instability guard (code 18).
+1. **Master**: the automatic first tune after the Restart Time, the screens, the password-protected Re-tune item, "Re-tune Required".
+2. **Controller integration**: a tune mode in the controller (the normal start sequence up to RUN, but the duty is the tune's open-loop boost request and the regulator is off); applying the cap and the gain scale; refusing closed loop until tuned (code 19); the model check during the soft start; the loop-instability guard (code 18).
 4. **Bench validation**, on a variac, no load. The F02 / FLT gate is open (a hardware fault, cleared); a scope on a gate drive for the first run.
 
 ## Safety stance

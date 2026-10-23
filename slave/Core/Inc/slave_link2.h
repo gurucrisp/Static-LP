@@ -46,6 +46,10 @@ typedef struct
      * NULL = this build has no calibration: the command is answered UNKNOWN_CMD. */
     int     (*cal_command)(uint8_t cmd, int32_t num, char letter, uint8_t *status, int32_t *value, uint32_t now_ms);
     int     (*cal_poll)(uint8_t *status, int32_t *value, uint32_t now_ms);                  /* 1 = the pending command is done */
+    /* the transformer autotune ($K TUNE / TABORT / TPARAM / TSAVE): answered at once. Return 0 = this build does not know the command (it is answered UNKNOWN_CMD). NULL = no autotune in this build. */
+    int     (*tune_command)(uint8_t cmd, const char *name, int32_t num, uint8_t *status, int32_t *value, uint32_t now_ms);
+    /* a $T progress frame is ready: 1 and the frame; the link keeps it and offers it to the transmitter until it is accepted */
+    int     (*tune_frame)(LinkT_t *f, uint32_t now_ms);
 } SL2_Hooks_t;
 
 typedef struct

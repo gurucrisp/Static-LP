@@ -2,7 +2,18 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.31 — the I-OUT burden is 68 ohm x 3 on this board (current)
+## v0.9.32 — PHASE 2, step 3: the autotune over the link (current)
+* Bench result from you (v0.9.31): the voltages read as before with the 4th ADC channel, the converter current agrees with a clamp meter, the 108 A short-circuit trip is accepted; the 100 V/s correction profile stays. The I-OUT scaling is therefore confirmed.
+  NEW config `..._fast_start_fast_correction_100_iout.h` = your 100 V/s profile + `SLAVE_IOUT 1` + the 68 ohm burden, so nothing has to be merged by hand.
+* NEW `slave_tune_link.c/.h` and two new hooks in the slave link layer (`tune_command`, `tune_frame`): **`$K TUNE`** starts a sweep (answered 0; refused 4 NOT_STOPPED if the unit runs, or 7 NOT_ALLOWED with a REASON in the R value: 1 = this build has no tune mode, 2 = Max Correction not set, 3 = a calibration / flash write is busy, 4 = a sweep is running),
+  **`$K TABORT`** stops it (always answered 0), and the sweep's progress goes out as **`$T`** frames, one per step. `$T` is not acknowledged, so the result frame is sent once and repeated 6 times, 0.5 s apart; a frame the transmitter has no room for is held until it has.
+  **The profile is stored BEFORE the master is told FINISHED**: if the flash refuses, the master gets ABORTED (4), never FINISHED. `$E` says BUSY while a sweep runs and NOT_TUNED without a valid profile or without Max Correction. A new sweep forgets the old progress and result.
+  TPARAM and TSAVE (a hand-set profile for service) are not in this version: UNKNOWN_CMD.
+* **TUNE is refused ("no tune mode", reason 1) in every real build for now**: the controller's tune mode, which applies the sweep's open-loop duty, is the next step. The glue is switched on by `SLAVE_AUTOTUNE 1` (default 0) and needs the power stage.
+* Tests: autotune over the link 30 checks (the real link library as BYTES, the real link layer, the sweep against a simulated transformer: a whole sweep, a blocked transmitter, a re-tune over an old profile, TABORT, flipped, absent, a refusing flash, Max Correction 60 V). Mutation checks 11 of 12 (the other is a double guard).
+  Link layer, link library and harness tests updated for the two new hooks. NOT compiled here: the glue in slave main.c and slave_link.c.
+
+## v0.9.31 — the I-OUT burden is 68 ohm x 3 on this board
 * Correction from you: the burden resistors R42, R43, R44 are 68 ohm each, not the drawing's 180 ohm. In parallel that is 22.67 ohm instead of 60: **0.0617 V per ampere** of CT primary current (was 0.1632), 13.1 mA per ADC count, the channel clips at **+-26.8 A peak (18.9 A RMS)** (was +-10.1 A).
   The burden is now a named setting `IOUT_BURDEN_R_EACH_OHM` (default 68, in slave_iout.h, settable in slave_config.h); the I-OUT config sets it explicitly. The conversion tests are computed from the setting and built for BOTH burdens (68 and 180) by the runner.
 * **The hardware short-circuit comparators' trip moved with it**: their thresholds are fixed across the burden (about 0.98 V), so the FLT now trips at about **108 A peak of CT primary current instead of 41 A**. Please check that against the IGBT's pulsed rating and the protection you intend (docs/IOUT.md).

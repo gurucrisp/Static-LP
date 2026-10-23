@@ -39,3 +39,10 @@ The examples in `tests/link_v2_examples.inc` are generated from the workbook: `p
 ## `$E` optional fields (v0.9.30)
 `$E,seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca]`: the last two (the converter-side current, hundredths of an ampere, 0..4000) are OPTIONAL. A sender without the channel omits them (the frame is byte for byte the 6-field frame of the first protocol); a receiver that gets only 6 fields reads them as 0; one that gets 7 reads the peak as 0;
 a present optional field must be in range or the frame is rejected; extra fields beyond 8 are ignored. Flags: `IOUT_VALID` 0x0200 (the slave measures it), `IOUT_CLIP` 0x0400 (the measurement is at the limit of its range).
+
+
+## The autotune over the link (v0.9.32)
+`$K,id,TUNE`: start a sweep. R status 0 = started. 4 NOT_STOPPED = the unit runs (send run = 0). 7 NOT_ALLOWED, R value = the reason: 1 this build has no tune mode, 2 Max Correction not set, 3 a calibration or flash write is busy, 4 a sweep is already running.
+`$K,id,TABORT`: stop at once, always status 0. `TPARAM` / `TSAVE`: UNKNOWN_CMD in this version.
+`$T,step,ticks,vin_dv,dv_dv,result`: one frame per step (result 0), then the final frame (result 1 FINISHED, 2 FLIPPED, 3 NO_RESPONSE, 4 ABORTED, 5 UNSTEADY, 6 BY_MASTER). The final frame is sent again 6 times, 0.5 s apart (`$T` is not acknowledged): a master that sees the same final frame more than once ignores the repeats.
+FINISHED is sent only after the profile has been stored; if the flash refuses, the result is 4. `$E` flags: BUSY 0x0080 while a sweep runs, NOT_TUNED 0x0100 without a valid profile or without Max Correction.

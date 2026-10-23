@@ -241,7 +241,7 @@ static int e2e_count(LinkV2Type_t t) { int i, c = 0; LinkV2Frame_t f; for (i = 0
 
 static void t_mc_end_to_end(void)
 {
-    static const SL2_Hooks_t HK = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx };
+    static const SL2_Hooks_t HK = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, 0, 0 };
     LinkE_t e; LinkV2Frame_t f; int k, i, ok;
     mc_world(229000000ULL, 225.0f);
     e2e_cnt = 0; e2e_seq_m = 0U;
@@ -298,9 +298,9 @@ static const SlaveCalHw_t E2E_CAL_HW = { e2e_h_raw, e2e_h_cnt, e2e_h_stopped, e2
 static int e2e_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t *val, uint32_t now)
 { return SlaveCal_Command((cmd == (uint8_t)LINKCMD_CALV) ? SCAL_CMD_CALV : ((cmd == (uint8_t)LINKCMD_CALO) ? SCAL_CMD_CALO : SCAL_CMD_CALR), num, letter, st, val, now); }
 static int e2e_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { return SlaveCal_Poll(st, val, now); }
-static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, e2e_cal_cmd, e2e_cal_poll };
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, e2e_cal_cmd, e2e_cal_poll, 0, 0 };
 #else
-static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0 };
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, 0, 0 };
 #endif
 static void mm_start(uint8_t restart_auto)
 {

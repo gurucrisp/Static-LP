@@ -18,6 +18,7 @@ static uint8_t  s_h_pending;         /* a HELLO asked for one                   
 static LinkR_t  s_rq[SL2_R_QUEUE];   /* responses waiting to be sent, oldest first      */
 static uint8_t  s_rq_n;
 static uint8_t  s_last_id;           /* the id of the last $K handled; 0 = none yet      */
+static LinkT_t   s_t_hold; static uint8_t s_t_has;      /* a $T frame taken from the hook that the transmitter has not accepted yet */
 static uint32_t s_now_ms;            /* the time of the last SL2_Service / SL2_Rx call, for the hooks */
 static uint8_t  s_cal_pending, s_cal_id;   /* a calibration is averaging: the id it will be answered with */
 static LinkR_t  s_last_resp;         /* what it was answered with, so a retry gets the same answer */
@@ -45,7 +46,7 @@ void SL2_Init(const SL2_Hooks_t *hooks, uint32_t now_ms)
     s_h_boot_left = (uint8_t)SL2_H_BOOT_COUNT;
     s_h_pending = 0U;
     s_rq_n = 0U;
-    s_last_id = 0U; s_cal_pending = 0U; s_cal_id = 0U;
+    s_last_id = 0U; s_cal_pending = 0U; s_cal_id = 0U; s_t_has = 0U;
     s_last_resp.id = 0U; s_last_resp.status = 0U; s_last_resp.value = 0;
 }
 
@@ -63,6 +64,10 @@ static void handle_k(const LinkK_t *k)
         uint8_t status = LINKV2_ST_UNKNOWN_CMD;      /* every command except HELLO is not in this firmware version */
         int32_t value = 0;
         if (k->cmd == LINKCMD_HELLO) { s_h_pending = 1U; status = LINKV2_ST_OK; }
+        else if (((k->cmd == LINKCMD_TUNE) || (k->cmd == LINKCMD_TABORT) || (k->cmd == LINKCMD_TPARAM) || (k->cmd == LINKCMD_TSAVE)) && (s_hk.tune_command != 0))
+        {   /* the autotune commands are answered at once; a command this build does not know stays UNKNOWN_CMD */
+            if (s_hk.tune_command((uint8_t)k->cmd, k->name, k->num, &status, &value, s_now_ms) == 0) { status = LINKV2_ST_UNKNOWN_CMD; value = 0; }
+        }
         else if (((k->cmd == LINKCMD_CALV) || (k->cmd == LINKCMD_CALO) || (k->cmd == LINKCMD_CALR)) && (s_hk.cal_command != 0))
         {
             if (s_cal_pending != 0U) { status = LINKV2_ST_NOT_ALLOWED; }                          /* another calibration is averaging */
@@ -158,6 +163,15 @@ void SL2_Service(uint32_t now_ms)
         s_e_next = now_ms + SL2_E_PERIOD_MS;
         n = LinkV2_BuildE(b, sizeof b, &e);
         if (send(b, n) != 0U) s_st.e_sent++;
+    }
+
+    /* 4. the autotune's progress frames ($T): a frame is taken from the hook, sent, and kept until the transmitter accepts it */
+    if ((s_t_has == 0U) && (s_hk.tune_frame != 0) && (s_hk.tune_frame(&s_t_hold, now_ms) != 0)) s_t_has = 1U;
+    if (s_t_has != 0U)
+    {
+        n = LinkV2_BuildT(b, sizeof b, &s_t_hold);
+        if (n <= 0) s_t_has = 0U;                                              /* a frame the builder refuses (out of range) is dropped, never retried for ever */
+        else if ((s_hk.tx != 0) && (s_hk.tx(b, (uint32_t)n) != 0U)) s_t_has = 0U;
     }
 }
 

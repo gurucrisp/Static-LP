@@ -89,6 +89,16 @@ static void hk_on_control(const LinkM_t *m, uint32_t now_ms)
 {
     SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now_ms);
 }
+#if (SLAVE_AUTOTUNE != 0)
+#include "slave_tune_link.h"
+/* the autotune over the link: $K TUNE / TABORT and the $T progress frames (slave_tune_link.h) */
+static int hk_tune_cmd(uint8_t cmd, const char *name, int32_t num, uint8_t *status, int32_t *value, uint32_t now_ms) { return SlaveTuneLink_Command(cmd, name, num, status, value, now_ms); }
+static int hk_tune_frame(LinkT_t *f, uint32_t now_ms) { return SlaveTuneLink_NextFrame(f, now_ms); }
+#define SLAVE_TUNE_HOOKS hk_tune_cmd, hk_tune_frame
+#else
+#define SLAVE_TUNE_HOOKS 0, 0
+#endif
+
 static void hk_fill_e(LinkE_t *e)
 {
     e->setv_dv      = SlaveCtrl_SetvDv();
@@ -96,6 +106,9 @@ static void hk_fill_e(LinkE_t *e)
     e->clr          = SlaveCtrl_ClrEcho();
     e->reach_lo_dv  = 0U;                  /* the input range the unit can regulate: measured by the autotune (step 5) */
     e->reach_hi_dv  = 0U;
+#if (SLAVE_AUTOTUNE != 0)
+    e->flags2 = (uint16_t)(e->flags2 | SlaveTuneLink_Flags2());       /* BUSY while a sweep runs, NOT_TUNED without a valid profile or Max Correction */
+#endif
 #if (SLAVE_IOUT != 0)
     e->iout_rms_ca  = Iout_ToCentiAmps(g_meas.irms_a);          /* the converter-side current, hundredths of an ampere (slave_iout.h) */
     e->iout_pk_ca   = Iout_ToCentiAmps(g_meas.ipk_a);
@@ -141,9 +154,9 @@ static int hk_cal_command(uint8_t cmd, int32_t num, char letter, uint8_t *status
     return SlaveCal_Command(c, num, letter, status, value, now_ms);
 }
 static int hk_cal_poll(uint8_t *status, int32_t *value, uint32_t now_ms) { return SlaveCal_Poll(status, value, now_ms); }
-static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, hk_cal_command, hk_cal_poll };
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, hk_cal_command, hk_cal_poll, SLAVE_TUNE_HOOKS };
 #else
-static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, 0, 0 };
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, 0, 0, SLAVE_TUNE_HOOKS };
 #endif
 
 static void capture_reset_cause(void)

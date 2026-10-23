@@ -48,6 +48,7 @@
 #if (SLAVE_AUTOTUNE != 0)
 #include "slave_profile.h"
 #include "slave_flash.h"
+#include "slave_tune_link.h"
 #endif
 #include "slave_iwdg.h"
 #include "slave_link.h"
@@ -57,6 +58,15 @@
 #endif
 #include "link_proto.h"
 #include <stdint.h>
+
+#if (SLAVE_AUTOTUNE != 0) && (SLAVE_POWER_STAGE >= 1)
+/* What the autotune glue asks of the controller. The controller's TUNE MODE (applying the sweep's open-loop duty) does not exist yet, so can_run is 0 and a TUNE command is answered NOT_ALLOWED (reason 1). */
+static uint16_t s_tune_maxc(void) { return SlaveCtrl_MaxCorrDv(); }
+static uint8_t  s_tune_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
+static uint8_t  s_tune_can_run(void) { return 0U; }
+static uint8_t  s_tune_busy(void) { return 0U; }
+static const TuneLinkHw_t s_tune_hw = { s_tune_maxc, s_tune_stopped, s_tune_can_run, s_tune_busy };
+#endif
 
 /* ----------------------------------------------------------------------
  * Handles
@@ -380,6 +390,9 @@ int main(void)
 #endif
 #if (SLAVE_AUTOTUNE != 0)
     SlaveProfile_Init(&g_slave_flash, SFLASH_PROF_PAGE_A, SFLASH_PROF_PAGE_B);   /* the transformer profile (two copies, CRC, validated): $H tuned follows it */
+#if (SLAVE_POWER_STAGE >= 1)
+    SlaveTuneLink_Init(&s_tune_hw);                                              /* $K TUNE / TABORT and the $T frames; TUNE is refused until the controller has its tune mode (s_tune_can_run) */
+#endif
 #endif
     SlaveLink_Init();    /* status frame to the master every 10 ms - see slave_link.h    */
 
@@ -418,6 +431,14 @@ int main(void)
         /* Silent: only keep the measurement and the master link running. */
         SlaveMeas_Service();
         SlaveLink_Service();
+#if (SLAVE_AUTOTUNE != 0) && (SLAVE_POWER_STAGE >= 1)
+        {   /* the autotune: fed with the measurements every pass; its duty request is for the controller's tune mode (not built yet) */
+            TuneIn_t ti; float vin = g_meas.vrms_in;
+            ti.vin = vin; ti.vout = g_meas.vrms_out; ti.meas_valid = (uint8_t)(g_meas.valid != 0U); ti.fault = (uint8_t)(g_ctrl.fault != 0U);
+            ti.vin_in_window = (uint8_t)((vin >= CTRL_VIN_MIN_V) && (vin <= CTRL_VIN_MAX_V)); ti.maxc_v = (float)SlaveCtrl_MaxCorrDv() / 10.0f; ti.hw_cap_ticks = (uint16_t)CTRL_STAGE3_MAX_EFF_TICKS;
+            SlaveTuneLink_Service(HAL_GetTick(), &ti);
+        }
+#endif
 #if (SLAVE_POWER_STAGE >= 1)
         SlaveCtrl_Service();
 #endif

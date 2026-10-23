@@ -22,7 +22,7 @@ static uint8_t h_tx(const char *f, uint32_t n)
     memcpy(cap[ncap], f, n); cap[ncap][n] = '\0'; cap_len[ncap] = (int)n; ncap++;
     return 1U;
 }
-static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0 };
+static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, 0, 0 };
 
 static void reset_world(uint32_t t0)
 {
@@ -216,7 +216,7 @@ static void t_fuzz(void)
     CHECK(n_ctrl == (int)SL2_Stats()->m_ok, "every delivery is a counted valid $M (%d vs %u)", n_ctrl, (unsigned)SL2_Stats()->m_ok);
     CHECK(n_ctrl < 20, "random bytes (with a 1-in-256 chance per corrupted frame to pass the checksum) hardly ever deliver a control frame (%d of 2,000,000 bytes)", n_ctrl);
     /* NULL hooks must not crash */
-    {   SL2_Hooks_t none = { 0, 0, 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
+    {   SL2_Hooks_t none = { 0, 0, 0, 0, 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
     CHECK(1, "NULL hooks do not crash");
     printf("  fuzz: 2,000,000 random bytes: no crash, deliveries all counted and rare; NULL hooks are safe\n");
 }
@@ -231,7 +231,7 @@ static int h_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t
     cal_t0 = now; return 0;
 }
 static int h_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { cal_polls++; if ((uint32_t)(now - cal_t0) >= 1000U) { *st = cal_st; *val = cal_val; return 1; } return 0; }
-static const SL2_Hooks_t HOOKS_CAL = { h_on_control, h_fill_e, h_fill_h, h_tx, h_cal_cmd, h_cal_poll };
+static const SL2_Hooks_t HOOKS_CAL = { h_on_control, h_fill_e, h_fill_h, h_tx, h_cal_cmd, h_cal_poll, 0, 0 };
 static int count_r(uint8_t id, int *status, int32_t *value) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (parse_cap(i, &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == id) { c++; *status = f.u.r.status; *value = f.u.r.value; } return c; }
 
 static void t_calibration(void)
