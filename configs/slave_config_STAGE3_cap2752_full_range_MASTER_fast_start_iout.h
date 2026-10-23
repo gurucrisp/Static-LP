@@ -281,5 +281,8 @@
  * and shown on the master's "Converter Current" page (LOG, then MENU x7). See docs/IOUT.md. NOT tried on hardware: this changes the ADC scan of the measurement core (3 -> 4 channels, one more DMA word per frame). Check that the
  * input and output voltages still read as before, then compare the current with a clamp meter. Go back to the plain fast-start config if anything about the voltages changes. */
 #define SLAVE_IOUT 1
+/* The burden of the CT2500: R42, R43, R44 in parallel. The drawing has 180 ohm each; THIS BOARD HAS 68 ohm each (22.67 ohm in all): 0.0617 V per ampere of primary current, the channel clips at +-26.8 A peak (18.9 A RMS).
+ * NOTE the hardware short-circuit comparators have FIXED thresholds across the burden: with 68 ohm x 3 they trip at about +-108 A peak (41 A with 180 ohm x 3). If the resistors change, change this number. */
+#define IOUT_BURDEN_R_EACH_OHM 68.0f
 
 #endif /* SLAVE_CONFIG_H */

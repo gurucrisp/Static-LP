@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.30 — the converter-side current (I-OUT, PA2) (current)
+## v0.9.31 — the I-OUT burden is 68 ohm x 3 on this board (current)
+* Correction from you: the burden resistors R42, R43, R44 are 68 ohm each, not the drawing's 180 ohm. In parallel that is 22.67 ohm instead of 60: **0.0617 V per ampere** of CT primary current (was 0.1632), 13.1 mA per ADC count, the channel clips at **+-26.8 A peak (18.9 A RMS)** (was +-10.1 A).
+  The burden is now a named setting `IOUT_BURDEN_R_EACH_OHM` (default 68, in slave_iout.h, settable in slave_config.h); the I-OUT config sets it explicitly. The conversion tests are computed from the setting and built for BOTH burdens (68 and 180) by the runner.
+* **The hardware short-circuit comparators' trip moved with it**: their thresholds are fixed across the burden (about 0.98 V), so the FLT now trips at about **108 A peak of CT primary current instead of 41 A**. Please check that against the IGBT's pulsed rating and the protection you intend (docs/IOUT.md).
+* The master page says `OVER RANGE (clipped)` (it said "> 10 A pk", which is no longer true). Nothing else changes; the `$E` fields and the page are unchanged.
+
+## v0.9.30 — the converter-side current (I-OUT, PA2)
 * From the schematic you uploaded (22122016-EB) and your confirmation that I-OUT reaches PA2: the CT2500 secondary works into 3 x 180 ohm (60 ohm); a differential stage (U8C, gain 6.8) amplifies it around 1.65 V, so **V(I-OUT) = 1.65 V +- 0.1632 V per ampere of CT PRIMARY current**,
   usable to +-10.1 A peak (7.1 A RMS), full load of the original board 5.89 A RMS. The hardware short-circuit comparators trip at about +-41 A peak. It is the current in the conductor through the CT: from the net names it looks like the converter side of the series transformer, not the load line.
 * NEW `slave_iout.c/.h` (pure): counts to amperes (AC RMS about the mean, the peak, a clip flag), 13 PC checks including a synthetic sine through the analogue chain and the ADC.

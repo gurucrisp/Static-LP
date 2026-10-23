@@ -7,12 +7,24 @@
 * U8C (MCP6004), R45 / R46 1k, R47 6k8: a differential amplifier of gain 6.8, + input from VCC/2, 1 nF across R47 (about 23 kHz). Its output is **I-OUT** (TP20, connector pin 32, PA2 of the piggyback).
 * The comparators U10 and U14 (MCP6567) watch the burden voltage through R41 1k and make the FLT line; they trip at about +-0.98 V across the burden = about +-41 A (peak) of CT primary current (the note says 41.7 A).
 
-## The scaling
-V(I-OUT) = 1.65 V +- 6.8 x 60 ohm x I_primary / 2500 = **1.65 V +- 0.1632 V per ampere** of CT primary current.
-* 1 ADC count (3.3 V / 4095) = 4.94 mA of primary current.
-* The output cannot leave 0 .. 3.3 V: it clips at about **+-10.1 A peak (7.1 A RMS)**. Above that the channel shows `OVER RANGE` and the reading is too low. The comparators still trip at 41 A: they are separate.
-* Full load of the original board, 5.89 A RMS = 8.33 A peak = a swing of +-1.36 V (0.29 .. 3.01 V).
+## The burden of THIS board: 68 ohm x 3, not the drawing's 180 ohm x 3
+The drawing has R42, R43, R44 = 180 ohm each. This board has **68 ohm each = 22.67 ohm in parallel**. `IOUT_BURDEN_R_EACH_OHM` (slave_iout.h, default 68, settable in slave_config.h) is the one number to change if the resistors change.
+| | 68 ohm x 3 (this board) | 180 ohm x 3 (the drawing) |
+|---|---|---|
+| volts of I-OUT per ampere of CT primary current | **0.0617** | 0.1632 |
+| ADC count | **13.1 mA** | 4.9 mA |
+| the channel clips at | **+-26.8 A peak (18.9 A RMS)** | +-10.1 A peak (7.1 A RMS) |
+| the hardware short-circuit comparators trip at | **about +-108 A peak** | about +-41 A peak |
+V(I-OUT) = 1.65 V +- 6.8 x R_burden x I_primary / 2500. The conversion is tested for both burdens.
+
+### Check this: the short-circuit trip moved
+The comparators U10 and U14 watch the burden voltage against FIXED references (about +-0.98 V across the burden, from the R37 .. R40 divider). A smaller burden means a larger current for the same voltage: the hardware FLT now trips at about **108 A peak of CT primary current instead of 41 A**.
+That is 2.6 times higher. If it is intended (a larger unit) fine, but please check it against the IGBT's pulsed current rating and the protection you want (FGL60N100BNTD is a 60 A class part: look at its pulsed rating in the datasheet). To keep a lower trip with the 22.67 ohm burden the comparator references would have to change (R37 .. R40).
+
+## Scaling for the original burden (the drawing)
+* Full load of the original board: 5.89 A RMS = 8.33 A peak, a swing of +-1.36 V with 60 ohm (+-0.51 V with 22.67 ohm: a lower swing means fewer counts, 13 mA each, so the resolution at small currents is coarser).
 * Tolerance before any calibration: about +-3 to 4 % (1 % resistors, the CT ratio, the amplifier gain). `IOUT_CAL` (slave_iout.h) is a factor for a field calibration.
+* The output cannot leave 0 .. 3.3 V: above the clip limit the channel shows `OVER RANGE (clipped)` and the reading is too low. The comparators still trip at their own current: they are separate.
 
 ## What it measures
 The current in the conductor that passes through the CT. The drawing does not show which one. From the net names (PRI-PHASE, PRI-NTRL) and the 5.89 A full load it looks like the **converter (primary) side of the series transformer**, not the load line. If so:

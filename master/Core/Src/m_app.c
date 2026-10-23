@@ -423,7 +423,7 @@ void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS 
         for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
         copy(t, "Peak  00.00 A"); t[6] = (char)('0' + ((pk / 1000U) % 10U)); t[7] = (char)('0' + ((pk / 100U) % 10U)); t[9] = (char)('0' + ((pk / 10U) % 10U)); t[10] = (char)('0' + (pk % 10U)); if (t[6] == '0') t[6] = ' ';
         for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
-        copy(t, (d->iout_clip != 0U) ? "OVER RANGE (>10A pk)" : "CT primary current");
+        copy(t, (d->iout_clip != 0U) ? "OVER RANGE (clipped)" : "CT primary current");
     }
     else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; copy(t, "Not measured"); }
     for (n = 0U; (t[n] != '\0') && (n < MUI_COLS); n++) frame[3][n] = t[n];

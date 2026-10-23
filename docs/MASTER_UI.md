@@ -244,5 +244,5 @@ To change it: `MAPP_DISP_EMA_DIV` (96: larger = slower filter) and `MAPP_DISP_HO
 
 
 ## Converter Current page (v0.9.30)
-LOG, then MENU x7: `Converter Current`, RMS and peak in amperes of the slave's CT2500 chain (net I-OUT), and a status line: `CT primary current`, `OVER RANGE (>10A pk)` or `Not measured` (an older slave, or `SLAVE_IOUT 0`). There are eight service pages now:
+LOG, then MENU x7: `Converter Current`, RMS and peak in amperes of the slave's CT2500 chain (net I-OUT), and a status line: `CT primary current`, `OVER RANGE (clipped)` or `Not measured` (an older slave, or `SLAVE_IOUT 0`). There are eight service pages now:
 monitor, diagnostics, Load Calibration, Clock, I/P Calibration, O/P Calibration, Converter Current, then the Run screen. See docs/IOUT.md.
