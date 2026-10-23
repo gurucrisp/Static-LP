@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define MF_CLOSE_HOLD_MS    1000UL    /* the contactor closes once the output has been IN BAND (at the set voltage) for this long: a short debounce, no longer the Restart Time */
-#define MF_OP_HV_FAST_V     15U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... */
+#define MF_OP_HV_FAST_V     30U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... (30 since v0.9.26; it was 15: a variac step up passes straight through the series transformer and tripped it) */
 #define MF_OP_HV_FAST_MS    200UL     /* ... once it has lasted this long: the load must not sit on a gross over-voltage for the whole delay */
 #define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
 #define MF_RETRY_MS         30000UL   /* the SHORTEST interval between inrush / power-stage retries (D27): the Restart Time is used if it is longer */

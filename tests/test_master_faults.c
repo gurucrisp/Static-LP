@@ -343,27 +343,35 @@ static void t_inverter_off(void)
 static void t_fast_hv(void)
 {
     W_t w;
-    /* a gross output over-voltage (more than 15 V above the O/P HV setting, 250 V) is cut within about 0.2 s, not after the 5 s Volt Cut Delay */
+    /* a gross output over-voltage (more than 30 V above the O/P HV setting, 250 V) is cut within about 0.2 s, not after the 5 s Volt Cut Delay */
     world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
-    w.in.ph[0].vout_dv = 2660U; run_ms(&w, 100U);
-    CHECK(unit_st(&w, 0) == (int)U_ON, "266 V (16 V over O/P HV): 0.1 s: not yet");
+    w.in.ph[0].vout_dv = 2810U; run_ms(&w, 100U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "281 V (31 V over O/P HV): 0.1 s: not yet");
     run_ms(&w, 400U);
-    CHECK(unit_st(&w, 0) == (int)U_FAULT && w.out.contactor[0] == 0U && w.n_log == 1 && w.log[0].type == MLOG_T_OP_HV && w.log[0].vout_dv == 2660U, "0.5 s later: cut, logged once as O/P HV with the voltage (state %d)", unit_st(&w, 0));
-    /* exactly 15 V over is still the normal delayed rule */
+    CHECK(unit_st(&w, 0) == (int)U_FAULT && w.out.contactor[0] == 0U && w.n_log == 1 && w.log[0].type == MLOG_T_OP_HV && w.log[0].vout_dv == 2810U, "0.5 s later: cut, logged once as O/P HV with the voltage (state %d)", unit_st(&w, 0));
+    /* exactly 30 V over is still the normal delayed rule */
     world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
-    w.in.ph[0].vout_dv = 2650U; run_ms(&w, 4000U);
-    CHECK(unit_st(&w, 0) == (int)U_ON, "265.0 V (exactly 15 V over): 4 s: still ON, the Volt Cut Delay applies");
+    w.in.ph[0].vout_dv = 2800U; run_ms(&w, 4000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "280.0 V (exactly 30 V over): 4 s: still ON, the Volt Cut Delay applies");
     run_ms(&w, 2000U);
     CHECK(unit_st(&w, 0) == (int)U_FAULT && w.log[0].type == MLOG_T_OP_HV, "and after the 5 s delay it trips as before");
+    /* what a variac step up does: 266 V (16 V over, was a fast cut before v0.9.26) now waits for the delay, and a correction that brings it back in time prevents the trip */
+    world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
+    w.in.ph[0].vout_dv = 2660U; run_ms(&w, 1500U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "266 V (16 V over O/P HV): 1.5 s later still ON: no fast cut any more");
+    w.in.ph[0].vout_dv = 2300U; run_ms(&w, 6000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON && w.n_log == 0, "the output is corrected within the delay: no trip, nothing logged");
     /* a spike of 0.1 s does not trip */
     world(&w, M_MODE_SINGLE, 1U, 20000U); to_on(&w); run_ms(&w, 2000U);
-    w.in.ph[0].vout_dv = 2800U; run_ms(&w, 100U); w.in.ph[0].vout_dv = 2300U; run_ms(&w, 3000U);
-    CHECK(unit_st(&w, 0) == (int)U_ON && w.n_log == 0, "a 0.1 s spike to 280 V: no trip");
-    /* the setting moves the cut: O/P HV 270 V -> the fast cut is above 285 V */
+    w.in.ph[0].vout_dv = 2900U; run_ms(&w, 100U); w.in.ph[0].vout_dv = 2300U; run_ms(&w, 3000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON && w.n_log == 0, "a 0.1 s spike to 290 V: no trip");
+    /* the setting moves the cut: O/P HV 270 V -> the fast cut is above 300 V */
     world(&w, M_MODE_SINGLE, 1U, 20000U); w.s.op_hv = 270U; to_on(&w); run_ms(&w, 2000U);
-    w.in.ph[0].vout_dv = 2800U; run_ms(&w, 1000U);
-    CHECK(unit_st(&w, 0) == (int)U_ON, "O/P HV = 270 V: 280 V is not a gross over-voltage (the fast cut is above 285 V)");
-    printf("  fast output-high cut: 15 V over O/P HV for 0.2 s opens the contactor, exactly 15 V over and short spikes follow the normal rules\n");
+    w.in.ph[0].vout_dv = 2950U; run_ms(&w, 1000U);
+    CHECK(unit_st(&w, 0) == (int)U_ON, "O/P HV = 270 V: 295 V is not a gross over-voltage (the fast cut is above 300 V)");
+    w.in.ph[0].vout_dv = 3010U; run_ms(&w, 500U);
+    CHECK(unit_st(&w, 0) == (int)U_FAULT, "301 V (31 V over a 270 V setting): cut within 0.5 s");
+    printf("  fast output-high cut: more than 30 V over O/P HV for 0.2 s opens the contactor; up to exactly 30 V over and short spikes follow the normal delayed rule\n");
 }
 
 

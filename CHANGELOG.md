@@ -2,7 +2,12 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.25 — a response timer, and the 100 V/s correction profile (current)
+## v0.9.26 — the fast output-high cut margin is 30 V (current)
+* Report: on a high voltage the unit was cut at once instead of waiting for the Volt Cut Delay. Cause: the master's fast output cut (v0.9.15) opened the contactor when the output was more than 15 V above the O/P HV setting for 0.2 s. A variac step up passes straight through the series transformer, so the output is above that for the 0.5 to 1.5 s the correction needs to bring it back.
+* `MF_OP_HV_FAST_V` 15 -> 30 V (approved): the fast cut is now more than 30 V above O/P HV (O/P HV 250 V: above 280 V, the same point where the slave's own 280 V output guard stops the unit anyway). Smaller over-voltages wait for the Volt Cut Delay. Not changed: the slave's own limits (output 280 V = F06, input window 80 to 300 V = F09) stop at once, as before.
+* Tests: the fast-cut tests rewritten (281 V cuts, exactly 280 V waits, 266 V no longer cuts and a correction in time prevents any trip, the setting moves the cut); the old 15 V fails them.
+
+## v0.9.25 — a response timer, and the 100 V/s correction profile
 * Report: with the unit running and the contactor on, a 40 V change of the input by the variac takes 3 to 4 s to come back to the set voltage. The simulation gives 1.6 s (default ramp), so the real unit is slower than the model: the model has an instant plant and cannot show where.
 * NEW response timer (master): while the unit runs with the contactor closed, an output more than 5 V from the set voltage starts a clock, back within 1 V stops it. The last result is shown on the DIAGNOSTICS page (LOG, MENU x2), row 0: `S:Y E:Y H:Y 3.4s/41V` = 3.4 s to come back from a 41 V error (10 s or more: `12s/35V`). It replaces the frame count once a result exists.
   Use it with the variac to measure the real recovery time instead of a stopwatch.
