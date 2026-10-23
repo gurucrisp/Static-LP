@@ -619,6 +619,32 @@ static void t_mc_from_90v(void)
 
 
 
+
+#ifdef FAST_CORRECTION_TEST
+/* ---- the FAST CORRECTION profile (guard restart slope 60 V/s, freeze debounce 150 ms): input steps are answered about twice as fast, and nothing else gets worse ---- */
+static void t_mc_fast_correction(void)
+{
+    uint32_t k; double t5 = -1.0, t2 = -1.0, mx = 0.0;
+    /* a 50 V boost step (230 -> 180 V): within 5 V of the set voltage in about 0.9 s (1.7 s at 30 V/s) */
+    mc_world(250000000ULL, 230.0f); (void)mc_until_run(2300U, 1U, 60000U); mc_for(15000U, 1U, 2300U, 1U, 0U);
+    W.vin = 180.0f;
+    for (k = 0U; k < 400U; k++) { SlaveCtrl_OnControl(1U, 2300U, 1U, 0U, mc_ms()); run_for(20000); if (g_ctrl.state == CTRL_RUN && fabs((double)W.vout - 230.0) <= 5.0) { t5 = (double)(k * 20U) / 1000.0; break; } }
+    CHECK(t5 >= 0.0 && t5 <= 1.2 && g_ctrl.fault == CF_NONE, "a 50 V boost step (230 -> 180 V): within 5 V in %.2f s (limit 1.2 s; 1.7 s at the old 30 V/s), no fault", t5);
+    t2 = mc_back_within(2.0, 4000U, 2300U); CHECK(t2 >= 0.0 && t2 <= 0.5, "and within 2 V %.2f s after that", t2);
+    for (k = 0U; k < 400U; k++) { double d; SlaveCtrl_OnControl(1U, 2300U, 1U, 0U, mc_ms()); run_for(20000); d = fabs((double)W.vout - 230.0); if (d > mx) mx = d; }
+    CHECK(mx < 3.0 && g_ctrl.state == CTRL_RUN, "it settles: the largest error in the next 8 s is %.2f V, still running", mx);
+    /* a 70 V buck step (180 -> 250 V) */
+    mc_for(10000U, 1U, 2300U, 1U, 0U); W.vin = 250.0f; t5 = -1.0;
+    for (k = 0U; k < 400U; k++) { SlaveCtrl_OnControl(1U, 2300U, 1U, 0U, mc_ms()); run_for(20000); if (g_ctrl.state == CTRL_RUN && fabs((double)W.vout - 230.0) <= 5.0) { t5 = (double)(k * 20U) / 1000.0; break; } }
+    CHECK(t5 >= 0.0 && t5 <= 1.0 && g_ctrl.fault == CF_NONE, "a buck step (180 -> 250 V): within 5 V in %.2f s (limit 1.0 s), no fault", t5);
+    /* a small step, from a settled 230 V: under the 15 V of the guard, so the slope does not apply: it must not get SLOWER */
+    mc_for(10000U, 1U, 2300U, 1U, 0U); W.vin = 230.0f; mc_for(10000U, 1U, 2300U, 1U, 0U); W.vin = 220.0f; t2 = -1.0;
+    for (k = 0U; k < 400U; k++) { SlaveCtrl_OnControl(1U, 2300U, 1U, 0U, mc_ms()); run_for(20000); if (g_ctrl.state == CTRL_RUN && fabs((double)W.vout - 230.0) <= 2.0) { t2 = (double)(k * 20U) / 1000.0; break; } }
+    CHECK(t2 >= 0.0 && t2 <= 0.5, "a 10 V step (230 -> 220 V, no guard): within 2 V in %.2f s (limit 0.5 s)", t2);
+    printf("  fast correction profile (guard restart slope 60 V/s): a 50 V step is answered in about 0.9 s instead of 1.7 s; no faults, it settles, small steps are not slower\n");
+}
+#endif
+
 #if (SLAVE_VOLTAGE_CAL != 0)
 /* ---- voltage calibration end to end: the real master application -> $K frames -> the real slave link and calibration logic -> $R frames -> the master's screen ---- */
 static void ma_pages(int menus) { int q; ma_tap(3, 100U); for (q = 0; q < menus; q++) ma_tap(0, 100U); }       /* LOG, then MENU x menus */

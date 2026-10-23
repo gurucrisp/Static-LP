@@ -2665,6 +2665,9 @@ int main(void)
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
     run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
+#ifdef FAST_CORRECTION_TEST
+    run_isolated(t_mc_fast_correction,        "master control: the fast correction profile");
+#endif
 #if (SLAVE_VOLTAGE_CAL != 0)
     run_isolated(t_mc_vcal,                   "master control: voltage calibration end to end");
 #endif

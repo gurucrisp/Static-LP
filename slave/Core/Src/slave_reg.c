@@ -113,7 +113,7 @@ void Reg_Step(Reg_t *r, uint32_t now, float vin, float vout)
 
     Ki_boost = s_ratio_boost * (1.5f * 2600.0f);
     Ki_buck  = s_ratio_buck  * (1.5f * 2000.0f);
-    r->ki = (1.0f - t) * Ki_boost + t * Ki_buck;
+    r->ki = ((1.0f - t) * Ki_boost + t * Ki_buck) * REG_KI_SCALE;
 
     boostErr = r->sp_v - vout;
     buckErr  = vout - r->sp_v;

@@ -48,13 +48,20 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "slave_config.h"        /* so that REG_KI_SCALE and REG_FREEZE_DEBOUNCE_MS can be set there */
 
 /* ---- Constants carried over from the old firmware ------------------------ */
 #define REG_PWM_PERIOD            3199.0f     /* PWM_PERIOD of the old firmware (ARR) */
 #define REG_TIMESTEP_MS           5U          /* controller execution period          */
-#define REG_FREEZE_DEBOUNCE_MS    300U        /* FREEZE_DEBOUNCE_MS                   */
+#ifndef REG_FREEZE_DEBOUNCE_MS
+#define REG_FREEZE_DEBOUNCE_MS    300U        /* FREEZE_DEBOUNCE_MS: how long the input must stay inside / outside the +-0.75 V band before the correction freezes / resumes. The original value; it is the delay before a SMALL input change (under 15 V) is answered. */
+#endif
 #define REG_FREEZE_BAND_V         0.75f
 #define REG_BLEND_BAND_V          0.2f        /* buck/boost gain blending band        */
+/* Scale of the integral gain (both boost and buck). 1.0 = the original firmware's gain (the host tests compare against it). Higher = faster correction after a change of the input or the load, less margin before it oscillates. */
+#ifndef REG_KI_SCALE
+#define REG_KI_SCALE              1.0f
+#endif
 #define REG_RATIO_BUCK            ((1.8f) / 5.78f)   /* transformer ratio terms        */
 #define REG_RATIO_BOOST           ((0.9f) / 5.78f)
 

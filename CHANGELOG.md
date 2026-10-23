@@ -2,7 +2,15 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.23 — the calibration pages move to pages 126 and 127 (current)
+## v0.9.24 — faster correction after input steps (optional config) (current)
+* Request: the correction is slow. Measured in the simulation first: the recovery time after an input step is almost exactly step / 30 V/s (10 V 0.34 s, 20 V 1.0 s, 50 V 1.66 s), because after a step of 15 V or more the injection guard restarts the correction from zero and ramps it back at `CTRL_GUARD_RESTART_SLOPE_VPS` (30 V/s).
+  The regulator gain hardly matters (0.98 s against 0.94 s at three times the gain).
+* NEW config `slave_config_STAGE3_cap2752_full_range_MASTER_fast_start_fast_correction.h`: the fast-start master-control config with `CTRL_GUARD_RESTART_SLOPE_VPS 60`: a 50 V step comes back within 5 V in 0.9 s (1.7 s before), a 70 V buck step within 1 s. The plain configs are unchanged: nothing changes unless you copy this one.
+* Tested and left alone: the freeze debounce (`REG_FREEZE_DEBOUNCE_MS`, 300 ms: the delay before a SMALL change under 15 V is answered). At 150 ms the transformer-flip tests failed (the output moves further the wrong way before the unit stops); 200 ms passes but only just. Not worth weakening a protection for 0.1 s.
+* New overridable constants (defaults = the old values, nothing changes): `REG_KI_SCALE` (regulator gain, 1.0) and `REG_FREEZE_DEBOUNCE_MS` (300); the regulator now includes slave_config.h so that they can be set there (before, a value set in the config would have been ignored by the regulator).
+* New runner job `s3_fast_correction`: the whole master-control group with the 60 V/s slope, plus a speed test (it fails at 30 V/s). NOT tried on hardware: the simulation's plant is crude and cannot show what a real stage suffers from a faster ramp.
+
+## v0.9.23 — the calibration pages move to pages 126 and 127
 * Report: `Save Failed  S1 R5 D0 E0000`: the erase of the page failed ("S1"), the HAL said OK but the page was not blank ("R5") at its first byte ("E0000"), on a chip in single-bank mode ("D0").
   Cause: v0.9.22 and before used the LAST two pages of the chip (254, 255 in single-bank mode). The page number field holds only 0..127, so the erase hit another page: each page could be written once while still empty, never again.
   Fix: the two calibration pages are now **0x0803F000 and 0x0803F800** (pages 126 and 127 of bank 1: the same page numbers in single-bank and dual-bank mode); the page number is always counted inside the bank. The program must end below 0x0803F000 (252 KB; the driver refuses otherwise).
