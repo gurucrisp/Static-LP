@@ -49,6 +49,9 @@
 #include "slave_profile.h"
 #include "slave_flash.h"
 #include "slave_tune_link.h"
+#if (SLAVE_VOLTAGE_CAL != 0)
+#include "slave_cal.h"                /* SlaveCal_Busy(): a calibration in progress refuses a tune */
+#endif
 #endif
 #include "slave_iwdg.h"
 #include "slave_link.h"
@@ -63,9 +66,20 @@
 /* What the autotune glue asks of the controller. The controller's TUNE MODE (applying the sweep's open-loop duty) does not exist yet, so can_run is 0 and a TUNE command is answered NOT_ALLOWED (reason 1). */
 static uint16_t s_tune_maxc(void) { return SlaveCtrl_MaxCorrDv(); }
 static uint8_t  s_tune_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
-static uint8_t  s_tune_can_run(void) { return 0U; }
+static uint8_t  s_tune_can_run(void) { return (uint8_t)(SLAVE_TUNE_MODE != 0); }                  /* the controller's tune mode is built into this firmware */
+#if (SLAVE_VOLTAGE_CAL != 0)
+static uint8_t  s_tune_busy(void) { return (uint8_t)(SlaveCal_Busy() != 0U); }
+#else
 static uint8_t  s_tune_busy(void) { return 0U; }
-static const TuneLinkHw_t s_tune_hw = { s_tune_maxc, s_tune_stopped, s_tune_can_run, s_tune_busy };
+#endif
+static uint8_t  s_tune_begin(void) { return SlaveCtrl_TuneBegin(); }
+static void     s_tune_request(uint16_t t) { SlaveCtrl_TuneRequest(t); }
+static void     s_tune_end(void) { SlaveCtrl_TuneEnd(); }
+static uint8_t  s_tune_ready(void) { return SlaveCtrl_TuneReady(); }
+static uint8_t  s_tune_alive(void) { return SlaveCtrl_TuneRunning(); }
+static uint16_t s_tune_fault(void) { return SlaveCtrl_FaultCode(); }
+static uint16_t s_tune_headroom(void) { float h = CTRL_VOUT_MAX_V - g_meas.vrms_in - 10.0f; return (uint16_t)((h > 0.0f) ? (h * 10.0f) : 0.0f); }   /* the output may rise this far above the input: 10 V under the output over-voltage limit */
+static const TuneLinkHw_t s_tune_hw = { s_tune_maxc, s_tune_stopped, s_tune_can_run, s_tune_busy, s_tune_begin, s_tune_request, s_tune_end, s_tune_ready, s_tune_alive, s_tune_fault, s_tune_headroom };
 #endif
 
 /* ----------------------------------------------------------------------

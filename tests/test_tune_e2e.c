@@ -18,7 +18,16 @@ static const SFlash_t SFL = { s_rd, s_pr, s_er };
 static uint8_t s_stopped(void) { return (uint8_t)(D.state == 0U); }
 static uint16_t s_maxc(void) { return (uint16_t)(A.settings.maxcorr_v * 10U); }
 static uint8_t s_can(void) { return 1U; } static uint8_t s_busy(void) { return 0U; }
-static const TuneLinkHw_t SHW = { s_maxc, s_stopped, s_can, s_busy };
+/* a fake controller: about 6 s to reach RUN, then it applies the requested duty */
+static uint8_t c_on; static uint16_t c_req; static uint32_t c_ready_at;
+static uint8_t c_begin(void) { c_on = 1U; c_ready_at = T + 6000U; c_req = 0U; return 1U; }
+static void c_request(uint16_t k) { c_req = k; }
+static void c_end(void) { c_on = 0U; c_req = 0U; }
+static uint8_t c_ready(void) { return (uint8_t)((c_on != 0U) && (T >= c_ready_at)); }
+static uint8_t c_alive(void) { return c_on; }
+static uint16_t c_fault(void) { return 0U; }
+static uint16_t c_headroom(void) { return 3000U; }
+static const TuneLinkHw_t SHW = { s_maxc, s_stopped, s_can, s_busy, c_begin, c_request, c_end, c_ready, c_alive, c_fault, c_headroom };
 /* ---- the slave's link: frames to the master ---- */
 static uint8_t s_tx(const char *f, uint32_t n)
 {
@@ -51,7 +60,7 @@ static void co_run(uint32_t ms)
         if ((uint32_t)(T - last_slave_ms) >= 10U)
         {
             TuneIn_t in; double eff, target;
-            last_slave_ms = T; eff = ((double)SlaveTuneLink_RequestTicks() > pdead) ? ((double)SlaveTuneLink_RequestTicks() - pdead) : 0.0;
+            last_slave_ms = T; eff = ((double)((c_ready() != 0U) ? c_req : 0U) > pdead) ? ((double)((c_ready() != 0U) ? c_req : 0U) - pdead) : 0.0;           /* the plant sees the duty the CONTROLLER applies */
             target = psign * pk * (double)Tune_RefG(230.0f) * eff; pinj += (target - pinj) * (1.0 - exp(-0.01 / 0.3));
             in.vin = (float)(230.0 + 0.05 * pg()); in.vout = (float)(230.2 + pinj + 0.1 * pg()); in.meas_valid = 1U; in.fault = 0U; in.vin_in_window = 1U; in.maxc_v = (float)A.settings.maxcorr_v; in.hw_cap_ticks = 2752U;
             SlaveTuneLink_Service(T, &in); SL2_Service(T);
@@ -69,7 +78,7 @@ static void e2e_fresh(void)
 {
     fresh(); if (Tune_Running()) Tune_Abort();
     memset(smem, 0xFF, sizeof smem); sflash_fail = 0; pk = 1.0; pdead = 40.0; psign = 1.0; pinj = 0.0;
-    SlaveProfile_Init(&SFL, PA, PB); SlaveTuneLink_Init(&SHW); SL2_Init(&SHK, T); last_slave_ms = T;
+    c_on = 0U; c_req = 0U; SlaveProfile_Init(&SFL, PA, PB); SlaveTuneLink_Init(&SHW); SL2_Init(&SHK, T); last_slave_ms = T;
     to_run(); run(2000U); stop_unit();                                   /* the master unit is stopped (the slave reports state 0) */
     A.settings.maxcorr_v = 120U;
 }
@@ -81,22 +90,23 @@ int main(void)
     CHECK(!MApp_ShowsTune(&A) && strstr(row(2), "Set Max Correction") != NULL && !Tune_Running(), "Max Correction 0: the slave answers 'not allowed, reason 2', the master shows 'Set Max Correction' ('%s' / '%s')", row(1), row(2));
     /* a whole sweep */
     e2e_fresh(); A.ui.req |= MUI_REQ_RETUNE; co_run(300U);
-    CHECK(MApp_ShowsTune(&A) && Tune_Running(), "Re-tune: TUNE goes to the slave as a frame, the slave starts the sweep, the master shows the tuning screen");
-    ever_on = 0; co_run(6000U); MApp_TuneScreen(&A, T, fr); CHECK(fr_has(fr, "Step  1 of 10") || fr_has(fr, "Step  2 of 10") || fr_has(fr, "Step  3 of 10") || fr_has(fr, "Measuring baseline"), "after 6 s the master shows the progress ('%s' / '%s')", fr[1], fr[2]);
-    { int secs = -1; for (q = 0; q < 400 && secs < 0; q++) { co_run(100U); if (A.eout.run[0] != 0U || A.eout.contactor[0] != 0U) ever_on = 1; if (A.tune_state == 3U) { MApp_TuneScreen(&A, T, fr); secs = 1; } }
+    CHECK(MApp_ShowsTune(&A) && SlaveTuneLink_Active() && c_on, "Re-tune: TUNE goes to the slave as a frame, the controller is told to start up, the master shows the tuning screen");
+    ever_on = 0; co_run(7000U); MApp_TuneScreen(&A, T, fr); CHECK(MApp_ShowsTune(&A) && fr_has(fr, "Measuring baseline"), "after 7 s (the controller is still starting up) the master is still waiting with 'Measuring baseline', fed by the slave's heartbeats ('%s' / '%s')", fr[1], fr[2]);
+    co_run(9000U); MApp_TuneScreen(&A, T, fr); CHECK(fr_has(fr, "Step  1 of 10") || fr_has(fr, "Step  2 of 10") || fr_has(fr, "Step  3 of 10"), "after 16 s the sweep is under way and the master shows the steps ('%s' / '%s')", fr[1], fr[2]);
+    { int secs = -1; for (q = 0; q < 600 && secs < 0; q++) { co_run(100U); if (A.eout.run[0] != 0U || A.eout.contactor[0] != 0U) ever_on = 1; if (A.tune_state == 3U) { MApp_TuneScreen(&A, T, fr); secs = 1; } }
       CHECK(secs > 0 && fr_has(fr, "Tuning Complete"), "the sweep ends with 'Tuning Complete' on the master ('%s' / '%s')", fr[0], fr[1]); }
     CHECK(SlaveProfile_Tuned() == 1U && !Tune_Running(), "and the slave has stored the profile"); CHECK(!ever_on, "the master never started the unit during the sweep");
     { TuneProfile_t p; CHECK(SlaveProfile_Get(&p) == 1U && p.cap_ticks == 2752U && p.kib_m >= 940U && p.kib_m <= 1060U, "the stored profile: cap %u, gain scale %u", (unsigned)p.cap_ticks, (unsigned)p.kib_m); }
     co_run(7000U); CHECK(!MApp_ShowsTune(&A), "the result goes away by itself");
     /* STOP on the master aborts the slave's sweep */
-    e2e_fresh(); A.ui.req |= MUI_REQ_RETUNE; co_run(9000U); CHECK(Tune_Running() && MApp_ShowsTune(&A), "a sweep is running");
+    e2e_fresh(); A.ui.req |= MUI_REQ_RETUNE; co_run(17000U); CHECK(Tune_Running() && MApp_ShowsTune(&A), "a sweep is running");
     tap(2, 100U); co_run(1500U); MApp_TuneScreen(&A, T, fr);
     CHECK(!Tune_Running() && SlaveProfile_Tuned() == 0U && fr_has(fr, "Tuning Stopped"), "STOP: the master sends TABORT as a frame, the slave stops, nothing is stored, the master says 'Tuning Stopped' ('%s')", fr[0]);
     /* the transformer is the wrong way round */
-    e2e_fresh(); psign = -1.0; A.ui.req |= MUI_REQ_RETUNE; q = until_result(40, fr);
+    e2e_fresh(); psign = -1.0; A.ui.req |= MUI_REQ_RETUNE; q = until_result(50, fr);
     CHECK(q >= 0 && fr_has(fr, "Reversed Transformer") && SlaveProfile_Tuned() == 0U, "a reversed transformer: 'Reversed Transformer' on the master, nothing stored ('%s')", fr[1]);
     /* the slave's flash refuses the profile */
-    e2e_fresh(); sflash_fail = 1; A.ui.req |= MUI_REQ_RETUNE; q = until_result(45, fr);
+    e2e_fresh(); sflash_fail = 1; A.ui.req |= MUI_REQ_RETUNE; q = until_result(55, fr);
     CHECK(q >= 0 && fr_has(fr, "Aborted By Slave") && !fr_has(fr, "Tuning Complete") && SlaveProfile_Tuned() == 0U, "the flash refuses: the master is told it was aborted, never 'Tuning Complete' ('%s')", fr[1]);
     printf("  autotune end to end: the master application and the slave chain through real link frames: refusal, a whole sweep, STOP, a reversed transformer, a refusing flash\n");
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");

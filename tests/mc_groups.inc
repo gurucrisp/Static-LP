@@ -217,7 +217,40 @@ static void    e2e_fill_e(LinkE_t *e)
 static void    e2e_fill_h(LinkH_t *h) { h->fw = SLAVE_FW_VERSION; h->vin_min_dv = (uint16_t)(CTRL_VIN_MIN_V * 10.0f); h->vin_max_dv = (uint16_t)(CTRL_VIN_MAX_V * 10.0f); h->rst = 0U; h->tuned = 1U; h->vout_max_dv = (uint16_t)(CTRL_VOUT_MAX_V * 10.0f); }
 static uint8_t e2e_tx(const char *f, uint32_t n) { if (e2e_cnt >= E2E_MAX) return 0U; memcpy(e2e_f[e2e_cnt], f, n); e2e_n[e2e_cnt] = (int)n; e2e_cnt++; return 1U; }
 static void    e2e_bytes(const char *s, uint32_t n) { uint32_t i; for (i = 0U; i < n; i++) SL2_Rx((uint8_t)s[i], mc_ms()); }
-static void    e2e_step(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 5U; k++) { run_for(5000); SL2_Service(mc_ms()); } }
+#if (SLAVE_TUNE_MODE != 0)
+/* ---- the autotune chain on the REAL controller: the link commands, the sweep, the profile store (a RAM flash), the controller's own tune mode ---- */
+#include "slave_tune_link.h"
+#include "slave_profile.h"
+#define TPA 0x1000UL
+#define TPB 0x1800UL
+static uint8_t tl_mem[4096]; static int tl_flash_fail; static uint32_t tl_last_ms;
+static int tl_rd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &tl_mem[a - TPA], n); return 0; }
+static int tl_er(uint32_t a) { if (tl_flash_fail) return -1; memset(&tl_mem[a - TPA], 0xFF, 2048U); return 0; }
+static int tl_pr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (tl_flash_fail) return -1; for (i = 0U; i < n; i++) tl_mem[a - TPA + i] &= b[i]; return 0; }
+static const SFlash_t TL_FL = { tl_rd, tl_pr, tl_er };
+static uint8_t  tl_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
+static uint8_t  tl_can(void) { return 1U; }
+static uint8_t  tl_busy(void) { return 0U; }
+static uint16_t tl_fault(void) { return SlaveCtrl_FaultCode(); }
+static uint16_t tl_headroom(void) { float h = CTRL_VOUT_MAX_V - W.vin - 10.0f; return (uint16_t)((h > 0.0f) ? (h * 10.0f) : 0.0f); }
+static const TuneLinkHw_t TL_HW = { SlaveCtrl_MaxCorrDv, tl_stopped, tl_can, tl_busy, SlaveCtrl_TuneBegin, SlaveCtrl_TuneRequest, SlaveCtrl_TuneEnd, SlaveCtrl_TuneReady, SlaveCtrl_TuneRunning, tl_fault, tl_headroom };
+static int e2e_tune_cmd(uint8_t c, const char *n, int32_t v, uint8_t *s, int32_t *val, uint32_t now) { return SlaveTuneLink_Command(c, n, v, s, val, now); }
+static int e2e_tune_frame(LinkT_t *f, uint32_t now) { return SlaveTuneLink_NextFrame(f, now); }
+static void tl_service(void)
+{   /* every 10 ms, as the slave's main loop does: the measurements, the controller's fault state */
+    uint32_t now = mc_ms(); TuneIn_t in;
+    if ((uint32_t)(now - tl_last_ms) < 10U) return;
+    tl_last_ms = now;
+    in.vin = W.vin; in.vout = W.vout; in.meas_valid = 1U; in.fault = (uint8_t)(SlaveCtrl_FaultCode() != 0U); in.vin_in_window = (uint8_t)((W.vin >= CTRL_VIN_MIN_V) && (W.vin <= CTRL_VIN_MAX_V));
+    in.maxc_v = (float)SlaveCtrl_MaxCorrDv() / 10.0f; in.hw_cap_ticks = (uint16_t)CTRL_STAGE3_MAX_EFF_TICKS;
+    SlaveTuneLink_Service(now, &in);
+}
+#define E2E_TUNE_HOOKS e2e_tune_cmd, e2e_tune_frame
+#else
+#define E2E_TUNE_HOOKS 0, 0
+static void tl_service(void) { }
+#endif
+static void    e2e_step(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 5U; k++) { run_for(5000); tl_service(); SL2_Service(mc_ms()); } }
 static void    e2e_master(uint8_t run, uint16_t setv, uint8_t clr, uint16_t maxc, int corrupt)
 {
     LinkM_t m; char b[96]; int32_t n;
@@ -241,7 +274,7 @@ static int e2e_count(LinkV2Type_t t) { int i, c = 0; LinkV2Frame_t f; for (i = 0
 
 static void t_mc_end_to_end(void)
 {
-    static const SL2_Hooks_t HK = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, 0, 0 };
+    static const SL2_Hooks_t HK = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, E2E_TUNE_HOOKS };
     LinkE_t e; LinkV2Frame_t f; int k, i, ok;
     mc_world(229000000ULL, 225.0f);
     e2e_cnt = 0; e2e_seq_m = 0U;
@@ -298,9 +331,9 @@ static const SlaveCalHw_t E2E_CAL_HW = { e2e_h_raw, e2e_h_cnt, e2e_h_stopped, e2
 static int e2e_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t *val, uint32_t now)
 { return SlaveCal_Command((cmd == (uint8_t)LINKCMD_CALV) ? SCAL_CMD_CALV : ((cmd == (uint8_t)LINKCMD_CALO) ? SCAL_CMD_CALO : SCAL_CMD_CALR), num, letter, st, val, now); }
 static int e2e_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { return SlaveCal_Poll(st, val, now); }
-static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, e2e_cal_cmd, e2e_cal_poll, 0, 0 };
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, e2e_cal_cmd, e2e_cal_poll, E2E_TUNE_HOOKS };
 #else
-static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, 0, 0 };
+static const SL2_Hooks_t HK2 = { e2e_on_control, e2e_fill_e, e2e_fill_h, e2e_tx, 0, 0, E2E_TUNE_HOOKS };
 #endif
 static void mm_start(uint8_t restart_auto)
 {
@@ -392,6 +425,9 @@ static void ma_start(uint8_t restart_auto, float vin)
 #if (SLAVE_VOLTAGE_CAL != 0)
     e2e_cal_have_store = 0; e2e_cal_saves = 0; e2e_cal_fail_save = 0; SlaveCal_Init(&E2E_CAL_HW);
 #endif
+#if (SLAVE_TUNE_MODE != 0)
+    memset(tl_mem, 0xFF, sizeof tl_mem); tl_flash_fail = 0; tl_last_ms = mc_ms(); SlaveProfile_Init(&TL_FL, TPA, TPB); SlaveTuneLink_Init(&TL_HW);
+#endif
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
     ma.settings.restart_auto = restart_auto; ma.settings.ip_lv = 180U; ma.settings.ip_hv = 280U; ma.settings.op_lv = 200U; ma.settings.op_hv = 250U;      /* the limits these tests were written for; the NEW default limits have their own tests */
@@ -408,13 +444,17 @@ static void ma_ms10(void)
     md.load_ok = 1U; md.load_da = 100U;
     if (e2e_last_e(&e)) { md.e_valid = 1U; md.in_band = (uint8_t)((e.flags2 & LINKV2_FLAG_IN_BAND) != 0U); md.clr_echo = e.clr; md.iout_rms_ca = e.iout_rms_ca; md.iout_pk_ca = e.iout_pk_ca; md.iout_valid = (uint8_t)((e.flags2 & LINKV2_FLAG_IOUT_VALID) != 0U); md.iout_clip = (uint8_t)((e.flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U); }
     {   int ri; LinkV2Frame_t rf;                                                                 /* the slave's answers to a $K ($R) reach the master application */
-        for (ri = 0; ri < e2e_cnt; ri++) if ((LinkV2_Parse(e2e_f[ri], (uint32_t)e2e_n[ri], &rf) == LINK_OK) && (rf.type == LINKV2_R)) MApp_OnKResult(&ma, rf.u.r.id, rf.u.r.status, rf.u.r.value); }
+        for (ri = 0; ri < e2e_cnt; ri++) if (LinkV2_Parse(e2e_f[ri], (uint32_t)e2e_n[ri], &rf) == LINK_OK)
+        {
+            if (rf.type == LINKV2_R) MApp_OnKResult(&ma, rf.u.r.id, rf.u.r.status, rf.u.r.value);
+            else if (rf.type == LINKV2_T) { md.tune_step = rf.u.t.step; md.tune_result = rf.u.t.result; md.tune_ticks = rf.u.t.ticks; md.tune_vin_dv = rf.u.t.vin_dv; md.tune_dv_dv = rf.u.t.dv; md.tune_n++; }
+        } }
     e2e_cnt = 0;                                                                                  /* keep only the NEWEST $E: the capture buffer must never fill up and go stale */
     MApp_Step(&ma, ma_k[0], ma_k[1], ma_k[2], ma_k[3], &md, now, ma_f);
     if (MApp_Engine(&ma)->buzzer != 0U) ma_buzz_seen = 1U;
     {   MCalK_t ck; if (MApp_TakeKCommand(&ma, &ck, now) != 0U)                                    /* a calibration command (and its retries) goes to the slave */
         {   LinkK_t k; char b[96]; int32_t n;
-            k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : LINKCMD_CALR); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
+            k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : ((ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : LINKCMD_CALR))); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
             n = LinkV2_BuildK(b, sizeof b, &k); if (n > 0) e2e_bytes(b, (uint32_t)n); } }
     if ((MApp_ControlValid(&ma) != 0U) && (ma_mute_m == 0))
     {
@@ -652,6 +692,114 @@ static void t_mc_fast_correction(void)
 
 
 /* ---- the converter-side current through the REAL link: the slave's $E (optional fields) -> the master's Converter Current page ---- */
+#if (SLAVE_TUNE_MODE != 0)
+/* ---- TUNE MODE: the real master application starts a sweep over the link, the REAL controller starts itself and applies the sweep's duty open loop against the plant, the real tune core measures, the profile is stored ---- */
+typedef struct { double max_inj, max_wrong, max_slew; uint32_t max_eff; int saw_run, contactor, master_run, fault; uint32_t t_run; } TnObs_t;
+static TnObs_t tn; static double tn_prev_eff;
+static void tn_sample(void)
+{
+    double inj = (double)(W.vout - W.vin), eff = (g_ctrl.duty_counts > (uint16_t)POWER_DEADTIME_TICKS) ? (double)(g_ctrl.duty_counts - (uint16_t)POWER_DEADTIME_TICKS) : 0.0;
+    if (inj > tn.max_inj) tn.max_inj = inj;
+    if (-inj > tn.max_wrong) tn.max_wrong = -inj;
+    if (eff > (double)tn.max_eff) tn.max_eff = (uint32_t)eff;
+    if (((eff - tn_prev_eff) / 0.01) > tn.max_slew) tn.max_slew = (eff - tn_prev_eff) / 0.01;
+    tn_prev_eff = eff;
+    if (g_ctrl.state == CTRL_RUN) { tn.saw_run = 1; if (tn.t_run == 0U) tn.t_run = mc_ms(); }
+    if (ma_c_contactor()) tn.contactor = 1;
+    if (ma_have_last != 0U && ma_last.run != 0U) tn.master_run = 1;
+    if (g_ctrl.fault != 0U) tn.fault = (int)g_ctrl.fault;
+}
+static void tn_run(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 10U; k++) { ma_run(10U); tn_sample(); } }
+static int tn_until_result(uint32_t max_ms) { uint32_t k; for (k = 0U; k < max_ms / 10U; k++) { ma_run(10U); tn_sample(); if (ma.tune_state == 3U) return 1; } return 0; }
+static void tn_begin_at(double gain_k, uint16_t maxc_v, float vin)
+{
+    ma_start(0U, vin);                                                        /* Auto mode, no automatic start: the unit stays stopped */
+    SlaveCtrl_ClearLatch();                                                   /* a latched fault of the previous scenario is not part of this one */
+    W.plant_curve = 0; W.plant_gain = (double)Tune_RefG(vin) * gain_k;           /* gain_k = 1: the bench transformer at THIS input; negative: connected backwards; 0: no transformer */
+    ma.settings.maxcorr_v = maxc_v;
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0;
+    ma_run(3000U);
+}
+static void tn_begin(double gain_k, uint16_t maxc_v) { tn_begin_at(gain_k, maxc_v, 230.0f); }
+static void t_mc_tune(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U]; int got;
+    /* ---- a whole sweep: Max Correction 120 V, the bench transformer, at 160 V in (the headroom under the output limit is then 110 V: room for the whole 2752-tick range) ---- */
+    tn_begin_at(1.0, 120U, 160.0f); CHECK(g_ctrl.state == CTRL_OFF && !ma_c_contactor(), "the unit is stopped before the sweep (state %d)", (int)g_ctrl.state);
+    ma.ui.req |= MUI_REQ_RETUNE; tn_run(2000U);
+    CHECK(ma.tune_state != 0U && SlaveTuneLink_Active() && SlaveCtrl_TuneRunning(), "Re-tune: the master asks, the slave accepts and the controller is in tune mode");
+    got = tn_until_result(120000U); MApp_TuneScreen(&ma, mc_ms(), fr);
+    CHECK(got && strstr(fr[0], "Tuning Complete") != NULL, "the master shows 'Tuning Complete' ('%s' / '%s')", fr[0], fr[1]);
+    CHECK(tn.saw_run && !tn.master_run, "the controller started ITSELF through the start sequence and reached RUN, while the master never asked it to run (run = 0 in every $M)");
+    CHECK(!tn.contactor, "the master's output contactor stayed open the whole time");
+    CHECK(SlaveProfile_Tuned() == 1U, "the profile is stored in the slave");
+    { TuneProfile_t pf; CHECK(SlaveProfile_Get(&pf) == 1U && pf.cap_ticks == 2752U && pf.kib_m >= 800U && pf.kib_m <= 1250U, "the stored profile: cap %u ticks, gain scale %u (the plant IS the reference curve times 1.0)", (unsigned)pf.cap_ticks, (unsigned)pf.kib_m); }
+    CHECK(tn.max_eff <= 2752U && tn.max_eff >= 2500U, "the largest effective duty applied was %u ticks (the cap is 2752; the last step asks for 2752)", (unsigned)tn.max_eff);
+    CHECK(tn.max_inj <= 0.8 * 110.0 + 6.0, "the injection never went above 80 %% of the smaller of Max Correction and the headroom, 110 V (+ 6 V of overshoot allowed): %.1f V of 88", tn.max_inj);
+    CHECK(tn.max_wrong < 3.0, "and never the wrong way (%.2f V)", tn.max_wrong);
+    CHECK(tn.max_slew <= (double)CTRL_TUNE_SLEW_TPS * 1.2 + 50.0, "the duty never rose faster than the slew limit: %.0f ticks/s (limit %.0f)", tn.max_slew, (double)CTRL_TUNE_SLEW_TPS);
+    tn_run(15000U);
+    CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.duty_counts == 0U && g_ctrl.fault == 0U && !SlaveCtrl_TuneRunning() && fabs((double)(W.vout - W.vin)) < 1.5, "afterwards the controller is OFF with zero duty, no fault, the output is back at the input (state %d, fault %d, %.2f V)", (int)g_ctrl.state, (int)g_ctrl.fault, (double)(W.vout - W.vin));
+    /* the unit works normally afterwards: START regulates 215 -> 230 V and the contactor closes */
+    W.vin = 215.0f; W.vout = 215.0f; ma_run(1500U); ma_tap(1, 100U); (void)ma_until(ma_c_contactor, 90000U);
+    CHECK(ma_c_contactor() && !SlaveCtrl_TuneRunning() && fabs((double)W.vout - 230.0) < 3.0, "START after a tune: the regulator takes over, 215 V in gives %.1f V out, the contactor is closed", (double)W.vout);
+
+    /* ---- STOP on the master in the middle of the sweep ---- */
+    { uint32_t k;
+      tn_begin(1.0, 120U); ma.ui.req |= MUI_REQ_RETUNE; for (k = 0U; k < 6000U && tn.max_eff < 600U; k++) tn_run(10U);
+      CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.duty_counts > 0U, "a sweep is under way: %u ticks applied", (unsigned)tn.max_eff);
+      ma_k[2] = 1U; tn_run(100U); ma_k[2] = 0U; tn_run(500U);
+      CHECK(g_ctrl.duty_counts == 0U && ma.tune_state == 3U && ma.tune_result == 6U, "STOP on the master: the duty is ZERO within 0.6 s and the master shows the result 'stopped' (duty %u, result %u)", (unsigned)g_ctrl.duty_counts, (unsigned)ma.tune_result);
+      tn_run(15000U); CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U && SlaveProfile_Tuned() == 0U && !SlaveCtrl_TuneRunning(), "then the controller is OFF without a fault and nothing is stored"); }
+    /* ---- the transformer connected backwards ---- */
+    tn_begin(-1.0, 120U); ma.ui.req |= MUI_REQ_RETUNE; got = tn_until_result(120000U);
+    CHECK(got && ma.tune_result == 2U && SlaveProfile_Tuned() == 0U, "a reversed transformer: the master is told FLIPPED (result %u), nothing is stored", (unsigned)ma.tune_result);
+    CHECK(tn.max_wrong < 6.0, "the output went at most %.1f V the wrong way before the sweep stopped", tn.max_wrong);
+    tn_run(15000U); CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U && g_ctrl.duty_counts == 0U, "and the controller is OFF, without a fault, at zero duty");
+    /* ---- Max Correction 30 V: a short sweep, a low injection ---- */
+    tn_begin(1.0, 30U); ma.ui.req |= MUI_REQ_RETUNE; got = tn_until_result(120000U);
+    { TuneProfile_t pf; CHECK(got && ma.tune_result == 1U && SlaveProfile_Get(&pf) == 1U && pf.cap_ticks < 1000U && pf.maxc_dv == 300U, "Max Correction 30 V: FINISHED, a profile with the cap %u (< 1000) made at 30 V", (unsigned)pf.cap_ticks); }
+    CHECK(tn.max_inj <= 0.8 * 30.0 + 4.0 && g_ctrl.fault == 0U, "the injection stayed at or below 24 V (+ 4 V): %.1f V, no fault", tn.max_inj);
+    /* ---- the master goes away in the middle of a sweep: the controller stops itself ---- */
+    { uint32_t k;
+      tn_begin(1.0, 120U); ma.ui.req |= MUI_REQ_RETUNE; for (k = 0U; k < 6000U && tn.max_eff < 600U; k++) tn_run(10U);
+      ma_mute_m = 1; tn_run(1500U);
+      CHECK(!SlaveCtrl_TuneRunning() && g_ctrl.duty_counts == 0U, "no $M for 1.5 s: tune mode is off in the controller and the duty is zero");
+      if (ma.tune_state != 3U) (void)tn_until_result(4000U);
+      CHECK(ma.tune_state == 3U && ma.tune_result == 4U, "the master is told the sweep was aborted (result %u)", (unsigned)ma.tune_result);
+      tn_run(8000U); CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U && SlaveProfile_Tuned() == 0U, "the controller ends OFF without a fault and nothing is stored (state %d, fault %d, tuned %u)", (int)g_ctrl.state, (int)g_ctrl.fault, (unsigned)SlaveProfile_Tuned());
+      ma_mute_m = 0; }
+    /* ---- the controller's OWN limit, whatever the sweep asks: asked for the full 2752 ticks with Max Correction 30 V ---- */
+    { uint32_t k;
+      tn_begin(1.0, 30U);
+      CHECK(SlaveCtrl_TuneBegin() == 1U, "the controller accepts tune mode when it is OFF, nothing is latched, the master is there and Max Correction is set");
+      for (k = 0U; k < 3000U && !SlaveCtrl_TuneReady(); k++) tn_run(10U);
+      CHECK(SlaveCtrl_TuneReady(), "it started itself and is in RUN");
+      SlaveCtrl_TuneRequest(2752U); tn_run(5000U);
+      CHECK((g_ctrl.state == CTRL_FAULT || g_ctrl.state == CTRL_LATCHED || g_ctrl.state == CTRL_RESHUNT) && g_ctrl.fault == CF_VOUT_HIGH, "asked for the full duty at 30 V of Max Correction: the controller stops at once with the over-voltage fault (state %d, fault %d)", (int)g_ctrl.state, (int)g_ctrl.fault);
+      CHECK(tn.max_inj <= 30.0 + 8.0 + 4.0 && g_ctrl.duty_counts == 0U, "the output rose by at most %.1f V (the limit is 30 + 8) and the duty is zero", tn.max_inj);
+      CHECK(SlaveCtrl_TuneBegin() == 0U, "while a fault is latched, tune mode is refused");
+      CHECK(!SlaveCtrl_TuneRunning(), "the fault ENDED tune mode in the controller");
+      SlaveCtrl_ClearLatch(); tn_run(6000U);
+      CHECK(g_ctrl.state == CTRL_OFF && !SlaveCtrl_TuneRunning() && g_ctrl.duty_counts == 0U, "after the fault is cleared the unit stays OFF: it does NOT start itself (state %d)", (int)g_ctrl.state); }
+    /* ---- the hardware cap: whatever duty is asked for, the controller never applies more than 2752 effective ticks ---- */
+    { uint32_t k;
+      tn_begin_at(1.0, 120U, 160.0f);
+      CHECK(SlaveCtrl_TuneBegin() == 1U, "tune mode accepted"); for (k = 0U; k < 3000U && !SlaveCtrl_TuneReady(); k++) tn_run(10U);
+      SlaveCtrl_TuneRequest(60000U); tn_run(5000U);
+      CHECK(tn.max_eff == 2752U && g_ctrl.fault == 0U, "a request of 60000 ticks: the duty is capped at %u (2752), no fault", (unsigned)tn.max_eff);
+      SlaveCtrl_TuneRequest(0U); tn_run(60U); CHECK(g_ctrl.duty_counts == 0U, "a request of 0 in the middle of the run: the duty falls AT ONCE (within 60 ms), it does not ramp down (duty %u)", (unsigned)g_ctrl.duty_counts);
+      SlaveCtrl_TuneRequest(1200U); tn_run(1500U); SlaveCtrl_TuneEnd(); tn_run(200U); CHECK(g_ctrl.duty_counts == 0U, "SlaveCtrl_TuneEnd: the duty is zero within 0.2 s");
+      tn_run(8000U); CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U, "and the controller ends OFF without a fault"); }
+    /* ---- a reset of the controller (a power cycle of the slave) ends tune mode ---- */
+    tn_begin(1.0, 30U); CHECK(SlaveCtrl_TuneBegin() == 1U && SlaveCtrl_TuneRunning(), "tune mode is on"); SlaveCtrl_Init(); CHECK(!SlaveCtrl_TuneRunning(), "SlaveCtrl_Init (a slave reset) ends it: the unit does not come up in tune mode");
+    /* ---- the refusals ---- */
+    tn_begin(1.0, 0U); CHECK(SlaveCtrl_TuneBegin() == 0U, "Max Correction not set: the controller refuses");
+    ma.ui.req |= MUI_REQ_RETUNE; tn_run(800U); CHECK(ma.tune_state == 0U && strstr(ma_f[2], "Set Max Correction") != NULL, "and the master says 'Set Max Correction' ('%s' / '%s'; engine run %u, slave state %u, unit state %d)", ma_f[1], ma_f[2], (unsigned)ma.eout.run[0], (unsigned)md.state, (int)g_ctrl.state);
+    printf("  tune mode on the real controller: a whole sweep (the controller starts itself, the duty slew-limited and capped, the profile stored), STOP, a reversed transformer, Max Correction 30 V, the master lost, the controller's own limit, the refusals\n");
+}
+#endif
+
 static void t_mc_iout(void)
 {
     ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 90000U); ma_run(3000U);

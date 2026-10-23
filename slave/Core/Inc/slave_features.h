@@ -45,8 +45,18 @@
  * waits for the master again. The reason is reported to the master in $H (rst = 1). 0 = no watchdog. */
 /* 1 = the transformer AUTOTUNE chain is built in (profile storage in flash pages 124 and 125, and as the later steps are added: the link commands and the controller's tune mode). 0 = nothing of it: the controller runs on its built-in profile
  * as before and $H reports tuned = 1. OFF until the whole chain has been tested on the bench. */
+/* 1 = the controller's TUNE MODE (for the transformer autotune): on a TUNE command the unit starts by itself through the normal start sequence (SYNC, RECT, INVERTER, UNSHUNT) and in RUN, instead of the regulator, applies the sweep's
+ * requested duty as an OPEN-LOOP BOOST (slew-limited, never above CTRL_STAGE3_MAX_EFF_TICKS, never more than Max Correction + 8 V of injection), with every normal protection still active. The master keeps the output contactor open. Needs SLAVE_AUTOTUNE 1,
+ * SLAVE_MASTER_CONTROL 1 and SLAVE_POWER_STAGE >= 3. 0 = a TUNE command is refused ("no tune mode"). OFF until the first bench run has been done. */
+#ifndef SLAVE_TUNE_MODE
+#define SLAVE_TUNE_MODE        0
+#endif
+
 #ifndef SLAVE_AUTOTUNE
 #define SLAVE_AUTOTUNE         0
+#endif
+#if (SLAVE_TUNE_MODE != 0) && (SLAVE_AUTOTUNE == 0)
+#error "SLAVE_TUNE_MODE 1 needs SLAVE_AUTOTUNE 1: the link commands that start a sweep are part of the autotune"
 #endif
 
 /* 1 = the converter-side CURRENT (net I-OUT, connector pin 32, PA2 = ADC1_IN2) is sampled as a 4th ADC channel together with AC_IN, AC_OUT and the NTC, its AC RMS and peak are computed (slave_iout.h) and sent to the master in $E.
@@ -83,7 +93,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       933UL
+#define SLAVE_FW_VERSION       934UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

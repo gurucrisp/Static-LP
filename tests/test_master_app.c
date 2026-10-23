@@ -759,7 +759,7 @@ static void t_tune_app(void)
     /* a key dismisses the result at once */
     fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(2, 1, 100, 2300, 100); run(30U); CHECK(MApp_ShowsTune(&A), "a result is shown"); tap(1, 100U); CHECK(!MApp_ShowsTune(&A), "any key dismisses it");
     /* every refusal in words */
-    { static const struct { uint8_t st; int32_t v; const char *l1, *l2; } E[] = { {7U, 1, "Tune Refused", "No Tune Mode Yet"}, {7U, 2, "Tune Refused", "Set Max Correction"}, {7U, 3, "Tune Refused", "Slave Busy"}, {4U, 0, "Stop The Unit", "First"}, {6U, 0, "Not Supported", "Update The Slave"}, {5U, 0, "Tune Refused", "Try Again"} };
+    { static const struct { uint8_t st; int32_t v; const char *l1, *l2; } E[] = { {7U, 1, "Tune Refused", "No Tune Mode Yet"}, {7U, 2, "Tune Refused", "Set Max Correction"}, {7U, 3, "Tune Refused", "Slave Busy"}, {4U, 0, "Stop The Unit", "First"}, {6U, 0, "Not Supported", "Update The Slave"}, {5U, 0, "Tune Refused", "Try Again"}, {7U, 5, "Tune Refused", "Slave Cannot Start"}, {7U, 6, "Input Too High", "Lower The Mains"} };
       unsigned e; for (e = 0U; e < sizeof E / sizeof E[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, E[e].st, E[e].v); run(80U); CHECK(!MApp_ShowsTune(&A) && strstr(row(1), E[e].l1) != NULL && strstr(row(2), E[e].l2) != NULL, "status %u reason %d: '%s' / '%s' ('%s' / '%s')", E[e].st, (int)E[e].v, E[e].l1, E[e].l2, row(1), row(2)); } }
     /* no answer at all */
     fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); run(3200U); CHECK(!MApp_ShowsTune(&A) && strstr(row(1), "No Answer") != NULL, "no answer in 3 s: 'No Answer' ('%s')", row(1));

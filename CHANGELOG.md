@@ -2,7 +2,21 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.33 — PHASE 2, step 4: the master side of the autotune (current)
+## v0.9.34 — PHASE 2, step 5: the controller's TUNE MODE: the sweep can now run on the power stage (current)
+* NEW switch `SLAVE_TUNE_MODE` (default 0; needs `SLAVE_AUTOTUNE 1`, a compile-time check enforces it). With it, a `TUNE` command makes the controller start BY ITSELF through the normal start sequence (the master keeps run = 0 and the output contactor open) and in RUN, instead of the regulator, apply the sweep's duty as an OPEN-LOOP BOOST:
+  slew-limited (1500 ticks/s up, at once down), capped at the hardware cap, and with the controller's OWN limit (more than Max Correction + 8 V of injection stops the unit with the over-voltage fault, latched). Every normal protection still runs. **ANY fault, the loss of the master (1 s without `$M`), or a reset ends tune mode**: a unit never starts itself after a fault is cleared.
+* The tune link got a PREPARATION phase: the sweep starts only when the controller has been in RUN for 1 s (about 6 s after the command); meanwhile the master hears a heartbeat `$T` (step 0) every 2 s, so its 8 s silence timeout does not fire. A fault, the loss of tune mode or 25 s without reaching RUN ends it as ABORTED; TABORT works in the preparation too.
+* **Found by the real-controller test: the sweep must respect the stage's OUTPUT over-voltage limit (280 V) as well as Max Correction.** At 230 V in, the 1600-tick step would lift the output to about 278 V and trip fault 6. The sweep's limit is now the SMALLER of Max Correction and the headroom (280 V less 10 V less the input), and a `TUNE` is refused with less than 20 V of headroom (reason 6, master: `Input Too High / Lower The Mains`).
+  Practical result: **a full-range sweep (to the 2752-tick cap, about 86 V) needs an input of about 160 V** and Max Correction 110 or more; at 230 V only about 32 V of injection is possible. See docs/AUTOTUNE_BENCH.md.
+* **Found by the real-controller test: tune mode survived a controller fault**, so after the fault was cleared the unit would have started by itself. Fixed: any fault, the loss of the master and `SlaveCtrl_Init` end tune mode.
+* Fixed before it reached you: `main.c` called `SlaveCal_Busy()` without including `slave_cal.h` (a build error in the voltage-calibration builds).
+* NEW config `..._fast_correction_100_iout_tune.h` (your 100 V/s profile + I-OUT + `SLAVE_AUTOTUNE 1` + `SLAVE_TUNE_MODE 1`). NEW docs/AUTOTUNE_BENCH.md: the first bench run, step by step.
+* Tests: tune mode on the REAL controller 40 checks (new runner job `s3_tune_mode`: the real master application, the real link, the real tune core and profile store, the real controller and the stage model: a whole sweep at 160 V ending with the profile stored and the unit started normally afterwards, STOP, a reversed transformer, Max Correction 30 V, the master lost,
+  the controller's own limit, the hardware cap, a reset, the refusals); tune link 45; master application 361; end to end 13. Mutation checks on the controller 8 of 9 (the ninth, the explicit cap clamp, is equivalent while the duty macro's own period limit is also 2752: it decides with a smaller cap).
+  NOT compiled here: the slave `main.c` and `slave_link.c` glue (the HAL).
+* **Not done:** the stored profile is not USED by the regulator yet; the start-up transformer check, "refuse closed loop until tuned" and the automatic first tune after the Restart Time are not built. They follow the first bench runs.
+
+## v0.9.33 — PHASE 2, step 4: the master side of the autotune
 * The **Re-tune item** of Set-Mode (item 19, behind the Set-Mode password) now does something: it sends `$K TUNE` (3 sends, one id), waits for the answer, follows the slave's `$T` progress frames and shows a screen over everything:
   `Transformer Tuning / Step 6 of 10 / Injected +12.4 V / STOP = abort`, then `Tuning Complete / Transformer OK / Profile Stored`, or `Tuning Failed` with the reason (Reversed Transformer, No Response, Aborted By Slave, Input Not Steady, Slave Not Answering) or `Tuning Stopped / By Operator / Nothing Stored`. Any key dismisses a result; it also goes after 6 s.
 * While tuning: **the unit is held off** (the engine's Set-Mode hold, also in Auto mode), **every key but STOP is swallowed** (STOP sends `$K TABORT`), and the Set-Mode idle timeout is kept alive so Set-Mode is still open behind the screen afterwards.

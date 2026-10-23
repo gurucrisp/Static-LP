@@ -210,6 +210,8 @@ static void tune_on_result(MApp_t *a, uint8_t status, int32_t value, uint32_t no
         if (value == 1) tune_refuse(a, "Tune Refused", "No Tune Mode Yet", now);
         else if (value == 2) tune_refuse(a, "Tune Refused", "Set Max Correction", now);
         else if (value == 3) tune_refuse(a, "Tune Refused", "Slave Busy", now);
+        else if (value == 5) tune_refuse(a, "Tune Refused", "Slave Cannot Start", now);
+        else if (value == 6) tune_refuse(a, "Input Too High", "Lower The Mains", now);
         else if (value == 4) { a->tune_state = TS_RUN; a->tune_t_frame = now; }                      /* it is already running: follow it */
         else tune_refuse(a, "Tune Refused", "Not Allowed", now);
         return;

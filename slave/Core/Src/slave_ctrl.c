@@ -482,6 +482,14 @@ static uint16_t s_mc_maxc_dv;
 static uint32_t s_restart_at_ms;
 static uint32_t s_last_trip_ms;
 static uint32_t s_state_since_ms;
+#if (SLAVE_TUNE_MODE != 0) && (SLAVE_POWER_STAGE >= 3) && (SLAVE_MASTER_CONTROL != 0)
+#define TUNE_ENABLED 1
+static uint8_t  s_tune_on;                        /* tune mode: the master's run = 0 does NOT stop the unit, the sweep's duty request drives it */
+static float    s_tune_req, s_tune_cur;           /* effective ticks asked for / applied (open loop, boost) */
+static uint32_t s_tune_last_ms;
+#else
+#define TUNE_ENABLED 0
+#endif
 static uint32_t s_rect_base_comm;
 
 #if (SLAVE_TF_CHECK != 0) || (SLAVE_POWER_STAGE == 2)
@@ -800,6 +808,9 @@ static void FinishFault(uint16_t code, uint32_t now_ms)
 
 static void EnterFault(uint16_t code, uint32_t now_ms)
 {
+#if (TUNE_ENABLED != 0)
+    s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f;     /* ANY fault ends tune mode, for good: the unit must never start itself again after it is cleared */
+#endif
     if (g_ctrl.state != CTRL_RESHUNT)
     {
         /* Snapshot BEFORE anything changes: where we were, which pattern mode, and whether the hardware
@@ -897,6 +908,9 @@ void SlaveCtrl_Init(void)
     g_ctrl.run_request = (uint8_t)(SLAVE_BENCH_AUTORUN != 0);       /* with master control SLAVE_BENCH_AUTORUN is 0: the master decides */
     s_mc_last_m_ms = CtrlHw_NowMs();                                 /* the link timeout runs from the start */
     s_mc_link_lost = 0U; s_mc_clr_valid = 0U; s_mc_clr = 0U; s_mc_setv_dv = 0U; s_mc_maxc_dv = 0U;
+#if (TUNE_ENABLED != 0)
+    s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f; s_tune_last_ms = 0U;
+#endif
     s_last_vout_valid = 0U;
     s_target_v = (float)CTRL_TARGET_V;
     s_vin_bad = s_vout_bad = 0U;
@@ -937,7 +951,11 @@ void SlaveCtrl_OnControl(uint8_t run, uint16_t setv_dv, uint8_t clr, uint16_t ma
     const uint8_t energised = (uint8_t)((g_ctrl.state >= CTRL_RECT) && (g_ctrl.state <= CTRL_RESHUNT));
     s_mc_last_m_ms = now_ms;
     s_mc_link_lost = 0U;
+#if (TUNE_ENABLED != 0)
+    g_ctrl.run_request = (uint8_t)((run != 0U) || (s_tune_on != 0U));      /* tune mode keeps the unit running although the master says run = 0 (it holds its own engine off) */
+#else
     g_ctrl.run_request = (uint8_t)(run != 0U);                    /* a LEVEL: every $M restates it */
+#endif
     if (energised == 0U)
     {
         s_target_v   = (float)setv_dv * 0.1f;                     /* picked up the moment the unit stops, since the master repeats it */
@@ -990,6 +1008,25 @@ uint16_t SlaveCtrl_SetvDv(void)
 uint8_t  SlaveCtrl_ClrEcho(void)    { return s_mc_clr; }
 uint16_t SlaveCtrl_MaxCorrDv(void)  { return s_mc_maxc_dv; }
 
+#if (TUNE_ENABLED != 0)
+uint8_t SlaveCtrl_TuneBegin(void)
+{
+    if ((g_ctrl.state != CTRL_OFF) || (g_ctrl.run_request != 0U) || (s_mc_link_lost != 0U) || (s_mc_maxc_dv == 0U) || (g_ctrl.isr_fault != 0U)) return 0U;
+    s_tune_req = 0.0f; s_tune_cur = 0.0f; s_tune_last_ms = 0U; s_tune_on = 1U; g_ctrl.run_request = 1U;
+    return 1U;
+}
+void    SlaveCtrl_TuneRequest(uint16_t eff_ticks) { s_tune_req = (float)eff_ticks; }
+void    SlaveCtrl_TuneEnd(void) { s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f; g_ctrl.run_request = 0U; }      /* the next pass: BeginReshunt with zero duty */
+uint8_t SlaveCtrl_TuneRunning(void) { return s_tune_on; }
+uint8_t SlaveCtrl_TuneReady(void) { return (uint8_t)((s_tune_on != 0U) && (g_ctrl.state == CTRL_RUN) && ((uint32_t)(CtrlHw_NowMs() - s_state_since_ms) >= 1000UL)); }
+#else
+uint8_t SlaveCtrl_TuneBegin(void) { return 0U; }
+void    SlaveCtrl_TuneRequest(uint16_t eff_ticks) { (void)eff_ticks; }
+void    SlaveCtrl_TuneEnd(void) { }
+uint8_t SlaveCtrl_TuneRunning(void) { return 0U; }
+uint8_t SlaveCtrl_TuneReady(void) { return 0U; }
+#endif
+
 uint8_t SlaveCtrl_LinkState(void)
 {
     switch (g_ctrl.state)
@@ -1038,6 +1075,9 @@ void SlaveCtrl_Service(void)
         {
             s_mc_link_lost = 1U;
             g_ctrl.run_request = 0U;
+#if (TUNE_ENABLED != 0)
+            s_tune_on = 0U;                                         /* the master is gone: a sweep stops with it */
+#endif
         }
     }
 
@@ -1230,6 +1270,23 @@ void SlaveCtrl_Service(void)
         if (g_ctrl.run_request == 0U) { BeginReshunt(0U, now_ms); break; }
         f = RunningChecks(now_ms, now_us, 2U);                                  /* relays must be FREE */
         if (f != 0U) { EnterFault(f, now_ms); break; }
+#if (TUNE_ENABLED != 0)
+        if (s_tune_on != 0U)
+        {   /* TUNE MODE: no regulator, no guard, no flip check (the sweep measures all that): the sweep's duty as an OPEN-LOOP BOOST. Every check above still ran. */
+            float req = s_tune_req, step;
+            uint32_t dtm = (s_tune_last_ms == 0U) ? 10U : (uint32_t)(now_ms - s_tune_last_ms);
+            s_tune_last_ms = now_ms; if (dtm > 100U) dtm = 100U;
+            if (req > (float)CTRL_STAGE3_MAX_EFF_TICKS) req = (float)CTRL_STAGE3_MAX_EFF_TICKS;        /* never above the hardware cap */
+            if (req < 0.0f) req = 0.0f;
+            step = CTRL_TUNE_SLEW_TPS * (float)dtm * 0.001f;
+            if (s_tune_cur < req) { s_tune_cur += step; if (s_tune_cur > req) s_tune_cur = req; }      /* rises at the slew limit */
+            else s_tune_cur = req;                                                                    /* falls at once */
+            if ((m.valid != 0U) && (s_mc_maxc_dv != 0U) && (m.vout > (m.vin + ((float)s_mc_maxc_dv * 0.1f) + CTRL_TUNE_HARD_OVER_V))) { EnterFault(CF_VOUT_HIGH, now_ms); break; }   /* more than the rated injection: stop, latch */
+            g_ctrl.boost = 1U; g_ctrl.duty_counts = CTRL_EFF_TO_CCR((uint32_t)s_tune_cur);
+            s_reg_eff = (uint16_t)s_tune_cur; s_reg_boost = 1U;
+            break;
+        }
+#endif
 
 #if (SLAVE_POWER_STAGE == 2)
         g_ctrl.duty_counts = InjStep(&m, now_ms);                                /* zero / ramp / hold / ramp down / zero: see CTRL_INJ_* */

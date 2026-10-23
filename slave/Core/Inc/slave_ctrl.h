@@ -410,7 +410,20 @@ void     SlaveCtrl_OnControl(uint8_t run, uint16_t setv_dv, uint8_t clr, uint16_
 uint16_t SlaveCtrl_Flags2(void);        /* LINKV2_FLAG_* for the $E frame                                     */
 uint16_t SlaveCtrl_SetvDv(void);        /* the set voltage in use, tenths of a volt; 0 = none accepted yet (master control) */
 uint8_t  SlaveCtrl_ClrEcho(void);       /* the last clear counter value seen in $M                            */
-uint16_t SlaveCtrl_MaxCorrDv(void);     /* the Max Correction last sent in $M, tenths of a volt (0 = not set)   */
+uint16_t SlaveCtrl_MaxCorrDv(void);
+
+/* ---- TUNE MODE (SLAVE_TUNE_MODE): the transformer autotune drives the stage open loop ---- */
+#ifndef CTRL_TUNE_SLEW_TPS
+#define CTRL_TUNE_SLEW_TPS      1500.0f   /* the open-loop duty may rise by this many effective ticks per second (0 to the 2752 cap in 1.8 s); it may fall at once */
+#endif
+#ifndef CTRL_TUNE_HARD_OVER_V
+#define CTRL_TUNE_HARD_OVER_V   8.0f      /* the controller's own limit: the output more than Max Correction + this above the input stops the unit (fault 6), whatever the sweep thinks */
+#endif
+uint8_t SlaveCtrl_TuneBegin(void);                    /* 1 = accepted (the unit is OFF, nothing latched, the master is there, Max Correction set): the normal start sequence begins, in tune mode */
+void    SlaveCtrl_TuneRequest(uint16_t eff_ticks);    /* the open-loop BOOST duty wanted now (effective ticks); applied in RUN, slew-limited and capped */
+void    SlaveCtrl_TuneEnd(void);                      /* stop: duty to zero at once, the shunts close, OFF */
+uint8_t SlaveCtrl_TuneRunning(void);                  /* tune mode is on (any phase of the start sequence or RUN) */
+uint8_t SlaveCtrl_TuneReady(void);                    /* in RUN for at least 1 s: the sweep may start */     /* the Max Correction last sent in $M, tenths of a volt (0 = not set)   */
 
 uint8_t  SlaveCtrl_LinkState(void);     /* link_proto state: 0 stopped 1 starting 2 running 3 fault */
 uint16_t SlaveCtrl_FaultCode(void);     /* CF_* while in FAULT/LATCHED, else 0         */

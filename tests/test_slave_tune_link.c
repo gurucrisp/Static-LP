@@ -19,10 +19,18 @@ static int fer(uint32_t a) { if (flash_fail) return -1; memset(&mem[a - PA], 0xF
 static int fpr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (flash_fail) return -1; for (i = 0U; i < n; i++) mem[a - PA + i] &= b[i]; return 0; }
 static const SFlash_t FL = { frd, fpr, fer };
 
-/* ---- what the controller side would say ---- */
-static uint16_t maxc_dv = 1200U; static uint8_t is_stopped = 1U, can_run = 1U, other_busy = 0U;
+/* ---- what the controller side would say: a fake controller that takes prep_ms to reach RUN and then applies the requested duty ---- */
+static uint32_t T;
+static uint16_t maxc_dv = 1200U; static uint8_t is_stopped = 1U, can_run = 1U, other_busy = 0U, begin_ok = 1U, ctrl_on = 0U; static uint16_t ctrl_req = 0U, ctrl_fault = 0U, ctrl_max_req = 0U; static uint32_t ctrl_ready_at = 0U, prep_ms = 6000U; static int ctrl_ends = 0, ctrl_begins = 0;
 static uint16_t hw_maxc(void) { return maxc_dv; } static uint8_t hw_stopped(void) { return is_stopped; } static uint8_t hw_can_run(void) { return can_run; } static uint8_t hw_busy(void) { return other_busy; }
-static const TuneLinkHw_t HW = { hw_maxc, hw_stopped, hw_can_run, hw_busy };
+static uint8_t hw_begin(void) { if (!begin_ok) return 0U; ctrl_on = 1U; ctrl_ready_at = T + prep_ms; ctrl_begins++; ctrl_req = 0U; return 1U; }
+static void hw_request(uint16_t k) { ctrl_req = k; if (k > ctrl_max_req) ctrl_max_req = k; }
+static void hw_end(void) { ctrl_on = 0U; ctrl_ends++; ctrl_req = 0U; }
+static uint8_t hw_ready(void) { return (uint8_t)((ctrl_on != 0U) && (T >= ctrl_ready_at)); }
+static uint8_t hw_alive(void) { return ctrl_on; }
+static uint16_t hw_fault(void) { return ctrl_fault; }
+static uint16_t headroom = 3000U; static uint16_t hw_headroom(void) { return headroom; }
+static const TuneLinkHw_t HW = { hw_maxc, hw_stopped, hw_can_run, hw_busy, hw_begin, hw_request, hw_end, hw_ready, hw_alive, hw_fault, hw_headroom };
 
 /* ---- the link: captured frames ---- */
 #define MAXCAP 1200
@@ -37,7 +45,7 @@ static const SL2_Hooks_t HK = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, h_
 
 /* ---- the simulated transformer ---- */
 typedef struct { double k, dead, knee, sign, noise, vin; } Plant_t;
-static Plant_t P; static double inj; static uint32_t T; static uint32_t rs = 99U; static double gauss(void) { double a = 0.0; int i; for (i = 0; i < 3; i++) { rs = rs * 1664525U + 1013904223U; a += (double)((rs >> 8) & 0xFFFFFFU) / 8388608.0 - 1.0; } return a / 1.732; }
+static Plant_t P; static double inj; static uint32_t rs = 99U; static double gauss(void) { double a = 0.0; int i; for (i = 0; i < 3; i++) { rs = rs * 1664525U + 1013904223U; a += (double)((rs >> 8) & 0xFFFFFFU) / 8388608.0 - 1.0; } return a / 1.732; }
 static double true_inj(double ticks)
 {
     double eff = (ticks > P.dead) ? (ticks - P.dead) : 0.0;
@@ -51,7 +59,7 @@ static void step_ms(uint32_t ms)
     for (k = 0U; k < ms / 10U; k++)
     {
         TuneIn_t in; double a = 1.0 - exp(-0.01 / 0.3);
-        T += 10U; inj += (true_inj((double)SlaveTuneLink_RequestTicks()) - inj) * a;
+        T += 10U; inj += (true_inj((double)((hw_ready() != 0U) ? ctrl_req : 0U)) - inj) * a;           /* the plant sees the duty the CONTROLLER applies */
         in.vin = (float)(P.vin + 0.05 * gauss()); in.vout = (float)(P.vin + 0.2 + inj + P.noise * gauss()); in.meas_valid = 1U; in.fault = 0U; in.vin_in_window = 1U; in.maxc_v = (float)maxc_dv / 10.0f; in.hw_cap_ticks = 2752U;
         SlaveTuneLink_Service(T, &in); SL2_Service(T);
     }
@@ -65,14 +73,15 @@ static void send_kn(uint8_t id, LinkCmd_t cmd, const char *name, int32_t num)
 static void send_k(uint8_t id, LinkCmd_t cmd) { send_kn(id, cmd, 0, 0); }
 /* what the master has seen */
 static int find_r(uint8_t id, int *status, int32_t *value) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == id) { c++; *status = f.u.r.status; *value = f.u.r.value; } return c; }
-static int count_t(int result, int *steps_in_order) { int i, c = 0, last = 0; LinkV2Frame_t f; *steps_in_order = 1; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) { if (f.u.t.result == (uint8_t)result) c++; if (f.u.t.result == 0U) { if (f.u.t.step <= last) *steps_in_order = 0; last = f.u.t.step; } } return c; }
+static int count_t(int result, int *steps_in_order) { int i, c = 0, last = 0; LinkV2Frame_t f; *steps_in_order = 1; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) { if (f.u.t.result == (uint8_t)result && (result != 0 || f.u.t.step > 0U)) c++; if (f.u.t.result == 0U && f.u.t.step > 0U) { if (f.u.t.step <= last) *steps_in_order = 0; last = f.u.t.step; } } return c; }
+static int count_heartbeats(void) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T && f.u.t.result == 0U && f.u.t.step == 0U) c++; return c; }
 static int last_t_result(void) { int i, r = -1; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) r = f.u.t.result; return r; }
 static uint16_t last_e_flags(void) { int i; uint16_t fl = 0xFFFFU; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_E) fl = f.u.e.flags2; return fl; }
 static int e_flag_seen(uint16_t mask) { int i; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_E && (f.u.e.flags2 & mask) != 0U) return 1; return 0; }
 static void fresh(void)
 {
     if (Tune_Running()) { Tune_Abort(); }
-    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
+    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; begin_ok = 1U; headroom = 3000U; ctrl_on = 0U; ctrl_req = 0U; ctrl_fault = 0U; ctrl_max_req = 0U; ctrl_ends = 0; ctrl_begins = 0; prep_ms = 6000U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
     SlaveProfile_Init(&FL, PA, PB); SlaveTuneLink_Init(&HW); SL2_Init(&HK, T); step_ms(300U); ncap = 0;
 }
 
@@ -89,10 +98,10 @@ int main(void)
     fresh(); step_ms(300U); CHECK((last_e_flags() & LINKV2_FLAG_NOT_TUNED) != 0U && (last_e_flags() & LINKV2_FLAG_BUSY) == 0U, "no profile yet: $E says NOT_TUNED, not BUSY (0x%04X)", (unsigned)last_e_flags());
     /* ---- a whole successful sweep, by bytes ---- */
     fresh(); send_k(1U, LINKCMD_TUNE);
-    CHECK(find_r(1, &st, &val) == 1 && st == 0 && Tune_Running(), "K TUNE: R status 0 and the sweep runs");
-    { uint32_t ticks_before = (uint32_t)SlaveTuneLink_RequestTicks(); send_k(1U, LINKCMD_TUNE); CHECK(find_r(1, &st, &val) == 2 && st == 0 && Tune_Running() && (uint32_t)SlaveTuneLink_RequestTicks() == ticks_before, "a retry of the same id gets the SAME answer again (R status 0) and the sweep is not started a second time"); }
+    CHECK(find_r(1, &st, &val) == 1 && st == 0 && SlaveTuneLink_Active(), "K TUNE: R status 0 and the run is under way (preparing)");
+    { uint32_t ticks_before = (uint32_t)SlaveTuneLink_RequestTicks(); send_k(1U, LINKCMD_TUNE); CHECK(find_r(1, &st, &val) == 2 && st == 0 && SlaveTuneLink_Active() && ctrl_begins == 1 && (uint32_t)SlaveTuneLink_RequestTicks() == ticks_before, "a retry of the same id gets the SAME answer again (R status 0) and the controller is told to begin only once"); }
     send_k(2U, LINKCMD_TUNE); CHECK(find_r(2, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_ALLOWED && val == 4, "another TUNE while it runs: NOT_ALLOWED, reason 4 (%d, %d)", st, (int)val);
-    step_ms(5000U); CHECK(e_flag_seen(LINKV2_FLAG_BUSY) && SlaveTuneLink_Active() && SlaveTuneLink_RequestTicks() > 0U, "while it runs $E says BUSY and the duty it asks for is %u ticks", (unsigned)SlaveTuneLink_RequestTicks());
+    step_ms(14000U); CHECK(e_flag_seen(LINKV2_FLAG_BUSY) && SlaveTuneLink_Active() && ctrl_req > 0U, "while it runs $E says BUSY and the controller is asked for %u ticks", (unsigned)ctrl_req);
     step_ms(36000U);
     steps = count_t(0, &ordered); CHECK(steps == 10 && ordered, "ten $T step frames arrived, in order (%d, ordered %d)", steps, ordered);
     CHECK(count_t(1, &ordered) >= 7, "and the FINISHED result: sent once and repeated 6 times (%d frames)", count_t(1, &ordered));
@@ -100,35 +109,63 @@ int main(void)
     { TuneProfile_t p; CHECK(SlaveProfile_Get(&p) == 1U && p.cap_ticks == 2752U && p.kib_m >= 940U && p.kib_m <= 1060U, "the stored profile: cap %u, gain scale %u", (unsigned)p.cap_ticks, (unsigned)p.kib_m); }
     step_ms(500U); ncap = 0; step_ms(500U); CHECK((last_e_flags() & (LINKV2_FLAG_BUSY | LINKV2_FLAG_NOT_TUNED)) == 0U, "afterwards $E has neither BUSY nor NOT_TUNED (0x%04X)", (unsigned)last_e_flags());
     /* the same again, but the transmitter has no room for 2 s in the middle: nothing is lost or reordered */
-    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(8000U); tx_ok = 0; step_ms(2500U); tx_ok = 1; step_ms(40000U);
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(14000U); tx_ok = 0; step_ms(2500U); tx_ok = 1; step_ms(40000U);
     steps = count_t(0, &ordered); CHECK(steps == 10 && ordered && last_t_result() == 1, "a transmitter without room for 2.5 s: still 10 step frames, in order, and the result (%d, ordered %d)", steps, ordered);
     /* ---- a re-tune over an existing profile: the old one stays until the new one is stored ---- */
-    { TuneProfile_t a, b; fresh(); send_k(1U, LINKCMD_TUNE); step_ms(42000U); (void)SlaveProfile_Get(&a); ncap = 0;
+    { TuneProfile_t a, b; fresh(); send_k(1U, LINKCMD_TUNE); step_ms(50000U); (void)SlaveProfile_Get(&a); ncap = 0;
       P.k = 0.6; send_k(2U, LINKCMD_TUNE); CHECK(find_r(2, &st, &val) == 1 && st == 0, "a re-tune is accepted");
-      step_ms(9000U); { TuneProfile_t m; CHECK(SlaveProfile_Tuned() == 1U && SlaveProfile_Get(&m) == 1U && m.kib_m == a.kib_m, "during it the OLD profile is still the active one"); }
-      step_ms(40000U); (void)SlaveProfile_Get(&b); CHECK(b.kib_m != a.kib_m && b.kib_m > a.kib_m, "afterwards the NEW profile (a weaker transformer: gain scale %u, was %u)", (unsigned)b.kib_m, (unsigned)a.kib_m); }
+      step_ms(16000U); { TuneProfile_t m; CHECK(SlaveProfile_Tuned() == 1U && SlaveProfile_Get(&m) == 1U && m.kib_m == a.kib_m, "during it the OLD profile is still the active one"); }
+      step_ms(45000U); (void)SlaveProfile_Get(&b); CHECK(b.kib_m != a.kib_m && b.kib_m > a.kib_m, "afterwards the NEW profile (a weaker transformer: gain scale %u, was %u)", (unsigned)b.kib_m, (unsigned)a.kib_m); }
     /* ---- a new sweep started while the old result is still being repeated: the old FINISHED must not leak into the new run ---- */
-    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(35200U);                      /* the first sweep has just finished, its result is still repeated for about 3 s */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(41500U);                      /* the first sweep has just finished, its result is still repeated for about 3 s */
     CHECK(count_t(1, &ordered) >= 1, "the first sweep has finished and its result is being repeated");
-    ncap = 0; send_k(2U, LINKCMD_TUNE); step_ms(12000U);
+    ncap = 0; send_k(2U, LINKCMD_TUNE); step_ms(20000U);
     CHECK(find_r(2, &st, &val) == 1 && st == 0 && count_t(1, &ordered) == 0 && count_t(0, &ordered) >= 3, "a new TUNE: no FINISHED frame of the OLD run arrives during the new one, only its own steps (%d finished, %d steps)", count_t(1, &ordered), count_t(0, &ordered));
     /* ---- TABORT ---- */
-    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(17000U); send_k(2U, LINKCMD_TABORT); step_ms(1500U);
-    CHECK(find_r(2, &st, &val) == 1 && st == 0 && !Tune_Running() && last_t_result() == 6 && SlaveProfile_Tuned() == 0U && SlaveTuneLink_RequestTicks() == 0U, "TABORT at 17 s: R 0, the sweep stops, the result is 6 (BY_MASTER), nothing stored, no duty (result %d)", last_t_result());
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(23000U); send_k(2U, LINKCMD_TABORT); step_ms(1500U);
+    CHECK(find_r(2, &st, &val) == 1 && st == 0 && !Tune_Running() && last_t_result() == 6 && SlaveProfile_Tuned() == 0U && SlaveTuneLink_RequestTicks() == 0U, "TABORT at 23 s: R 0, the sweep stops, the result is 6 (BY_MASTER), nothing stored, no duty (result %d)", last_t_result());
     send_k(3U, LINKCMD_TABORT); CHECK(find_r(3, &st, &val) == 1 && st == 0, "TABORT with nothing running is answered 0 as well");
     step_ms(600U); ncap = 0; step_ms(500U); CHECK((last_e_flags() & LINKV2_FLAG_BUSY) == 0U && (last_e_flags() & LINKV2_FLAG_NOT_TUNED) != 0U, "after the abort: not BUSY, still NOT_TUNED");
     /* ---- the transformer is the wrong way round, or not there ---- */
-    fresh(); P.sign = -1.0; send_k(1U, LINKCMD_TUNE); step_ms(30000U);
+    fresh(); P.sign = -1.0; send_k(1U, LINKCMD_TUNE); step_ms(38000U);
     CHECK(last_t_result() == 2 && SlaveProfile_Tuned() == 0U && !Tune_Running(), "a flipped transformer: result 2 (FLIPPED), nothing stored (result %d)", last_t_result());
-    fresh(); P.sign = 0.0; send_k(1U, LINKCMD_TUNE); step_ms(30000U);
+    fresh(); P.sign = 0.0; send_k(1U, LINKCMD_TUNE); step_ms(38000U);
     CHECK(last_t_result() == 3 && SlaveProfile_Tuned() == 0U, "no transformer: result 3 (NO_RESPONSE), nothing stored (result %d)", last_t_result());
     /* ---- the flash refuses the save: the master is told ABORTED, not FINISHED ---- */
-    fresh(); flash_fail = 1; send_k(1U, LINKCMD_TUNE); step_ms(45000U);
+    fresh(); flash_fail = 1; send_k(1U, LINKCMD_TUNE); step_ms(52000U);
     CHECK(last_t_result() == 4 && count_t(1, &ordered) == 0 && SlaveProfile_Tuned() == 0U && !Tune_Running(), "the flash refuses the profile: the result is 4 (ABORTED), never 1 (FINISHED), nothing is claimed stored (result %d)", last_t_result());
-    flash_fail = 0; ncap = 0; send_k(2U, LINKCMD_TUNE); step_ms(45000U); CHECK(last_t_result() == 1 && SlaveProfile_Tuned() == 1U, "and with the flash working again a new tune finishes");
+    flash_fail = 0; ncap = 0; send_k(2U, LINKCMD_TUNE); step_ms(52000U); CHECK(last_t_result() == 1 && SlaveProfile_Tuned() == 1U, "and with the flash working again a new tune finishes");
     /* ---- Max Correction is read when the sweep starts: a low rating keeps the sweep short and the injection low ---- */
-    fresh(); maxc_dv = 600U; send_k(1U, LINKCMD_TUNE); step_ms(40000U);
+    fresh(); maxc_dv = 600U; send_k(1U, LINKCMD_TUNE); step_ms(46000U);
     { int steps6 = count_t(0, &ordered); TuneProfile_t p; CHECK(last_t_result() == 1 && steps6 == 8 && SlaveProfile_Get(&p) == 1U && p.maxc_dv == 600U && p.cap_ticks < 1700U, "Max Correction 60 V: 8 steps, a profile made with 60 V, the cap %u", (unsigned)p.cap_ticks); }
+    /* ---- the preparation: the controller needs about 6 s to reach RUN; the master hears heartbeats, the sweep starts only when the controller is ready ---- */
+    fresh(); send_k(1U, LINKCMD_TUNE);
+    CHECK(find_r(1, &st, &val) == 1 && st == 0 && SlaveTuneLink_Active() && ctrl_begins == 1 && !Tune_Running(), "TUNE: the controller is told to begin once, the sweep does not start yet (the controller is not in RUN)");
+    step_ms(5500U); CHECK(!Tune_Running() && ctrl_req == 0U && count_t(0, &ordered) == 0 && count_heartbeats() >= 2 && e_flag_seen(LINKV2_FLAG_BUSY), "5.5 s of preparation: no duty asked for, no step frame, %d heartbeats (step 0), BUSY", count_heartbeats());
+    step_ms(2500U); CHECK(Tune_Running() && ctrl_on, "then the controller is in RUN and the sweep starts");
+    step_ms(40000U); CHECK(ctrl_ends >= 1 && !ctrl_on && ctrl_req == 0U && ctrl_max_req <= 2752U && last_t_result() == 1, "at the end the controller is told to stop (%d), the duty is back to 0, the largest duty asked for was %u ticks (the cap is 2752)", ctrl_ends, (unsigned)ctrl_max_req);
+    /* TABORT while the controller is still starting up */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(2000U); send_k(2U, LINKCMD_TABORT); step_ms(600U);
+    CHECK(find_r(2, &st, &val) == 1 && st == 0 && !SlaveTuneLink_Active() && ctrl_ends == 1 && !ctrl_on && last_t_result() == 6, "TABORT in the preparation: R 0, the controller is told to stop, the result is 6 (BY_MASTER) (result %d)", last_t_result());
+    step_ms(9000U); CHECK(!Tune_Running(), "and the sweep never starts afterwards");
+    /* the controller has a fault while starting */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(2000U); ctrl_fault = 6U; step_ms(500U);
+    CHECK(!SlaveTuneLink_Active() && ctrl_ends == 1 && last_t_result() == 4 && SlaveProfile_Tuned() == 0U, "a controller fault during the preparation: result 4 (ABORTED), the controller is told to stop");
+    /* the controller never reaches RUN */
+    fresh(); prep_ms = 100000U; send_k(1U, LINKCMD_TUNE); step_ms(24000U); CHECK(SlaveTuneLink_Active(), "still waiting at 24 s"); step_ms(2500U);
+    CHECK(!SlaveTuneLink_Active() && ctrl_ends == 1 && last_t_result() == 4, "it never reaches RUN: ABORTED after 25 s (result %d)", last_t_result());
+    /* the controller refuses to begin (a latched fault, not OFF) */
+    fresh(); begin_ok = 0U; send_k(1U, LINKCMD_TUNE); CHECK(find_r(1, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_ALLOWED && val == 5 && !SlaveTuneLink_Active() && ctrl_begins == 0, "the controller cannot begin: NOT_ALLOWED, reason 5 (%d, %d)", st, (int)val);
+    /* the controller stops under the sweep (the master link was lost): the sweep is aborted */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(14000U); CHECK(Tune_Running(), "a sweep is running"); ctrl_on = 0U; step_ms(500U);
+    CHECK(!Tune_Running() && last_t_result() == 4 && SlaveProfile_Tuned() == 0U, "tune mode ends in the controller during the sweep: the sweep is aborted (result %d)", last_t_result());
+    /* a controller fault in the middle of the sweep */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(18000U); ctrl_fault = 2U; step_ms(500U);
+    CHECK(!Tune_Running() && last_t_result() == 4 && ctrl_req == 0U && ctrl_ends >= 1, "a controller fault in the middle of the sweep: ABORTED, the duty request is 0, the controller is told to stop");
+    /* ---- the output over-voltage headroom: the input is too high, or the sweep is limited by it ---- */
+    fresh(); headroom = 100U; send_k(1U, LINKCMD_TUNE); CHECK(find_r(1, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_ALLOWED && val == 6 && !SlaveTuneLink_Active() && ctrl_begins == 0, "10 V of headroom: NOT_ALLOWED, reason 6 (input too high), the controller is not even started (%d, %d)", st, (int)val);
+    fresh(); headroom = 400U; send_k(1U, LINKCMD_TUNE); step_ms(46000U);
+    { TuneProfile_t pf; CHECK(last_t_result() == 1 && SlaveProfile_Get(&pf) == 1U && pf.maxc_dv == 400U && ctrl_max_req < 1300U, "40 V of headroom with Max Correction 120 V: the sweep is limited to the headroom: the profile is made at %u (tenths), the largest duty asked for is %u ticks", (unsigned)pf.maxc_dv, (unsigned)ctrl_max_req); }
     /* ---- NOT_TUNED also says that Max Correction is missing ---- */
     maxc_dv = 0U; ncap = 0; step_ms(500U); CHECK((last_e_flags() & LINKV2_FLAG_NOT_TUNED) != 0U, "a profile is stored but Max Correction is 0 again: NOT_TUNED");
     (void)id;

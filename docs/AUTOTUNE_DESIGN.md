@@ -40,3 +40,9 @@ The Re-tune item (behind the Set-Mode password) sends TUNE / TABORT, follows the
 
 ## Safety stance
 The sweep only ever asks for a duty; the controller must still apply every existing protection (FLT, break, the hardware cap, the master's contactor open). The backstop (injection above Max Correction + 5 V) is independent of the prediction. The first hardware run is on a variac, no load, with Max Correction set low.
+
+
+## Done: the controller's tune mode (v0.9.34, SLAVE_TUNE_MODE, 40 PC checks on the real controller)
+`SlaveCtrl_TuneBegin / TuneRequest / TuneEnd / TuneRunning / TuneReady`. TuneBegin needs: the controller OFF, nothing latched, the master there, Max Correction set. The unit then goes through the normal start sequence by itself (the master's run stays 0) and in RUN, instead of the regulator, applies the requested duty OPEN LOOP as a boost: slew-limited (1500 ticks/s up, at once down), capped at the hardware cap, and with the controller's OWN injection limit (Max Correction + 8 V, otherwise fault 6, latched). Every normal protection still runs. ANY fault, the loss of the master (1 s without `$M`) or a reset ends tune mode.
+The link adds a preparation phase: the sweep starts only when the controller has been in RUN for 1 s; until then the master hears a heartbeat `$T` (step 0) every 2 s. The sweep's limit is the SMALLER of Max Correction and the headroom under the output over-voltage limit; a TUNE is refused (reason 6) with less than 20 V of headroom.
+**Not done:** the profile is not USED yet (the regulator ignores the stored cap and gain scale), the start-up transformer check (a swapped transformer latches a fault) and "refuse closed loop until tuned" are not built, and the automatic first tune after the Restart Time. These come after the first bench runs have shown the sweep behaves on a real unit.
