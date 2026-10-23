@@ -241,3 +241,8 @@ See docs/VOLTAGE_CALIBRATION.md for the bench procedure.
 ## How fast the numbers change (v0.9.29)
 The input voltage, the output voltage and the load current are shown through a filter: the shown number follows the reading with a time constant of about 1 s, changes at most once every 300 ms, and moves only when the filtered reading is 0.7 V (0.3 A for the load) away from it. A step of 5 V or more (5 A for the load) is shown at once.
 To change it: `MAPP_DISP_EMA_DIV` (96: larger = slower filter) and `MAPP_DISP_HOLD_MS` (300) in `m_app.h`. The load display can show 0.1 A below a true value (the hysteresis); that is by design.
+
+
+## Converter Current page (v0.9.30)
+LOG, then MENU x7: `Converter Current`, RMS and peak in amperes of the slave's CT2500 chain (net I-OUT), and a status line: `CT primary current`, `OVER RANGE (>10A pk)` or `Not measured` (an older slave, or `SLAVE_IOUT 0`). There are eight service pages now:
+monitor, diagnostics, Load Calibration, Clock, I/P Calibration, O/P Calibration, Converter Current, then the Run screen. See docs/IOUT.md.

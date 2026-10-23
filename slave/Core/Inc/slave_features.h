@@ -49,6 +49,12 @@
 #define SLAVE_AUTOTUNE         0
 #endif
 
+/* 1 = the converter-side CURRENT (net I-OUT, connector pin 32, PA2 = ADC1_IN2) is sampled as a 4th ADC channel together with AC_IN, AC_OUT and the NTC, its AC RMS and peak are computed (slave_iout.h) and sent to the master in $E.
+ * The channel is read after the NTC, so the other three keep their places. 0 = the ADC has the 3 channels it always had and nothing changes. (If the project is regenerated with CubeMX, set PA2 as ADC1_IN2 there too.) */
+#ifndef SLAVE_IOUT
+#define SLAVE_IOUT             0
+#endif
+
 #ifndef SLAVE_WATCHDOG
 #define SLAVE_WATCHDOG         1
 #endif
@@ -77,7 +83,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       929UL
+#define SLAVE_FW_VERSION       930UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

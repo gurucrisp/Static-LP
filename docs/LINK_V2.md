@@ -34,3 +34,8 @@ valid-checksum frames with random edits; every single-byte substitution of every
 Nine deliberate breakages of the library are all caught.
 
 The examples in `tests/link_v2_examples.inc` are generated from the workbook: `python3 tools/gen_link_examples.py <workbook> [--check]`.
+
+
+## `$E` optional fields (v0.9.30)
+`$E,seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca]`: the last two (the converter-side current, hundredths of an ampere, 0..4000) are OPTIONAL. A sender without the channel omits them (the frame is byte for byte the 6-field frame of the first protocol); a receiver that gets only 6 fields reads them as 0; one that gets 7 reads the peak as 0;
+a present optional field must be in range or the frame is rejected; extra fields beyond 8 are ignored. Flags: `IOUT_VALID` 0x0200 (the slave measures it), `IOUT_CLIP` 0x0400 (the measurement is at the limit of its range).

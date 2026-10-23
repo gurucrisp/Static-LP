@@ -2665,6 +2665,7 @@ int main(void)
     run_isolated(t_mc_master_logic,           "master control: the real master logic against the real slave");
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
     run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
+    run_isolated(t_mc_iout,                   "master control: converter-side current through the link");
 #ifdef FAST_CORRECTION_TEST
     run_isolated(t_mc_fast_correction,        "master control: the fast correction profile");
 #endif

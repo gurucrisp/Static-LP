@@ -208,7 +208,12 @@ static void t_mc_condition_fault(void)
 static char     e2e_f[E2E_MAX][100]; static int e2e_n[E2E_MAX]; static int e2e_cnt;
 static uint32_t e2e_seq_m;
 static void    e2e_on_control(const LinkM_t *m, uint32_t now) { SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now); }
-static void    e2e_fill_e(LinkE_t *e) { e->setv_dv = SlaveCtrl_SetvDv(); e->flags2 = SlaveCtrl_Flags2(); e->clr = SlaveCtrl_ClrEcho(); e->reach_lo_dv = 0U; e->reach_hi_dv = 0U; }
+static uint16_t e2e_iout_rms, e2e_iout_pk; static uint8_t e2e_iout_on, e2e_iout_clip;      /* what the simulated slave measures on I-OUT (hundredths of an ampere); off = like a slave without the channel */
+static void    e2e_fill_e(LinkE_t *e)
+{
+    e->setv_dv = SlaveCtrl_SetvDv(); e->flags2 = SlaveCtrl_Flags2(); e->clr = SlaveCtrl_ClrEcho(); e->reach_lo_dv = 0U; e->reach_hi_dv = 0U; e->iout_rms_ca = 0U; e->iout_pk_ca = 0U;
+    if (e2e_iout_on != 0U) { e->iout_rms_ca = e2e_iout_rms; e->iout_pk_ca = e2e_iout_pk; e->flags2 = (uint16_t)(e->flags2 | LINKV2_FLAG_IOUT_VALID | ((e2e_iout_clip != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U)); }
+}
 static void    e2e_fill_h(LinkH_t *h) { h->fw = SLAVE_FW_VERSION; h->vin_min_dv = (uint16_t)(CTRL_VIN_MIN_V * 10.0f); h->vin_max_dv = (uint16_t)(CTRL_VIN_MAX_V * 10.0f); h->rst = 0U; h->tuned = 1U; h->vout_max_dv = (uint16_t)(CTRL_VOUT_MAX_V * 10.0f); }
 static uint8_t e2e_tx(const char *f, uint32_t n) { if (e2e_cnt >= E2E_MAX) return 0U; memcpy(e2e_f[e2e_cnt], f, n); e2e_n[e2e_cnt] = (int)n; e2e_cnt++; return 1U; }
 static void    e2e_bytes(const char *s, uint32_t n) { uint32_t i; for (i = 0U; i < n; i++) SL2_Rx((uint8_t)s[i], mc_ms()); }
@@ -401,7 +406,7 @@ static void ma_ms10(void)
     md.vin_dv = (uint16_t)(W.vin * 10.0f); md.vout_dv = (uint16_t)(W.vout * 10.0f); md.freq_chz = 5000U;
     md.state = SlaveCtrl_LinkState(); md.fault = (uint8_t)SlaveCtrl_FaultCode();
     md.load_ok = 1U; md.load_da = 100U;
-    if (e2e_last_e(&e)) { md.e_valid = 1U; md.in_band = (uint8_t)((e.flags2 & LINKV2_FLAG_IN_BAND) != 0U); md.clr_echo = e.clr; }
+    if (e2e_last_e(&e)) { md.e_valid = 1U; md.in_band = (uint8_t)((e.flags2 & LINKV2_FLAG_IN_BAND) != 0U); md.clr_echo = e.clr; md.iout_rms_ca = e.iout_rms_ca; md.iout_pk_ca = e.iout_pk_ca; md.iout_valid = (uint8_t)((e.flags2 & LINKV2_FLAG_IOUT_VALID) != 0U); md.iout_clip = (uint8_t)((e.flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U); }
     {   int ri; LinkV2Frame_t rf;                                                                 /* the slave's answers to a $K ($R) reach the master application */
         for (ri = 0; ri < e2e_cnt; ri++) if ((LinkV2_Parse(e2e_f[ri], (uint32_t)e2e_n[ri], &rf) == LINK_OK) && (rf.type == LINKV2_R)) MApp_OnKResult(&ma, rf.u.r.id, rf.u.r.status, rf.u.r.value); }
     e2e_cnt = 0;                                                                                  /* keep only the NEWEST $E: the capture buffer must never fill up and go stale */
@@ -644,6 +649,25 @@ static void t_mc_fast_correction(void)
     printf("  fast correction profile (guard restart slope 60 V/s): a 50 V step is answered in about 0.9 s instead of 1.7 s; no faults, it settles, small steps are not slower\n");
 }
 #endif
+
+
+/* ---- the converter-side current through the REAL link: the slave's $E (optional fields) -> the master's Converter Current page ---- */
+static void t_mc_iout(void)
+{
+    ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 90000U); ma_run(3000U);
+    /* a slave without the I-OUT channel: the old 6-field $E, the page says "Not measured" */
+    e2e_iout_on = 0U; { int q; ma_tap(3, 100U); for (q = 0; q < 7; q++) ma_tap(0, 100U); } ma_run(500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(MUI_ShowsIout(&ma.ui) != 0U, "LOG, MENU x7: the Converter Current page");
+    CHECK(strstr(ma_f[3], "Not measured") != NULL && strstr(ma_f[1], "--.--") != NULL, "a slave without the channel: 'Not measured' ('%s' / '%s')", ma_f[3], ma_f[1]);
+    { int i, six = 0, eight = 0; LinkV2Frame_t f; char c; for (i = 0; i < e2e_cnt; i++) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_E) { int j, commas = 0; for (j = 0; (c = e2e_f[i][j]) != '\0' && j < e2e_n[i]; j++) if (c == ',') commas++; if (commas == 6) six++; if (commas == 8) eight++; }
+      CHECK(eight == 0, "and it sends the 6-field frame of the first protocol, never the 8-field one (%d six, %d eight)", six, eight); }
+    /* a slave that measures it: the values arrive through the link and are shown */
+    e2e_iout_on = 1U; e2e_iout_rms = 589U; e2e_iout_pk = 831U; e2e_iout_clip = 0U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f);
+    CHECK(strncmp(ma_f[1], "RMS    5.89 A", 13) == 0 && strncmp(ma_f[2], "Peak   8.31 A", 13) == 0 && strstr(ma_f[3], "CT primary current") != NULL, "a slave that measures 5.89 A / 8.31 A: shown through the real link ('%s' / '%s' / '%s')", ma_f[1], ma_f[2], ma_f[3]);
+    e2e_iout_rms = 0U; e2e_iout_pk = 0U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(strncmp(ma_f[1], "RMS    0.00 A", 13) == 0 && strstr(ma_f[3], "Not measured") == NULL, "a measured zero (no load) is 0.00 A, not 'Not measured' (the VALID flag says it is measured) ('%s' / '%s')", ma_f[1], ma_f[3]);
+    e2e_iout_rms = 700U; e2e_iout_pk = 1011U; e2e_iout_clip = 1U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(strstr(ma_f[3], "OVER RANGE") != NULL, "the clip flag reaches the page ('%s')", ma_f[3]);
+    e2e_iout_on = 0U; e2e_iout_clip = 0U;
+    printf("  converter current end to end: the optional $E fields through the real link library to the master page; a slave without the channel keeps sending the old 6-field frame\n");
+}
 
 #if (SLAVE_VOLTAGE_CAL != 0)
 /* ---- voltage calibration end to end: the real master application -> $K frames -> the real slave link and calibration logic -> $R frames -> the master's screen ---- */

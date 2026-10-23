@@ -52,7 +52,7 @@ typedef enum
     LINKV2_K
 } LinkV2Type_t;
 
-/* ---- $E extended status: seq,setv,flags2,clr,reach_lo,reach_hi ------------------------- */
+/* ---- $E extended status: seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca] ---------- the last two are OPTIONAL: an older sender gives 6 fields, an older receiver ignores the extra ones */
 #define LINKV2_FLAG_RUN_ACK        0x0001U   /* the slave has accepted run = 1                                   */
 #define LINKV2_FLAG_IN_BAND        0x0002U   /* running and |Vout - set voltage| within the band                 */
 #define LINKV2_FLAG_AT_CAP         0x0004U   /* the correction sits at its cap                                   */
@@ -62,6 +62,8 @@ typedef enum
 #define LINKV2_FLAG_FAULT_LATCHED  0x0040U   /* a fault is held until the clear counter changes                  */
 #define LINKV2_FLAG_BUSY           0x0080U   /* calibration, a flash write or an autotune is in progress         */
 #define LINKV2_FLAG_NOT_TUNED      0x0100U   /* no valid autotune profile / Max Correction not set               */
+#define LINKV2_FLAG_IOUT_VALID     0x0200U   /* the slave measures the converter-side current (I-OUT): iout_rms_ca / iout_pk_ca are real      */
+#define LINKV2_FLAG_IOUT_CLIP      0x0400U   /* that measurement is at the limit of its range: the true current is larger                       */
 
 typedef struct
 {
@@ -71,6 +73,8 @@ typedef struct
     uint8_t  clr;          /* last clear counter seen in $M, 0..255                    */
     uint16_t reach_lo_dv;  /* lowest input from which the set voltage is reachable: 0 (unknown) or 500..6553 */
     uint16_t reach_hi_dv;  /* highest input, same range                                */
+    uint16_t iout_rms_ca;  /* converter-side current (I-OUT), AC RMS, hundredths of an ampere, 0..4000 (valid only with LINKV2_FLAG_IOUT_VALID) */
+    uint16_t iout_pk_ca;   /* its peak, same unit                                      */
 } LinkE_t;
 
 /* ---- $H hello: proto,fw,vin_min,vin_max,rst,tuned,vout_max ----------------------------- */

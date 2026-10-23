@@ -8,6 +8,9 @@
 #include <math.h>
 #include "main.h"
 #include "slave_meas.h"
+#if (SLAVE_IOUT != 0)
+#include "slave_iout.h"
+#endif
 #include "slave_irq_prio.h"
 #include "slave_zc.h"
 
@@ -161,7 +164,13 @@ void SlaveMeas_Init(void)
     sMaster.MasterSlaveMode     = TIM_MASTERSLAVEMODE_DISABLE;
     if (HAL_TIMEx_MasterConfigSynchronization(&s_htim3, &sMaster) != HAL_OK) Error_Handler();
 
-    /* ADC1: 3-channel scan, one scan per TIM3 trigger, circular DMA. */
+#if (SLAVE_IOUT != 0)
+    {   /* PA2 as an analogue input (a CubeMX regeneration with PA2 = ADC1_IN2 does the same) */
+        GPIO_InitTypeDef gi = {0}; __HAL_RCC_GPIOA_CLK_ENABLE();
+        gi.Pin = GPIO_PIN_2; gi.Mode = GPIO_MODE_ANALOG; gi.Pull = GPIO_NOPULL; HAL_GPIO_Init(GPIOA, &gi);
+    }
+#endif
+    /* ADC1: 3- (4- with SLAVE_IOUT) channel scan, one scan per TIM3 trigger, circular DMA. */
     __HAL_RCC_ADC_CLK_ENABLE();
     hadc1.Instance                   = ADC1;
     hadc1.Init.ClockPrescaler        = ADC_CLOCK_SYNC_PCLK_DIV4;       /* 16 MHz */
@@ -189,6 +198,10 @@ void SlaveMeas_Init(void)
     if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) Error_Handler();
     sConfig.Channel = ADC_CHANNEL_5;  sConfig.Rank = ADC_REGULAR_RANK_3;     /* PA5 NTC    */
     if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) Error_Handler();
+#if (SLAVE_IOUT != 0)
+    sConfig.Channel = ADC_CHANNEL_2;  sConfig.Rank = ADC_REGULAR_RANK_4;     /* PA2 I-OUT: the converter-side current (slave_iout.h) */
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) Error_Handler();
+#endif
 
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK) Error_Handler();
 
@@ -259,6 +272,14 @@ void SlaveMeas_Service(void)
     g_meas.vrms_in  = SlaveMeas_ApplyCal(&g_meas_cal[MEAS_CH_IN],  rms_i);
     g_meas.vrms_out = SlaveMeas_ApplyCal(&g_meas_cal[MEAS_CH_OUT], rms_o);
 
+#if (SLAVE_IOUT != 0)
+    {   /* the converter-side current: the same window as the voltages */
+        float rms_c, mean_c; uint16_t min_c, max_c; IoutResult_t ir;
+        SlaveMeas_ComputeStats(s_buf, MEAS_BUF_FRAMES, start, n, MEAS_CHANNELS, MEAS_CH_IOUT, &rms_c, &mean_c, &min_c, &max_c);
+        Iout_Compute(rms_c, mean_c, min_c, max_c, &ir);
+        g_meas.irms_a = ir.irms_a; g_meas.ipk_a = ir.ipk_a; g_meas.clipped_iout = ir.clipped;
+    }
+#endif
     g_meas.window_frames = n;
     g_meas.ntc_counts    = s_buf[((((frames_done + MEAS_BUF_FRAMES) - 1U) % MEAS_BUF_FRAMES) * MEAS_CHANNELS)
                                  + MEAS_CH_NTC];

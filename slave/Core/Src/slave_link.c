@@ -17,6 +17,10 @@
 #include "slave_zc.h"
 #include "slave_config.h"
 #include "slave_features.h"
+#if (SLAVE_IOUT != 0)
+#include "slave_iout.h"
+#include "slave_meas.h"
+#endif
 #if (SLAVE_AUTOTUNE != 0)
 #include "slave_profile.h"
 #endif
@@ -92,6 +96,11 @@ static void hk_fill_e(LinkE_t *e)
     e->clr          = SlaveCtrl_ClrEcho();
     e->reach_lo_dv  = 0U;                  /* the input range the unit can regulate: measured by the autotune (step 5) */
     e->reach_hi_dv  = 0U;
+#if (SLAVE_IOUT != 0)
+    e->iout_rms_ca  = Iout_ToCentiAmps(g_meas.irms_a);          /* the converter-side current, hundredths of an ampere (slave_iout.h) */
+    e->iout_pk_ca   = Iout_ToCentiAmps(g_meas.ipk_a);
+    if (g_meas.valid != 0U) e->flags2 = (uint16_t)(e->flags2 | LINKV2_FLAG_IOUT_VALID | ((g_meas.clipped_iout != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U));
+#endif
 }
 static void hk_fill_h(LinkH_t *h)
 {

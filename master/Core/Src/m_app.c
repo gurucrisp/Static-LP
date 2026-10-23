@@ -408,6 +408,27 @@ void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
     vcal_message(a, status, value);
 }
 
+uint8_t MApp_ShowsIout(const MApp_t *a) { return MUI_ShowsIout(&a->ui); }
+
+/* The converter-side current page (LOG, then MENU x7): what the slave's CT2500 chain (net I-OUT) measures, to check the scaling against a clamp meter on the same conductor. It is the CT PRIMARY current. */
+void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
+{
+    const MAppData_t *d = &a->last; uint32_t r, c, n; char t[24]; (void)now;
+    for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
+    copy(t, "Converter Current"); for (n = 0U; t[n] != '\0'; n++) frame[0][1U + n] = t[n];
+    if (d->iout_valid != 0U)
+    {
+        uint32_t rms = (d->iout_rms_ca > 9999U) ? 9999U : d->iout_rms_ca, pk = (d->iout_pk_ca > 9999U) ? 9999U : d->iout_pk_ca;
+        copy(t, "RMS   00.00 A"); t[6] = (char)('0' + ((rms / 1000U) % 10U)); t[7] = (char)('0' + ((rms / 100U) % 10U)); t[9] = (char)('0' + ((rms / 10U) % 10U)); t[10] = (char)('0' + (rms % 10U)); if (t[6] == '0') t[6] = ' ';
+        for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
+        copy(t, "Peak  00.00 A"); t[6] = (char)('0' + ((pk / 1000U) % 10U)); t[7] = (char)('0' + ((pk / 100U) % 10U)); t[9] = (char)('0' + ((pk / 10U) % 10U)); t[10] = (char)('0' + (pk % 10U)); if (t[6] == '0') t[6] = ' ';
+        for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
+        copy(t, (d->iout_clip != 0U) ? "OVER RANGE (>10A pk)" : "CT primary current");
+    }
+    else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; copy(t, "Not measured"); }
+    for (n = 0U; (t[n] != '\0') && (n < MUI_COLS); n++) frame[3][n] = t[n];
+}
+
 uint8_t MApp_ShowsClock(const MApp_t *a) { return MUI_ShowsClock(&a->ui); }
 
 /* the Clock service page (LOG, then MENU x4): what the real-time clock is doing, to find out why a fault carries no time */

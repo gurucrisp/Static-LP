@@ -76,7 +76,7 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
             on_frame(&st, now_ms);
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
-            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_t_ms = now_ms; }
+            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_iout_rms_ca = f2.u.e.iout_rms_ca; g_mon.e_iout_pk_ca = f2.u.e.iout_pk_ca; g_mon.e_t_ms = now_ms; }
             else if (t2 == (int32_t)LINKV2_R) { g_mon.r_id = f2.u.r.id; g_mon.r_status = f2.u.r.status; g_mon.r_value = f2.u.r.value; g_mon.r_n++; }
             else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; g_mon.h_rst = f2.u.h.rst; }
         }
@@ -586,6 +586,8 @@ void MasterApp_Run(void)
             {   /* the slave's version 2 data: $E must be fresh (the slave sends one every 100 ms) */
                 uint8_t e_fresh = (uint8_t)((g_mon.e_valid != 0U) && ((uint32_t)(now - g_mon.e_t_ms) < MON_LINK_TIMEOUT_MS));
                 d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr; d.e_setv_dv = g_mon.e_setv_dv;
+                d.iout_rms_ca = g_mon.e_iout_rms_ca; d.iout_pk_ca = g_mon.e_iout_pk_ca;
+                d.iout_valid = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_VALID) != 0U)); d.iout_clip = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U));
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
                 d.wait_valid = (uint8_t)((g_mon.last.state == 1U) && ((g_mon.last.flags & 0x8000U) != 0U));       /* the slave waits in SYNC and says what for */
@@ -620,6 +622,7 @@ void MasterApp_Run(void)
 #endif
             if (MApp_ShowsMonitor(&app) != 0U) Mon_Compose(&g_mon, now, want);       /* the monitor diagnostics, one MENU press away */
             if (MApp_ShowsDiag(&app) != 0U) MApp_Diag(&app, now, want);
+            if (MApp_ShowsIout(&app) != 0U) MApp_IoutPage(&app, now, want);            /* the converter-side current, LOG then MENU x7 */
             if (MApp_ShowsClock(&app) != 0U) MApp_ClockPage(&app, now, want);          /* the Clock page, LOG then MENU x4 */               /* the control diagnostics, two MENU presses away */
             {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction or the clear counter changes (Set-Mode = run 0 = the slave stops its PWM) */
                 const MCtlOut_t *c = MApp_Control(&app);

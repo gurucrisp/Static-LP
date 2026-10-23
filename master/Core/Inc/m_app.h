@@ -60,6 +60,8 @@ typedef struct
     uint16_t ct_max_x16;         /* the largest CT reading (12 bit x 16) of the fast samples since the last step; 0 = not sampled: the CT peak backup is idle */
     uint16_t rtc_bdcr, rtc_icsr; /* raw status bits, for the Clock page */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
+    uint16_t iout_rms_ca, iout_pk_ca;   /* $E: the slave's converter-side current (CT primary), AC RMS and peak, hundredths of an ampere */
+    uint8_t  iout_valid, iout_clip;     /* the slave measures it / the measurement is at the limit of its range */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
     uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
     uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
@@ -151,6 +153,8 @@ void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /*
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
+uint8_t MApp_ShowsIout(const MApp_t *a);                        /* the converter-side current page is shown (LOG, then MENU x7) */
+void    MApp_IoutPage(const MApp_t *a, uint32_t now, char out[4][21]);   /* draws it */
 uint8_t MApp_ShowsClock(const MApp_t *a);                       /* the Clock service page is shown (LOG, then MENU x4) */
 void    MApp_ClockPage(const MApp_t *a, uint32_t now, char out[4][21]);   /* draws it: the date and time, whether it counts as set, the clock source, the raw bits */
 void    MApp_Diag(const MApp_t *a, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);   /* the control diagnostics page */

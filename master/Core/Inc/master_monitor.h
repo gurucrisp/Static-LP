@@ -113,6 +113,7 @@ typedef struct
     uint8_t      h_valid;            /* a $H has arrived                              */
     uint16_t     h_win_lo_dv, h_win_hi_dv, h_vout_max_dv;
     uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
+    uint16_t     e_iout_rms_ca, e_iout_pk_ca;   /* the slave's converter-side current ($E, optional fields), hundredths of an ampere */
     uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
     uint8_t      rst_wdg;            /* this master was restarted by its watchdog (RCC reset flags, read at start) */
     uint8_t      h_rst;              /* the slave's reset cause from its last $H: 1 = its watchdog */

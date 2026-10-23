@@ -702,6 +702,29 @@ static void t_display_speed(void)
     printf("  display speed: the shown voltage changes at most every 300 ms, a real step (5 V or more) at once, a small step is smoothed over about two seconds\n");
 }
 
+
+static void t_iout_page(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U]; int q;
+    /* the page: LOG, then MENU x7 */
+    fresh(); to_run(); run(1000U); tap(3, 100U); for (q = 0; q < 7; q++) tap(0, 100U); run(100U);
+    CHECK(MApp_ShowsIout(&A), "LOG, then MENU x7 opens the Converter Current page");
+    /* the slave does not measure it (an older slave, or SLAVE_IOUT 0) */
+    D.iout_valid = 0U; D.iout_rms_ca = 0U; D.iout_pk_ca = 0U; run(100U); MApp_IoutPage(&A, T, fr);
+    CHECK(strstr(fr[0], "Converter Current") != NULL && strstr(fr[1], "--.--") != NULL && strstr(fr[2], "--.--") != NULL && strstr(fr[3], "Not measured") != NULL, "not measured: dashes and 'Not measured' ('%s' / '%s' / '%s' / '%s')", fr[0], fr[1], fr[2], fr[3]);
+    /* the full load of the original board: 5.89 A RMS, 8.31 A peak */
+    D.iout_valid = 1U; D.iout_rms_ca = 589U; D.iout_pk_ca = 831U; D.iout_clip = 0U; run(100U); MApp_IoutPage(&A, T, fr);
+    CHECK(strncmp(fr[1], "RMS    5.89 A", 13) == 0 && strncmp(fr[2], "Peak   8.31 A", 13) == 0 && strstr(fr[3], "CT primary current") != NULL, "5.89 A and 8.31 A: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
+    D.iout_rms_ca = 7U; D.iout_pk_ca = 12U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS    0.07 A", 13) == 0 && strncmp(fr[2], "Peak   0.12 A", 13) == 0, "0.07 A and 0.12 A keep their zeros ('%s' / '%s')", fr[1], fr[2]);
+    D.iout_rms_ca = 0U; D.iout_pk_ca = 0U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS    0.00 A", 13) == 0 && strstr(fr[3], "Not measured") == NULL, "a measured zero is shown as 0.00 A, not as 'not measured'");
+    D.iout_rms_ca = 1234U; D.iout_pk_ca = 3999U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS   12.34 A", 13) == 0 && strncmp(fr[2], "Peak  39.99 A", 13) == 0, "12.34 A and 39.99 A fit the line ('%s' / '%s')", fr[1], fr[2]);
+    /* the amplifier is at a rail: the page says so */
+    D.iout_rms_ca = 700U; D.iout_pk_ca = 1011U; D.iout_clip = 1U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strstr(fr[3], "OVER RANGE") != NULL, "at the limit of the range: 'OVER RANGE' ('%s')", fr[3]);
+    /* the next MENU leaves the page */
+    tap(0, 100U); run(100U); CHECK(!MApp_ShowsIout(&A), "the next MENU leaves the page");
+    printf("  converter current page: not measured, the values with their zeros, a measured zero, over range\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -754,6 +777,7 @@ int main(void)
     t_run_minutes();
     t_ct_peak();
     t_display_speed();
+    t_iout_page();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

@@ -100,6 +100,7 @@ const MDateTime_t *MUI_ClockToSet(const MUI_t *u);                        /* aft
 uint16_t MUI_CalValue(const MUI_t *u);      /* the value typed on the Load Calibration page, tenths of an amp */
 uint8_t MUI_ShowsCal(const MUI_t *u);         /* single-phase, the fourth MENU page: Load Calibration (the UI draws it) */
 uint8_t MUI_ShowsVCal(const MUI_t *u);         /* 1 = the input, 2 = the output Voltage Calibration page (the UI draws them), else 0 */
+uint8_t MUI_ShowsIout(const MUI_t *u);        /* the converter-side current page (the app draws it) */
 uint8_t MUI_ShowsClock(const MUI_t *u);       /* single-phase, the fifth service page (LOG, then MENU x4): the Clock page (the app draws it) */
 uint8_t MUI_ShowsDiag(const MUI_t *u);        /* single-phase, the third MENU page: the control diagnostics (the app draws them) */
 

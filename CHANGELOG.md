@@ -2,7 +2,19 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.29 — PHASE 2, step 2: the profile storage (current)
+## v0.9.30 — the converter-side current (I-OUT, PA2) (current)
+* From the schematic you uploaded (22122016-EB) and your confirmation that I-OUT reaches PA2: the CT2500 secondary works into 3 x 180 ohm (60 ohm); a differential stage (U8C, gain 6.8) amplifies it around 1.65 V, so **V(I-OUT) = 1.65 V +- 0.1632 V per ampere of CT PRIMARY current**,
+  usable to +-10.1 A peak (7.1 A RMS), full load of the original board 5.89 A RMS. The hardware short-circuit comparators trip at about +-41 A peak. It is the current in the conductor through the CT: from the net names it looks like the converter side of the series transformer, not the load line.
+* NEW `slave_iout.c/.h` (pure): counts to amperes (AC RMS about the mean, the peak, a clip flag), 13 PC checks including a synthetic sine through the analogue chain and the ADC.
+* NEW switch `SLAVE_IOUT` (slave_features.h, **default 0**: nothing changes): the 4th ADC channel (PA2 = ADC1_IN2, read after the NTC so the other three keep their places), the statistics in the same window as the voltages, the values in `$E`.
+  New ready-made config `..._MASTER_fast_start_iout.h` = fast-start + `SLAVE_IOUT 1`. If the project is regenerated with CubeMX, set PA2 as ADC1_IN2 there too (the code configures the pin as analogue itself).
+* **`$E` gained two OPTIONAL trailing fields** (`iout_rms_ca`, `iout_pk_ca`, hundredths of an ampere) and two flags (`IOUT_VALID` 0x0200, `IOUT_CLIP` 0x0400). A slave without the channel sends exactly the old 6-field frame (byte for byte); a master that gets 6 fields reads the new ones as 0; an older receiver ignores the extra ones.
+  So a slave and a master of different versions still talk to each other. Link library 319 checks (590,000 random frames, the optional-field cases), both copies identical.
+* NEW master service page **Converter Current** (LOG, then MENU x7; eight service pages now): RMS and peak in amperes, `Not measured` for a slave without the channel, `OVER RANGE` at the limit. A measured zero shows 0.00 A (the VALID flag tells measured from absent).
+* Tests: UI 346, application 321, master control 294 (a simulated slave sends the fields through the real link library to the page). Mutation checks 9 of 9.
+* NOT compiled here (needs the slave's HAL headers): the ADC and GPIO changes in slave_meas.c, the hook in slave_link.c. NOT tried on hardware. See docs/IOUT.md for the bench check and what is still needed to turn it into a load current (the series transformer's turns ratio).
+
+## v0.9.29 — PHASE 2, step 2: the profile storage
 * Hardware note from you: the F02 / FLT trips came from a hardware fault, now cleared. The gate for the first autotune run on the power stage is open (variac, no load, Max Correction low, a scope on a gate drive for the first run).
 * NEW `slave_profile.c/.h`: the transformer profile in the slave's flash, two CRC-protected copies in pages **124 and 125** (0x0803E000, 0x0803E800), the same proven store as the calibration, validated on every load (a record with a good CRC that is not a valid profile is NOT used).
   A power cut at any point of a save or of a re-tune leaves the old profile or the new one, never a mixture. `SlaveProfile_Tuned()` is what `$H tuned` will report.

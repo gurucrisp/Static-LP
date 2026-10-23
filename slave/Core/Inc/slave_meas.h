@@ -40,10 +40,16 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "slave_features.h"
 #include "stm32g0xx_hal.h"
 
 /* ---- Sampling layout ---------------------------------------------------- */
+#if (SLAVE_IOUT != 0)
+#define MEAS_CHANNELS          4U        /* AC_IN, AC_OUT, NTC, I-OUT (rank order) */
+#define MEAS_CH_IOUT           3U
+#else
 #define MEAS_CHANNELS          3U        /* AC_IN, AC_OUT, NTC (rank order)     */
+#endif
 #define MEAS_CH_IN             0U
 #define MEAS_CH_OUT            1U
 #define MEAS_CH_NTC            2U
@@ -104,6 +110,11 @@ typedef struct
     volatile uint32_t window_frames;      /* N used for the last result         */
 
     volatile uint32_t ntc_counts;         /* latest NTC reading                 */
+
+    /* The converter-side current (SLAVE_IOUT): AC RMS and peak in amperes of CT PRIMARY current (see slave_iout.h), 0 when the channel is not built in */
+    volatile float    irms_a;
+    volatile float    ipk_a;
+    volatile uint8_t  clipped_iout;       /* 1 = the I-OUT amplifier touched a rail: the current is larger than shown */
     volatile uint32_t update_count;       /* results computed since start       */
     volatile uint8_t  valid;              /* 1 after the first full result      */
 } SlaveMeas_t;

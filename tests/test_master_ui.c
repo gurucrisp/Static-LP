@@ -140,7 +140,8 @@ static void t_screens(void)
     key(MK_MENU_SHORT); CHECK(MUI_ShowsClock(&U) && !MUI_ShowsCal(&U), "a fourth press: the Clock page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 1U, "a fifth press: the I/P Calibration page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "a sixth: the O/P Calibration page");
-    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U) && MUI_ShowsVCal(&U) == 0U, "and a seventh: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
+    key(MK_MENU_SHORT); CHECK(MUI_ShowsIout(&U) && MUI_ShowsVCal(&U) == 0U, "a seventh: the Converter Current page");
+    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U) && MUI_ShowsVCal(&U) == 0U && !MUI_ShowsIout(&U), "and an eighth: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
     /* a service page returns to the Run screen by itself after a minute, and at once when a fault appears */
     key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "on the monitor page again");
     tick(59000U); CHECK(MUI_ShowsMonitor(&U), "59 s without a key: still there"); tick(2000U); CHECK(!MUI_ShowsMonitor(&U), "61 s without a key: back on the Run screen");
@@ -372,7 +373,7 @@ static void t_log_viewer(void)
     CHECK(1, "START at the oldest stays");
     key(MK_STOP); key(MK_STOP); key(MK_STOP); ROW(0, "Fault Log 00/02");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "MENU in the log opens the service pages (single-phase)");
-    { int q; for (q = 0; q < 6; q++) key(MK_MENU_SHORT); } CHECK(strstr(row(0), "O/P") != NULL, "six more MENU presses cycle back to the Run screen");
+    { int q; for (q = 0; q < 7; q++) key(MK_MENU_SHORT); } CHECK(strstr(row(0), "O/P") != NULL, "seven more MENU presses cycle back to the Run screen");
     key(MK_LOG_SHORT); key(MK_LOG_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "LOG leaves the log");
     key(MK_LOG_SHORT); tick(30100U); CHECK(strstr(row(0), "O/P") != NULL, "30 s with no key leaves the log by itself");
     { int i; for (i = 0; i < 130; i++) add_log(MLOG_T_HEAT, 0U, 0U, 2300U, 2300U, 100U, (uint32_t)i); key(MK_LOG_SHORT); ROW(0, "Fault Log 00/99"); CHECK(1, "with a long log the numbers run 00 to 99"); }

@@ -16,7 +16,7 @@ typedef struct
     uint8_t zero_ok;     /* the value 0 is valid although it is outside lo..hi ("0 or 1000..3000") */
 } Fld_t;
 
-static const Fld_t F_E[6] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 255, 0}, {500, 6553, 1}, {500, 6553, 1} };
+static const Fld_t F_E[8] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 255, 0}, {500, 6553, 1}, {500, 6553, 1}, {0, 4000, 0}, {0, 4000, 0} };
 static const Fld_t F_H[7] = { {0, 255, 0}, {0, 9999999, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 2, 0}, {0, 1, 0}, {0, 65535, 0} };
 static const Fld_t F_R[3] = { {1, 255, 0}, {0, 7, 0}, {-INT32_LIM, INT32_LIM, 0} };
 static const Fld_t F_T[5] = { {0, 255, 0}, {0, 4095, 0}, {0, 65535, 0}, {-999, 999, 0}, {0, 6, 0} };
@@ -156,8 +156,9 @@ static int32_t build_nums(char type, const Fld_t *tab, const int32_t *v, uint32_
 
 int32_t LinkV2_BuildE(char *out, uint32_t cap, const LinkE_t *f)
 {
-    const int32_t v[6] = { f->seq, f->setv_dv, f->flags2, f->clr, f->reach_lo_dv, f->reach_hi_dv };
-    return build_nums('E', F_E, v, 6U, out, cap);
+    const int32_t v[8] = { f->seq, f->setv_dv, f->flags2, f->clr, f->reach_lo_dv, f->reach_hi_dv, f->iout_rms_ca, f->iout_pk_ca };
+    /* CANONICAL: the two optional fields are left out when both are 0, so a slave without the I-OUT channel sends exactly the frame of the first protocol (6 fields) */
+    return build_nums('E', F_E, v, ((f->iout_rms_ca != 0U) || (f->iout_pk_ca != 0U)) ? 8U : 6U, out, cap);
 }
 
 int32_t LinkV2_BuildH(char *out, uint32_t cap, const LinkH_t *f)
@@ -279,6 +280,28 @@ static int32_t parse_nums(const char *p, const char *end, const Fld_t *tab, uint
     return LINK_OK;
 }
 
+/* The first cnt_req fields are required; the following ones up to cnt_max are OPTIONAL (an older sender does not have them: they read as 0). A field that IS present must be valid. Tokens beyond cnt_max are ignored. */
+static int32_t parse_nums_opt(const char *p, const char *end, const Fld_t *tab, uint32_t cnt_req, uint32_t cnt_max, int32_t *v)
+{
+    uint32_t    i;
+    const char *t = p;
+    uint32_t    n = 0U;
+    for (i = 0U; i < cnt_max; i++)
+    {
+        int32_t rc;
+        if (next_tok(&p, end, &t, &n) == 0U)
+        {
+            if (i < cnt_req) return LINK_ERR_FORMAT;
+            v[i] = 0;                                                    /* an optional field that is not there */
+            continue;
+        }
+        rc = parse_i32(t, n, (uint8_t)((tab[i].lo < 0) ? 1U : 0U), &v[i]);
+        if (rc != LINK_OK) return rc;
+        if (field_ok(&tab[i], v[i]) == 0U) return LINK_ERR_RANGE;
+    }
+    return LINK_OK;
+}
+
 static int32_t parse_k(const char *p, const char *end, LinkK_t *k)
 {
     const char *t = p;
@@ -358,7 +381,7 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
     const char *body, *p, *end;
     uint32_t    blen;
     int32_t     hi, lo, rc;
-    int32_t     v[7];
+    int32_t     v[8];
     LinkV2Frame_t f;
 
     zero_frame(&f);
@@ -390,11 +413,11 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
     switch (body[0])
     {
     case 'E':
-        rc = parse_nums(p, end, F_E, 6U, v);
+        rc = parse_nums_opt(p, end, F_E, 6U, 8U, v);
         if (rc != LINK_OK) return rc;
         f.type = LINKV2_E;
         f.u.e.seq = (uint8_t)v[0]; f.u.e.setv_dv = (uint16_t)v[1]; f.u.e.flags2 = (uint16_t)v[2];
-        f.u.e.clr = (uint8_t)v[3]; f.u.e.reach_lo_dv = (uint16_t)v[4]; f.u.e.reach_hi_dv = (uint16_t)v[5];
+        f.u.e.clr = (uint8_t)v[3]; f.u.e.reach_lo_dv = (uint16_t)v[4]; f.u.e.reach_hi_dv = (uint16_t)v[5]; f.u.e.iout_rms_ca = (uint16_t)v[6]; f.u.e.iout_pk_ca = (uint16_t)v[7];
         break;
     case 'H':
         rc = parse_nums(p, end, F_H, 7U, v);
