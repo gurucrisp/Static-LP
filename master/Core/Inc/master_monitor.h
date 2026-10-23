@@ -115,6 +115,8 @@ typedef struct
     uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
     uint16_t     e_iout_rms_ca, e_iout_pk_ca;   /* the slave's converter-side current ($E, optional fields), hundredths of an ampere */
     uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
+    uint8_t      t_n, t_step, t_result;           /* the last $T (the autotune's progress): a counter, its step and result */
+    uint16_t     t_ticks, t_vin_dv; int16_t t_dv_dv;
     uint8_t      rst_wdg;            /* this master was restarted by its watchdog (RCC reset flags, read at start) */
     uint8_t      h_rst;              /* the slave's reset cause from its last $H: 1 = its watchdog */
     int32_t      r_value;

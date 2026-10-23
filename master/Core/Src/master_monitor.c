@@ -77,6 +77,7 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
             if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_iout_rms_ca = f2.u.e.iout_rms_ca; g_mon.e_iout_pk_ca = f2.u.e.iout_pk_ca; g_mon.e_t_ms = now_ms; }
+            else if (t2 == (int32_t)LINKV2_T) { g_mon.t_step = f2.u.t.step; g_mon.t_ticks = f2.u.t.ticks; g_mon.t_vin_dv = f2.u.t.vin_dv; g_mon.t_dv_dv = f2.u.t.dv; g_mon.t_result = f2.u.t.result; g_mon.t_n++; }
             else if (t2 == (int32_t)LINKV2_R) { g_mon.r_id = f2.u.r.id; g_mon.r_status = f2.u.r.status; g_mon.r_value = f2.u.r.value; g_mon.r_n++; }
             else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; g_mon.h_rst = f2.u.h.rst; }
         }
@@ -587,6 +588,7 @@ void MasterApp_Run(void)
                 uint8_t e_fresh = (uint8_t)((g_mon.e_valid != 0U) && ((uint32_t)(now - g_mon.e_t_ms) < MON_LINK_TIMEOUT_MS));
                 d.e_valid = g_mon.e_valid; d.clr_echo = g_mon.e_clr; d.e_setv_dv = g_mon.e_setv_dv;
                 d.iout_rms_ca = g_mon.e_iout_rms_ca; d.iout_pk_ca = g_mon.e_iout_pk_ca;
+                d.tune_n = g_mon.t_n; d.tune_step = g_mon.t_step; d.tune_result = g_mon.t_result; d.tune_ticks = g_mon.t_ticks; d.tune_vin_dv = g_mon.t_vin_dv; d.tune_dv_dv = g_mon.t_dv_dv;
                 d.iout_valid = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_VALID) != 0U)); d.iout_clip = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U));
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
@@ -622,6 +624,7 @@ void MasterApp_Run(void)
 #endif
             if (MApp_ShowsMonitor(&app) != 0U) Mon_Compose(&g_mon, now, want);       /* the monitor diagnostics, one MENU press away */
             if (MApp_ShowsDiag(&app) != 0U) MApp_Diag(&app, now, want);
+            if (MApp_ShowsTune(&app) != 0U) MApp_TuneScreen(&app, now, want);          /* the transformer tuning screen over everything */
             if (MApp_ShowsIout(&app) != 0U) MApp_IoutPage(&app, now, want);            /* the converter-side current, LOG then MENU x7 */
             if (MApp_ShowsClock(&app) != 0U) MApp_ClockPage(&app, now, want);          /* the Clock page, LOG then MENU x4 */               /* the control diagnostics, two MENU presses away */
             {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction or the clear counter changes (Set-Mode = run 0 = the slave stops its PWM) */
@@ -647,7 +650,7 @@ void MasterApp_Run(void)
                 if (MApp_TakeKCommand(&app, &ck, now) != 0U)
                 {
                     LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
-                    k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : LINKCMD_CALR); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
+                    k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : ((ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : LINKCMD_CALR))); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
                     n = LinkV2_BuildK(b, sizeof b, &k);
                     if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);
                 }

@@ -61,6 +61,10 @@ typedef struct
     uint16_t rtc_bdcr, rtc_icsr; /* raw status bits, for the Clock page */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint16_t iout_rms_ca, iout_pk_ca;   /* $E: the slave's converter-side current (CT primary), AC RMS and peak, hundredths of an ampere */
+    uint8_t  tune_n;                    /* $T: counts every progress frame received (the glue's counter, wraps) */
+    uint8_t  tune_step, tune_result;    /* the newest $T frame: its step (1..) and result (0 = a step, 1..6 = the end of the sweep) */
+    uint16_t tune_ticks, tune_vin_dv;   /* its duty ticks and the input voltage (tenths) */
+    int16_t  tune_dv_dv;                /* the injection it measured (tenths of a volt) */
     uint8_t  iout_valid, iout_clip;     /* the slave measures it / the measurement is at the limit of its range */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
     uint8_t  wait_ctx;           /* what it waits for: bit 0 Z zero-cross, 1 V input window, 2 M measurement, 3 F FLT line low, 4 B break input low (also a floating one), 5 O output too high, 6 R relays */
@@ -86,6 +90,10 @@ typedef struct
     uint8_t      lim_set;
     uint8_t      retries_cfg;
     uint8_t      k_id;                 /* the next $K id, 1..255 */
+    uint8_t      tune_state, tune_id, tune_cmd, tune_due, tune_tx_n, tune_seen, tune_step, tune_result, tune_abort_sent;   /* the autotune: see m_app.c */
+    int16_t      tune_dv_dv;
+    uint16_t     tune_ticks;
+    uint32_t     tune_t0, tune_t_tx, tune_t_frame, tune_t_done;
     uint8_t      ct_hi, ct_peak_on;    /* CT peak backup: the reading is above the limit now; the debounced condition that the engine sees as an Inrush */
     uint32_t     ct_hi_t0;             /* when the reading went above the limit */
     uint32_t     run_min_total, run_acc_ms, t_run_last;   /* running time: minutes the output has been ON in all (loaded at start, saved by the glue), the milliseconds towards the next minute, the last step */
@@ -130,6 +138,10 @@ typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /*
 #define MAPP_KCMD_CALV  1U            /* num = the true input voltage, tenths of a volt   */
 #define MAPP_KCMD_CALO  2U            /* num = the true output voltage, tenths of a volt  */
 #define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
+#define MAPP_KCMD_TUNE  4U            /* start the transformer autotune                    */
+#define MAPP_KCMD_TABORT 5U           /* stop it                                           */
+#define MAPP_TUNE_FRAME_TIMEOUT_MS 8000UL   /* no $T frame for this long while tuning: the slave is lost, the master aborts          */
+#define MAPP_TUNE_RESULT_MS        6000UL   /* the result screen stays this long, or until a key */
 /* CT PEAK BACKUP (approved: the slave's IGBT over-current is primary, the master's CT the backup): a CT reading above 3 x the Overload Current, or at the full scale of the ADC, for 20 ms in a row is an Inrush
  * (retry rules as for the slave's own). The CT here is an averaged level, not the instantaneous current: the glue samples it every pass of the main loop and passes the largest reading of each step. */
 /* DISPLAY SPEED of the voltages and the load current: the shown value follows the reading through a first-order filter (time constant about MAPP_DISP_EMA_DIV x 10 ms) and may change at most once every MAPP_DISP_HOLD_MS;
@@ -145,7 +157,9 @@ typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /*
 void    MApp_SetRunMinutes(MApp_t *a, uint32_t minutes);                      /* once at start-up: the counter loaded from the battery-backed registers */
 uint32_t MApp_RunMinutes(const MApp_t *a);                                   /* the minutes the output has been ON in all */
 uint8_t MApp_TakeRunDirty(MApp_t *a);                                        /* 1 once per minute while the output is on: save MApp_RunMinutes() */
-void    MApp_BootReset(MApp_t *a, uint8_t wdg);                               /* once at start-up, after the log is open: a restart by the watchdog is logged ("Watchdog Reset") */
+void    MApp_BootReset(MApp_t *a, uint8_t wdg);
+uint8_t MApp_ShowsTune(const MApp_t *a);                                      /* the tuning screen is up (the glue draws it over everything) */
+void    MApp_TuneScreen(const MApp_t *a, uint32_t now, char out[4][21]);                               /* once at start-up, after the log is open: a restart by the watchdog is logged ("Watchdog Reset") */
 uint8_t MApp_NextKId(MApp_t *a);                                              /* ONE id counter for every $K (a repeated id is a retry for the slave): HELLO and calibration use it */
 uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now);             /* 1 = a $K frame is due now (first send or a retry): build and send it */
 void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived */

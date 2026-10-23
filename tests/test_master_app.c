@@ -725,6 +725,62 @@ static void t_iout_page(void)
     printf("  converter current page: not measured, the values with their zeros, a measured zero, over range\n");
 }
 
+
+static void send_t(int step, int result, int ticks, int vin_dv, int dv) { D.tune_step = (uint8_t)step; D.tune_result = (uint8_t)result; D.tune_ticks = (uint16_t)ticks; D.tune_vin_dv = (uint16_t)vin_dv; D.tune_dv_dv = (int16_t)dv; D.tune_n++; }
+static void tune_screen(char fr[MUI_ROWS][MUI_COLS + 1U]) { MApp_TuneScreen(&A, T, fr); }
+static int fr_has(char fr[MUI_ROWS][MUI_COLS + 1U], const char *s) { int r; for (r = 0; r < 4; r++) if (strstr(fr[r], s) != NULL) return 1; return 0; }
+static void ask_tune(MCalK_t *k) { A.ui.req |= MUI_REQ_RETUNE; run(30U); (void)MApp_TakeKCommand(&A, k, T); }
+static void t_tune_app(void)
+{
+    MCalK_t k, k2; char fr[MUI_ROWS][MUI_COLS + 1U]; int q;
+    /* the unit is running: refused, nothing is sent, no screen */
+    fresh(); to_run(); run(12000U); A.ui.req |= MUI_REQ_RETUNE; run(60U);
+    CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && !MApp_ShowsTune(&A) && strstr(row(1), "Stop The Unit") != NULL, "the unit is running: 'Stop The Unit First', nothing sent ('%s')", row(1));
+    /* no link */
+    fresh(); to_run(); run(2000U); stop_unit(); D.have = 0U; A.ui.req |= MUI_REQ_RETUNE; run(60U); CHECK(!MApp_ShowsTune(&A) && MApp_TakeKCommand(&A, &k, T) == 0U, "no slave link: refused");
+    /* a whole sweep */
+    fresh(); to_run(); run(12000U); stop_unit(); D.tune_n = 5U; D.tune_result = 1U;                              /* an older sweep's frame is already counted */
+    ask_tune(&k); CHECK(k.cmd == MAPP_KCMD_TUNE && MApp_ShowsTune(&A), "Re-tune: a TUNE command is due and the tuning screen is up");
+    tune_screen(fr); CHECK(fr_has(fr, "Transformer Tuning") && fr_has(fr, "Starting...") && fr_has(fr, "STOP = abort"), "'Starting...' while it waits for the answer");
+    { int n = 1; uint32_t g; uint8_t same = 1U; for (g = 0U; g < 1500U; g += 10U) { run(10U); if (MApp_TakeKCommand(&A, &k2, T)) { n++; if (k2.id != k.id || k2.cmd != k.cmd) same = 0U; } } CHECK(n == 3 && same, "TUNE is sent 3 times with the same id (%d)", n); }
+    MApp_OnKResult(&A, k.id, 0U, 0); run(50U); tune_screen(fr); CHECK(fr_has(fr, "Measuring baseline"), "R status 0: 'Measuring baseline'");
+    run(2000U); tune_screen(fr); CHECK(fr_has(fr, "Measuring baseline"), "the stale frame counted before the request is NOT taken as progress");
+    send_t(1, 0, 16, 2300, 3); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  1 of 10") && fr_has(fr, "Injected +0.3 V"), "step 1: 'Step  1 of 10', 'Injected +0.3 V' ('%s' / '%s')", fr[1], fr[2]);
+    send_t(6, 0, 512, 2300, 124); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  6 of 10") && fr_has(fr, "Injected +12.4 V"), "step 6: +12.4 V");
+    send_t(8, 0, 1600, 2300, 485); run(30U); tune_screen(fr); CHECK(fr_has(fr, "+48.5 V"), "a two-digit injection: +48.5 V ('%s')", fr[2]);
+    /* the unit stays off for the whole sweep, in Auto mode, and the keys do nothing */
+    { int ok = 1; for (q = 0; q < 30; q++) { D.state = 0U; run(1000U); send_t(6, 0, 512, 2300, 124); if (A.eout.run[0] != 0U || A.eout.contactor[0] != 0U) ok = 0; } CHECK(ok, "30 s of a sweep in Auto mode: the engine never starts the unit"); }
+    { uint8_t scr0 = A.ui.screen; tap(0, 100U); tap(3, 100U); CHECK(A.ui.screen == scr0, "one LOG press while tuning does not open the log viewer"); tap(1, 100U); tap(0, 100U);
+      CHECK(MApp_ShowsTune(&A) && !MApp_ShowsDiag(&A) && !MApp_ShowsMonitor(&A) && A.eout.run[0] == 0U && A.ui.screen == scr0 && A.ui.page == 0U, "MENU, LOG and START do nothing while tuning: the UI is exactly where it was (screen %u, page %u)", (unsigned)A.ui.screen, (unsigned)A.ui.page); }
+    send_t(10, 1, 2752, 2300, 856); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Complete") && fr_has(fr, "Profile Stored"), "the final FINISHED frame: 'Tuning Complete' ('%s')", fr[0]);
+    send_t(10, 1, 2752, 2300, 856); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Complete"), "the repeats of the final frame change nothing");
+    run(7000U); CHECK(!MApp_ShowsTune(&A), "the result goes after 6 s");
+    run(9000U); CHECK(A.eout.run[0] == 1U || A.eout.contactor[0] == 1U || (A.eng.u[0].st != 0U), "afterwards the engine may start the unit again");
+    /* a key dismisses the result at once */
+    fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(2, 1, 100, 2300, 100); run(30U); CHECK(MApp_ShowsTune(&A), "a result is shown"); tap(1, 100U); CHECK(!MApp_ShowsTune(&A), "any key dismisses it");
+    /* every refusal in words */
+    { static const struct { uint8_t st; int32_t v; const char *l1, *l2; } E[] = { {7U, 1, "Tune Refused", "No Tune Mode Yet"}, {7U, 2, "Tune Refused", "Set Max Correction"}, {7U, 3, "Tune Refused", "Slave Busy"}, {4U, 0, "Stop The Unit", "First"}, {6U, 0, "Not Supported", "Update The Slave"}, {5U, 0, "Tune Refused", "Try Again"} };
+      unsigned e; for (e = 0U; e < sizeof E / sizeof E[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, E[e].st, E[e].v); run(80U); CHECK(!MApp_ShowsTune(&A) && strstr(row(1), E[e].l1) != NULL && strstr(row(2), E[e].l2) != NULL, "status %u reason %d: '%s' / '%s' ('%s' / '%s')", E[e].st, (int)E[e].v, E[e].l1, E[e].l2, row(1), row(2)); } }
+    /* no answer at all */
+    fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); run(3200U); CHECK(!MApp_ShowsTune(&A) && strstr(row(1), "No Answer") != NULL, "no answer in 3 s: 'No Answer' ('%s')", row(1));
+    /* every way a sweep can end */
+    { static const struct { int r; const char *l1; } FAILS[] = { {2, "Reversed Transformer"}, {3, "No Response"}, {4, "Aborted By Slave"}, {5, "Input Not Steady"}, {6, "By Operator"} };
+      unsigned e; for (e = 0U; e < sizeof FAILS / sizeof FAILS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(4, FAILS[e].r, 128, 2300, -30); run(40U); tune_screen(fr); CHECK(fr_has(fr, FAILS[e].l1), "result %d: '%s' ('%s' / '%s')", FAILS[e].r, FAILS[e].l1, fr[0], fr[1]); } }
+    /* STOP aborts: TABORT with a new id, repeated; the final frame (6) ends it */
+    fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(2, 0, 32, 2300, 4); run(30U);
+    tap(2, 100U); run(30U); CHECK(MApp_TakeKCommand(&A, &k2, T) == 1U && k2.cmd == MAPP_KCMD_TABORT && k2.id != k.id, "STOP sends TABORT with a new id");
+    send_t(3, 6, 64, 2300, 8); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Stopped") && fr_has(fr, "Nothing Stored"), "the slave's result 6: 'Tuning Stopped, Nothing Stored'");
+    fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); tap(2, 100U); run(5200U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Stopped"), "an abort the slave never confirms is shown as stopped after 5 s");
+    /* the frames stop coming */
+    fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(3, 0, 64, 2300, 8); run(30U); run(8200U); tune_screen(fr);
+    CHECK(fr_has(fr, "Slave Not Answering") && MApp_TakeKCommand(&A, &k2, T) == 1U && k2.cmd == MAPP_KCMD_TABORT, "no $T frame for 8 s: the master aborts and says 'Slave Not Answering'");
+    /* the Set-Mode idle timeout does not run out in the middle of a sweep */
+    fresh(); to_run(); run(2000U); stop_unit(); combo(); run(500U); CHECK(MApp_SetModeOpen(&A), "Set-Mode is open");
+    ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); for (q = 0; q < 40; q++) { run(1000U); send_t(3, 0, 64, 2300, 8); } CHECK(MApp_SetModeOpen(&A) && MApp_ShowsTune(&A), "40 s of tuning with no key: Set-Mode is still open behind the screen");
+    send_t(10, 1, 2752, 2300, 856); run(100U); tap(1, 100U); run(100U); CHECK(MApp_SetModeOpen(&A) && !MApp_ShowsTune(&A), "afterwards the operator is back in Set-Mode");
+    printf("  autotune, master side: the request, the answers in words, the progress screens, the result screens, STOP, timeouts, stale frames, the unit held off, Set-Mode kept open\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -778,6 +834,7 @@ int main(void)
     t_ct_peak();
     t_display_speed();
     t_iout_page();
+    t_tune_app();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

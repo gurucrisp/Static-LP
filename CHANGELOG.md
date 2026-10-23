@@ -2,7 +2,17 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.32 — PHASE 2, step 3: the autotune over the link (current)
+## v0.9.33 — PHASE 2, step 4: the master side of the autotune (current)
+* The **Re-tune item** of Set-Mode (item 19, behind the Set-Mode password) now does something: it sends `$K TUNE` (3 sends, one id), waits for the answer, follows the slave's `$T` progress frames and shows a screen over everything:
+  `Transformer Tuning / Step 6 of 10 / Injected +12.4 V / STOP = abort`, then `Tuning Complete / Transformer OK / Profile Stored`, or `Tuning Failed` with the reason (Reversed Transformer, No Response, Aborted By Slave, Input Not Steady, Slave Not Answering) or `Tuning Stopped / By Operator / Nothing Stored`. Any key dismisses a result; it also goes after 6 s.
+* While tuning: **the unit is held off** (the engine's Set-Mode hold, also in Auto mode), **every key but STOP is swallowed** (STOP sends `$K TABORT`), and the Set-Mode idle timeout is kept alive so Set-Mode is still open behind the screen afterwards.
+* Refusals in words: `Stop The Unit First` (the unit runs), `Not Supported / Update The Slave` (an older slave), `Tune Refused / No Tune Mode Yet | Set Max Correction | Slave Busy`, `No Answer / From The Slave` (3 s). If the `$T` frames stop for 8 s the master aborts and says `Slave Not Answering`; an abort the slave never confirms is shown as stopped after 5 s.
+  A frame counted before the request is not taken for progress; the repeats of the final frame change nothing.
+* **WHAT HAPPENS TODAY when you press Re-tune:** with `SLAVE_AUTOTUNE 0` (default) the slave does not know the command: `Not Supported / Update The Slave`. With `SLAVE_AUTOTUNE 1` it answers `Tune Refused / No Tune Mode Yet`, because **the controller's tune mode does not exist yet**. So a sweep still cannot be run on the power stage; that is the next (and last software) step.
+* Tests: application 359 (37 new for the master side), end to end 12 (the real master application and the real slave chain exchanging real link frames: a refusal, a whole sweep with the profile stored and the unit never started, STOP, a reversed transformer, a refusing flash). Mutation checks 10 of 10.
+  NOT compiled here: the master glue (`$T` receiving, sending TUNE / TABORT, drawing the screen). The automatic first tune after the Restart Time is NOT in this version: the sweep is started from Set-Mode.
+
+## v0.9.32 — PHASE 2, step 3: the autotune over the link
 * Bench result from you (v0.9.31): the voltages read as before with the 4th ADC channel, the converter current agrees with a clamp meter, the 108 A short-circuit trip is accepted; the 100 V/s correction profile stays. The I-OUT scaling is therefore confirmed.
   NEW config `..._fast_start_fast_correction_100_iout.h` = your 100 V/s profile + `SLAVE_IOUT 1` + the 68 ohm burden, so nothing has to be merged by hand.
 * NEW `slave_tune_link.c/.h` and two new hooks in the slave link layer (`tune_command`, `tune_frame`): **`$K TUNE`** starts a sweep (answered 0; refused 4 NOT_STOPPED if the unit runs, or 7 NOT_ALLOWED with a REASON in the R value: 1 = this build has no tune mode, 2 = Max Correction not set, 3 = a calibration / flash write is busy, 4 = a sweep is running),

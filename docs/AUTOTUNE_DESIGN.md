@@ -30,8 +30,11 @@ Two CRC-protected copies in flash pages 124 and 125, validated on load, a power 
 `$K TUNE` (refusals with reasons: 4 NOT_STOPPED; 7 with 1 no tune mode / 2 no Max Correction / 3 busy / 4 already running), `$K TABORT`, the `$T` frames (the result repeated 6 times), `$E` BUSY / NOT_TUNED, the profile stored before FINISHED is reported.
 Tune mode is still refused ("no tune mode"): the controller does not apply the duty yet.
 
+## Done: the master side (v0.9.33, 37 + 12 PC checks)
+The Re-tune item (behind the Set-Mode password) sends TUNE / TABORT, follows the `$T` frames and shows the progress and result screens; the unit is held off, only STOP works; every refusal and failure is explained in words. Not yet: the automatic first tune after the Restart Time.
+
 ## Not done yet (in this order)
-1. **Master**: the automatic first tune after the Restart Time, the screens, the password-protected Re-tune item, "Re-tune Required".
+1. **The automatic first tune** after the Restart Time (a small addition on the master).
 2. **Controller integration**: a tune mode in the controller (the normal start sequence up to RUN, but the duty is the tune's open-loop boost request and the regulator is off); applying the cap and the gain scale; refusing closed loop until tuned (code 19); the model check during the soft start; the loop-instability guard (code 18).
 4. **Bench validation**, on a variac, no load. The F02 / FLT gate is open (a hardware fault, cleared); a scope on a gate drive for the first run.
 

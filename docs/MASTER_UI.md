@@ -21,7 +21,7 @@ Items (the number shows top right): 1 Mode, 2 Calibration, 3 Set Voltage, 4 Max 
 13 Phase Sequence (Industrial only), 14 Display Scroll (three-phase), 15 Scroll Time (if scrolling), 16 Password, 17 Restart Mode, 18 Restart Time (Auto only), 19 Re-tune, 20 Clear Fault Log, 21 Discard Changes, 22 Factory Reset.
 MENU = next item (the edit is checked first), START = increment / toggle, STOP = next digit (the `^` marks it). An edit that breaks a rule ("Invalid Value": ranges, I/P LV < Set V < I/P HV, O/P LV < Set V < O/P HV) is put back.
 A violation that was already there never traps you on an item; leaving Set-Mode checks everything and takes you to the offending item. MENU + LOG saves and leaves ("Settings Saved"); Discard Changes = Yes leaves without saving;
-30 s without a key leaves without saving ("Timeout - Not Saved"). A password (000 = none) is asked for on entry. Calibration and Re-tune say "Not Available" until their stages exist. Factory Reset resets the settings only and takes effect on saving.
+30 s without a key leaves without saving ("Timeout - Not Saved"). A password (000 = none) is asked for on entry. Calibration works (Load Calibration page, Voltage Calibration pages); Re-tune starts a transformer sweep (see below). Factory Reset resets the settings only and takes effect on saving.
 
 ## Storage
 Settings: two flash pages at 0x0801F000 and 0x0801E800 (power-cut safe, CRC, version); the fault log: 0x0801D000 and 0x0801C800 (reserved: calibration at 0x0801E000 / 0x0801D800). The old firmware's settings page, 0x0801F800, is never touched.
@@ -246,3 +246,8 @@ To change it: `MAPP_DISP_EMA_DIV` (96: larger = slower filter) and `MAPP_DISP_HO
 ## Converter Current page (v0.9.30)
 LOG, then MENU x7: `Converter Current`, RMS and peak in amperes of the slave's CT2500 chain (net I-OUT), and a status line: `CT primary current`, `OVER RANGE (clipped)` or `Not measured` (an older slave, or `SLAVE_IOUT 0`). There are eight service pages now:
 monitor, diagnostics, Load Calibration, Clock, I/P Calibration, O/P Calibration, Converter Current, then the Run screen. See docs/IOUT.md.
+
+
+## Re-tune: the transformer autotune from Set-Mode (v0.9.33)
+Set-Mode (hold MENU and LOG 2 s, the password if one is set), item 19 **Re-tune**, Yes. The unit must be stopped. The screen shows the sweep (`Step n of 10`, the injection of the last step); STOP aborts it; every other key does nothing until it ends. The result screen goes after 6 s or on any key.
+Today a slave without the autotune answers `Not Supported`, and one with `SLAVE_AUTOTUNE 1` answers `Tune Refused / No Tune Mode Yet` because the controller's tune mode is not built yet: see docs/AUTOTUNE_DESIGN.md. Max Correction (item 4) must be set before a sweep.
