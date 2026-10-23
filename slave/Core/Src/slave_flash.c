@@ -1,6 +1,6 @@
 /** @file slave_flash.c  @brief Flash access of the calibration record on the STM32G0B1. See slave_flash.h. */
 #include "slave_features.h"
-#if (SLAVE_VOLTAGE_CAL != 0)
+#if (SLAVE_VOLTAGE_CAL != 0) || (SLAVE_AUTOTUNE != 0)
 #include <string.h>
 #include "main.h"
 #include "slave_flash.h"
@@ -36,8 +36,8 @@ static int fail(uint32_t reason, uint32_t err) { s_reason = reason; s_err = err;
 
 static uint8_t allowed(uint32_t addr, uint32_t n)
 {   /* only the two calibration pages, and only above the program image */
-    if ((addr < SFLASH_CAL_PAGE_A) || ((addr + n) > (SFLASH_CAL_PAGE_B + SFL_PAGE))) return 0U;
-    if (SlaveFlash_ImageEnd() > SFLASH_CAL_PAGE_A) return 0U;                       /* the image has grown into the calibration pages: refuse everything */
+    if ((addr < SFLASH_PROF_PAGE_A) || ((addr + n) > (SFLASH_CAL_PAGE_B + SFL_PAGE))) return 0U;       /* only the four pages: profile A, B and calibration A, B */
+    if (SlaveFlash_ImageEnd() > SFLASH_PROF_PAGE_A) return 0U;                      /* the image has grown into them: refuse everything */
     return 1U;
 }
 

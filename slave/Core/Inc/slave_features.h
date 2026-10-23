@@ -43,6 +43,12 @@
  * stored in two CRC-protected copies in the last two flash pages (0x0803F000 and 0x0803F800). 0 = no calibration commands (they are answered UNKNOWN_CMD). The master-control configs set 1. */
 /* 1 = the independent watchdog (IWDG) runs: the main loop kicks it once per pass; if the loop stops for SLAVE_WATCHDOG_MS the CPU is reset, the timers and all pins go back to their reset state (pulses off) and the unit
  * waits for the master again. The reason is reported to the master in $H (rst = 1). 0 = no watchdog. */
+/* 1 = the transformer AUTOTUNE chain is built in (profile storage in flash pages 124 and 125, and as the later steps are added: the link commands and the controller's tune mode). 0 = nothing of it: the controller runs on its built-in profile
+ * as before and $H reports tuned = 1. OFF until the whole chain has been tested on the bench. */
+#ifndef SLAVE_AUTOTUNE
+#define SLAVE_AUTOTUNE         0
+#endif
+
 #ifndef SLAVE_WATCHDOG
 #define SLAVE_WATCHDOG         1
 #endif
@@ -71,7 +77,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       928UL
+#define SLAVE_FW_VERSION       929UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

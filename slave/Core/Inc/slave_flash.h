@@ -1,7 +1,7 @@
 /**
   * @file    slave_flash.h
   * @brief   The slave's flash access for the calibration record (STM32G0B1, 2 KB pages): pages 126 and 127 (the last two pages of the first 256 KB), 0x0803F000 and 0x0803F800, as the two slots of the store (slave_store.h).
-  *          The driver refuses any address outside those two pages, so it can never touch the program. They are pages 126 and 127 of bank 1: the same page numbers in single-bank and in dual-bank mode. The program must end below 0x0803F000 (252 KB).
+  *          The driver refuses any address outside those two pages, so it can never touch the program. They are pages 126 and 127 of bank 1: the same page numbers in single-bank and in dual-bank mode. The program must end below 0x0803E000 (248 KB): the driver also guards the two profile pages 124 and 125 (0x0803E000 and 0x0803E800).
   *          Erasing or programming stalls the CPU for tens of milliseconds: the calibration only runs while the unit is stopped, so no interrupt that matters is waiting.
   */
 #ifndef SLAVE_FLASH_H
@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+#define SFLASH_PROF_PAGE_A  0x0803E000UL     /* the transformer (autotune) profile: pages 124 and 125 of bank 1 */
+#define SFLASH_PROF_PAGE_B  0x0803E800UL
 #define SFLASH_CAL_PAGE_A   0x0803F000UL
 #define SFLASH_CAL_PAGE_B   0x0803F800UL
 

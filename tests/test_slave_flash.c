@@ -53,15 +53,19 @@ int main(void)
     CHECK(unlocked == 0, "the flash is locked again after every operation");
     /* a failing program: reported */
     fresh(1); fail_next_prog = 1; CHECK(g_slave_flash.prog(0x0803F000UL, in, 8U) != 0 && unlocked == 0, "a failing HAL program is reported and the flash is locked again");
-    /* the driver refuses everything outside the two calibration pages: the program can never be touched */
+    /* the driver refuses everything outside the four pages (profile 124, 125, calibration 126, 127): the program can never be touched */
     fresh(1); memset(mem, 0x00, 0x1000);
     CHECK(g_slave_flash.erase(0x08000000UL) != 0 && erase_calls == 0 && mem[0] == 0x00U, "erasing the first page (the start of the program) is refused, nothing called");
-    CHECK(g_slave_flash.erase(0x0803E800UL) != 0 && g_slave_flash.erase(0x08040000UL) != 0 && g_slave_flash.erase(0x08040000UL) != 0 && erase_calls == 0, "erasing the page below, the page above and the start of bank 2 is refused");
-    CHECK(g_slave_flash.prog(0x0803E000UL, in, 8U) != 0 && g_slave_flash.prog(0x0803FFF8UL, in, 16U) != 0 && prog_calls == 0, "programming below the pages or across their end is refused");
+    CHECK(g_slave_flash.erase(0x0803D800UL) != 0 && g_slave_flash.erase(0x08040000UL) != 0 && g_slave_flash.erase(0x08040800UL) != 0 && erase_calls == 0, "erasing the page below the four, the page above and the start of bank 2 is refused");
+    CHECK(g_slave_flash.prog(0x0803D000UL, in, 8U) != 0 && g_slave_flash.prog(0x0803DFF8UL, in, 16U) != 0 && g_slave_flash.prog(0x0803FFF8UL, in, 16U) != 0 && prog_calls == 0, "programming below the pages, across the start of the first or across the end of the last is refused");
     CHECK(g_slave_flash.prog(0x0807F001UL, in, 8U) != 0 && g_slave_flash.prog(0x0803F000UL, in, 7U) != 0, "a misaligned address or length is refused");
     CHECK(g_slave_flash.erase(0x0803F400UL) != 0, "an address that is not the start of a page is refused");
     /* the program image has grown into the calibration pages: everything is refused */
-    fresh(1); image_end = 0x0803F100UL; CHECK(g_slave_flash.erase(0x0803F800UL) != 0 && g_slave_flash.prog(0x0803F800UL, in, 8U) != 0 && erase_calls == 0 && prog_calls == 0, "an image that reaches 0x0803F000: the driver refuses to write anything");
+    fresh(1); image_end = 0x0803E100UL; CHECK(g_slave_flash.erase(0x0803F800UL) != 0 && g_slave_flash.prog(0x0803F800UL, in, 8U) != 0 && g_slave_flash.erase(0x0803E800UL) != 0 && erase_calls == 0 && prog_calls == 0, "an image that reaches 0x0803E000: the driver refuses to write anything");
+    /* the two profile pages are writable like the calibration ones: 124 and 125 of bank 1, in both flash modes */
+    fresh(1); CHECK(g_slave_flash.erase(0x0803E000UL) == 0 && last_banks == (int)FLASH_BANK_1 && last_page == 124U && g_slave_flash.erase(0x0803E800UL) == 0 && last_page == 125U, "dual bank: the profile pages are bank 1, pages 124 and 125 (page %u)", (unsigned)last_page);
+    fresh(0); CHECK(g_slave_flash.erase(0x0803E000UL) == 0 && last_banks == (int)FLASH_BANK_1 && last_page == 124U && g_slave_flash.erase(0x0803E800UL) == 0 && last_page == 125U, "single bank: the same numbers (page %u)", (unsigned)last_page);
+    fresh(1); image_end = 0x08020000UL; CHECK(g_slave_flash.prog(0x0803E000UL, in, 16U) == 0 && g_slave_flash.prog(0x0803E800UL, in, 16U) == 0, "and they can be programmed");
     /* the store on top of it: save, load, and a second save goes to the OTHER page */
     fresh(1); { SStore_t st; uint8_t pay[4] = { 0xA2, 0x27, 0x0F, 0x27 }, got[4] = { 0, 0, 0, 0 }; SFlash_t fl; fl.read = rd; fl.prog = g_slave_flash.prog; fl.erase = g_slave_flash.erase;
       SStore_Init(&st, &fl, SFLASH_CAL_PAGE_A, SFLASH_CAL_PAGE_B, 1U, 4U);

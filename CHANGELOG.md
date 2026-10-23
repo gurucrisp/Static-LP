@@ -2,7 +2,15 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.28 — PHASE 2, step 1: the autotune core, tested against simulated transformers (current)
+## v0.9.29 — PHASE 2, step 2: the profile storage (current)
+* Hardware note from you: the F02 / FLT trips came from a hardware fault, now cleared. The gate for the first autotune run on the power stage is open (variac, no load, Max Correction low, a scope on a gate drive for the first run).
+* NEW `slave_profile.c/.h`: the transformer profile in the slave's flash, two CRC-protected copies in pages **124 and 125** (0x0803E000, 0x0803E800), the same proven store as the calibration, validated on every load (a record with a good CRC that is not a valid profile is NOT used).
+  A power cut at any point of a save or of a re-tune leaves the old profile or the new one, never a mixture. `SlaveProfile_Tuned()` is what `$H tuned` will report.
+* The flash driver now guards FOUR pages (profile 124, 125 and calibration 126, 127) and the program must end below **0x0803E000** (248 KB; it refused at 252 KB before). Same page numbers in single-bank and dual-bank mode.
+* New switch `SLAVE_AUTOTUNE` (slave_features.h, **default 0**): with 0 nothing changes at all (`$H tuned` = 1, the built-in profile). With 1 the store is initialised at start and `$H tuned` follows it. The later steps (link commands, the controller's tune mode) will use the same switch.
+* Tests: profile store 80 checks (every 4 bytes of a save and a re-tune cut), flash driver 26. Mutation checks 3 of 3.
+
+## v0.9.28 — PHASE 2, step 1: the autotune core, tested against simulated transformers
 * NEW pure module `slave_tune.c/.h` (not yet connected to the controller, the flash or the link: nothing in the running firmware changes): the sweep, the profile, the start-up model check and the reach, from the approved design D13 to D21.
   The sweep: 3 s zero-duty baseline, then 16 ... 2752 effective ticks, 3 s a step (1.5 s settle, 1.5 s averaged), one `$T` frame per step. Each step is shortened so its predicted injection stays at or below 80 % of Max Correction; the sweep stops at once, nothing stored, on a flipped transformer, no response,
   a fault, an unsteady input (over 1.5 V peak to peak) or an injection more than 5 V above Max Correction (the backstop that no prediction can replace); a saturation knee (slope under 40 % of the previous) ends it with the cap at the step before the knee.

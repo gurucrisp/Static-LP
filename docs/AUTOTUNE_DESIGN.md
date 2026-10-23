@@ -23,12 +23,14 @@
 4. **Tolerance 30 % or 1 V** for the model check: a first value. It must be small enough to catch a swapped transformer and large enough never to stop a good one at a customer (measure the real spread over temperature and input voltage).
 5. The numbers 80 %, 5 V, 1.5 V, 40 %, 0.5 V, 1.0 V, the 3 s steps.
 
+## Done: the profile storage (v0.9.29, slave_profile.c, 80 PC checks)
+Two CRC-protected copies in flash pages 124 and 125, validated on load, a power cut at any point leaves the old or the new profile. `SLAVE_AUTOTUNE 1` (default 0) initialises it at start and makes `$H tuned` follow it.
+
 ## Not done yet (in this order)
-1. **Profile storage** on the slave: two more flash pages (124 and 125), the same two-copy store as the calibration; `$H.tuned` from it.
-2. **Controller integration**: a tune mode in the controller (the normal start sequence up to RUN, but the duty is the tune's open-loop boost request and the regulator is off); applying the cap and the gain scale; refusing closed loop until tuned (code 19); the model check during the soft start; the loop-instability guard (code 18).
-3. **Link**: `$K TUNE / TABORT / TPARAM / TSAVE`, the `$T` frames, `$E` NOT_TUNED / BUSY and the reach.
-4. **Master**: the automatic first tune after the Restart Time, the screens (Auto Tuning, Step n of 10, Tune OK / Failed with the reason), the password-protected Re-tune item, "Re-tune Required".
-5. **Bench validation**, on a variac, no load, with the FLT time known and F02 understood BEFORE the first hardware run.
+1. **Link**: `$K TUNE / TABORT / TPARAM / TSAVE`, the `$T` frames, `$E` NOT_TUNED / BUSY and the reach.
+2. **Master**: the automatic first tune after the Restart Time, the screens, the password-protected Re-tune item, "Re-tune Required".
+3. **Controller integration**: a tune mode in the controller (the normal start sequence up to RUN, but the duty is the tune's open-loop boost request and the regulator is off); applying the cap and the gain scale; refusing closed loop until tuned (code 19); the model check during the soft start; the loop-instability guard (code 18).
+4. **Bench validation**, on a variac, no load. The F02 / FLT gate is open (a hardware fault, cleared); a scope on a gate drive for the first run.
 
 ## Safety stance
 The sweep only ever asks for a duty; the controller must still apply every existing protection (FLT, break, the hardware cap, the master's contactor open). The backstop (injection above Max Correction + 5 V) is independent of the prediction. The first hardware run is on a variac, no load, with Max Correction set low.

@@ -17,6 +17,9 @@
 #include "slave_zc.h"
 #include "slave_config.h"
 #include "slave_features.h"
+#if (SLAVE_AUTOTUNE != 0)
+#include "slave_profile.h"
+#endif
 #if (SLAVE_POWER_STAGE >= 1)
 #include "slave_ctrl.h"
 #endif
@@ -101,7 +104,11 @@ static void hk_fill_h(LinkH_t *h)
     h->vin_max_dv  = 6500U;
 #endif
     h->rst         = s_reset_cause;
-    h->tuned       = 1U;                   /* the built-in profile is in force until the autotune exists (step 5) */
+#if (SLAVE_AUTOTUNE != 0)
+    h->tuned       = SlaveProfile_Tuned();   /* a valid autotune profile is stored in flash */
+#else
+    h->tuned       = 1U;                   /* the built-in profile is in force (SLAVE_AUTOTUNE 0) */
+#endif
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS == 0)
     h->vout_max_dv = to_dv(CTRL_VOUT_MAX_V);
 #else

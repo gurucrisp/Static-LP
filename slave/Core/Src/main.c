@@ -45,6 +45,10 @@
 #include "slave_meas.h"
 #include "slave_features.h"
 #include "slave_cal_hw.h"
+#if (SLAVE_AUTOTUNE != 0)
+#include "slave_profile.h"
+#include "slave_flash.h"
+#endif
 #include "slave_iwdg.h"
 #include "slave_link.h"
 #include "slave_power.h"       /* TIM1/TIM15 setup now lives here (htim1, htim15, POWER_*) */
@@ -373,6 +377,9 @@ int main(void)
     SlaveMeas_Init();    /* TIM3 20 kHz trigger + ADC1 + circular DMA - see slave_meas.h  */
 #if (SLAVE_VOLTAGE_CAL != 0)
     SlaveCalHw_Init();   /* the stored voltage calibration (two copies, CRC) is applied to the measurement */
+#endif
+#if (SLAVE_AUTOTUNE != 0)
+    SlaveProfile_Init(&g_slave_flash, SFLASH_PROF_PAGE_A, SFLASH_PROF_PAGE_B);   /* the transformer profile (two copies, CRC, validated): $H tuned follows it */
 #endif
     SlaveLink_Init();    /* status frame to the master every 10 ms - see slave_link.h    */
 
