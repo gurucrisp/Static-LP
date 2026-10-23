@@ -608,6 +608,75 @@ static void t_response_timer(void)
     printf("  response timer: the time from a 5 V error back to within 1 V, and its largest error, on the diagnostics page\n");
 }
 
+
+static void t_watchdog_events(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U]; int r, seen = 0;
+    /* a restart by the watchdog is logged once; an ordinary start is not */
+    fresh(); MApp_BootReset(&A, 0U); CHECK(MLog_Count(&A.log) == 0U, "an ordinary start logs nothing");
+    MApp_BootReset(&A, 1U); CHECK(MLog_Count(&A.log) == 1U, "a restart by the watchdog logs one entry (%u)", (unsigned)MLog_Count(&A.log));
+    to_run(); run(1000U); tap(3, 100U); run(200U); for (r = 0; r < 4; r++) if (strstr(row(r), "Watchdog Reset") != NULL) seen = 1;
+    CHECK(seen, "the log viewer names it 'Watchdog Reset' ('%s' / '%s' / '%s' / '%s')", row(0), row(1), row(2), row(3));
+    /* the slave's last reset was its watchdog: a 'w' in the corner of the diagnostics page, not otherwise */
+    fresh(); to_run(); run(1000U); D.slave_wdg = 0U; tap(3, 100U); tap(0, 100U); tap(0, 100U); run(100U); MApp_Diag(&A, T, fr);
+    CHECK(fr[3][19] != 'w', "no marker when the slave's last reset was not its watchdog ('%s')", fr[3]);
+    D.slave_wdg = 1U; run(100U); MApp_Diag(&A, T, fr); CHECK(fr[3][19] == 'w' && strncmp(fr[3], "Slv st:", 7) == 0, "a 'w' in column 20 of row 3 when it was ('%s')", fr[3]);
+    printf("  watchdog events: a restart by the watchdog is logged once, the slave's watchdog reset shows as a 'w' on the diagnostics page\n");
+}
+
+
+static void t_run_minutes(void)
+{
+    MLogRec_t rec; uint32_t g;
+    /* a power-up: the counter starts from what the glue loaded, and counts only while the contactor is closed */
+    fresh(); MApp_SetRunMinutes(&A, 5000U); to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running with the contactor closed");
+    (void)MApp_TakeRunDirty(&A); { uint32_t m0 = MApp_RunMinutes(&A); run(125000U); CHECK(MApp_RunMinutes(&A) == m0 + 2U, "125 s with the contactor closed: 2 more minutes (%u -> %u)", (unsigned)m0, (unsigned)MApp_RunMinutes(&A)); }
+    CHECK(MApp_TakeRunDirty(&A) == 1U && MApp_TakeRunDirty(&A) == 0U, "a whole minute makes the counter dirty, once, so the glue saves it");
+    /* stopped: nothing counts */
+    stop_unit(); run(500U); { uint32_t m1 = MApp_RunMinutes(&A); (void)MApp_TakeRunDirty(&A); run(180000U); CHECK(MApp_RunMinutes(&A) == m1 && MApp_TakeRunDirty(&A) == 0U, "3 minutes with the unit stopped: the counter stays (%u)", (unsigned)m1); }
+    /* a stalled loop (one step of 20 s) adds at most one second */
+    { uint32_t m2; fresh(); MApp_SetRunMinutes(&A, 100U); to_run(); run(12000U); m2 = MApp_RunMinutes(&A); (void)m2; }
+    /* the fault log carries the running minutes as its time when no clock is set, and the real date and time when it is */
+    fresh(); MApp_SetRunMinutes(&A, 7777U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(500U);
+    CHECK(MLog_Count(&A.log) >= 1U && MLog_Get(&A.log, 0, &rec) == 0 && rec.run_min >= 7777U && rec.run_min < 7780U && (rec.run_min & 0x80000000UL) == 0U, "a fault without a clock: the log time is the running minutes, not minutes since power-up (%u)", (unsigned)rec.run_min);
+    fresh(); set_clock(2026U, 10U, 21U, 14U, 32U, 1U); MApp_SetRunMinutes(&A, 7777U); to_run(); run(12000U); D.state = 3U; D.fault = 2U; run(500U);
+    CHECK(MLog_Get(&A.log, 0, &rec) == 0 && (rec.run_min & 0x80000000UL) != 0U, "with the clock set the log time is the real date and time (top bit set)");
+    /* a watchdog restart is logged with the running minutes */
+    fresh(); MApp_SetRunMinutes(&A, 4242U); MApp_BootReset(&A, 1U); CHECK(MLog_Get(&A.log, 0, &rec) == 0 && rec.type == MLOG_T_WDG_RESET && rec.run_min == 4242U, "the watchdog-reset entry carries the running minutes (%u)", (unsigned)rec.run_min);
+    /* the top bit of a loaded value is never kept: it would look like a date */
+    fresh(); MApp_SetRunMinutes(&A, 0xFFFFFFFFUL); CHECK(MApp_RunMinutes(&A) == 0x7FFFFFFFUL, "a loaded value is cut to 31 bits");
+    (void)g;
+    printf("  running hours: minutes of output ON counted from the loaded value, dirty once a minute, nothing while stopped, the log time uses them when no clock is set\n");
+}
+
+
+/* the CT reading (x16) that the default calibration turns into this many tenths of an amp */
+static uint16_t x16_for_da(uint32_t da) { return (uint16_t)(MAPP_CT_ZERO_DEFAULT_X16 + (da * 16000000ULL + (MAPP_CT_DA_PER_COUNT_X1000 * (uint64_t)MAPP_CT_GAIN_DEFAULT) / 2U) / (MAPP_CT_DA_PER_COUNT_X1000 * (uint64_t)MAPP_CT_GAIN_DEFAULT) + 1U); }
+static void t_ct_peak(void)
+{
+    MLogRec_t rec; uint32_t g;
+    /* Overload Current 20 A (above the 12.3 A the test load shows, so Overload itself stays quiet): the peak limit is 3 x 20 = 60 A (600 tenths) */
+    fresh(); A.settings.ovl_current = 20U; to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running with the contactor closed");
+    D.ct_max_x16 = x16_for_da(550U); run(500U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "55 A (under 3 x 20 A): nothing happens");
+    D.ct_max_x16 = x16_for_da(700U); run(10U); D.ct_max_x16 = x16_for_da(550U); run(500U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "70 A for 10 ms only: not enough (20 ms in a row are needed)");
+    D.ct_max_x16 = x16_for_da(700U); run(40U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && MLog_Count(&A.log) >= 1U && MLog_Get(&A.log, 0, &rec) == 0 && rec.type == MLOG_T_INRUSH, "70 A for 40 ms (the limit is 60 A): the contactor opens and an Inrush is logged");
+    D.ct_max_x16 = 0U; run(500U);
+    /* the same reading with the default 99 A overload setting: 70 A is nothing */
+    fresh(); to_run(); run(12000U); D.ct_max_x16 = x16_for_da(700U); run(2000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "Overload Current 99 A: 70 A is no peak");
+    /* the full scale of the ADC (4000 counts and more) is a peak whatever the setting is */
+    D.ct_max_x16 = (uint16_t)(MAPP_CT_FULL_X16 - 16U); run(500U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "just under the full scale (3999 counts): no trip");
+    D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(60U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && MLog_Get(&A.log, 0, &rec) == 0 && rec.type == MLOG_T_INRUSH, "the ADC at its full scale: the contactor opens, an Inrush is logged");
+    /* not sampled (the glue gives 0): the backup is idle even when the averaged CT reading is high (3 s is shorter than the Overload delay) */
+    fresh(); A.settings.ovl_current = 20U; to_run(); run(12000U); D.ct_max_x16 = 0U; D.ct_x16 = x16_for_da(900U); D.ct_raw = 1U; run(3000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "no fast samples (0): the backup does nothing");
+    /* the condition has to be continuous: a reading that dips below the limit every other 10 ms never trips */
+    fresh(); A.settings.ovl_current = 20U; to_run(); run(12000U); for (g = 0U; g < 100U; g++) { D.ct_max_x16 = x16_for_da(700U); run(10U); D.ct_max_x16 = x16_for_da(100U); run(10U); }
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "70 A and 10 A on alternate 10 ms for 2 s: it never trips");
+    printf("  CT peak backup: above 3 x the Overload Current or at the ADC full scale for 20 ms in a row is an Inrush; a shorter excursion, alternating readings, no samples and smaller readings are not\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -656,6 +725,9 @@ int main(void)
     t_heat_inrush_app();
     t_vcal_app();
     t_response_timer();
+    t_watchdog_events();
+    t_run_minutes();
+    t_ct_peak();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

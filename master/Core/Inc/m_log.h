@@ -34,6 +34,7 @@ extern "C" {
 #define MLOG_T_POWER_STAGE 11U
 #define MLOG_T_RETUNE 12U
 #define MLOG_T_LINK_LOST 13U
+#define MLOG_T_WDG_RESET 14U    /* the master was restarted by its watchdog (logged at the next start) */
 
 typedef struct
 {

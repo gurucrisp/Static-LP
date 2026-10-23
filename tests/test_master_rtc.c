@@ -25,6 +25,7 @@ static void power_on_battery_lost(void) { memset(&rcc_m, 0, sizeof rcc_m); memse
 static void settle(void) { (void)HAL_GetTick(); }
 static MDateTime_t mk(uint16_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi) { MDateTime_t t; t.year = y; t.month = mo; t.day = d; t.hour = h; t.minute = mi; return t; }
 
+TAMP_TypeDef tamp_model;
 int main(void)
 {
     MDateTime_t t, u;
@@ -61,6 +62,13 @@ int main(void)
     /* the battery is lost while the unit is off: the year is back to 2000, the clock reads 'not set' */
     rtc_m.DR = 0x2101UL; tick += 10U; (void)HAL_GetTick(); CHECK(MRtc_Get(&u) == 0U, "a year of 00 (the reset value) reads 'not set'");
     printf("  RTC driver (against a register model): crystal start, LSI fallback, BCD encoding and weekday for 99 years, invalid dates refused, a running clock left alone, 'not set' detected\n");
+    /* the battery-backed registers: each index reaches its own register, an index outside 0..4 reaches nothing */
+    { uint8_t i; uint32_t back = 0U; memset(&tamp_model, 0, sizeof tamp_model);
+      for (i = 0U; i < 5U; i++) MRtc_BkpWrite(i, 0x11111111UL * (uint32_t)(i + 1U));
+      CHECK(tamp_model.BKP0R == 0x11111111UL && tamp_model.BKP1R == 0x22222222UL && tamp_model.BKP2R == 0x33333333UL && tamp_model.BKP3R == 0x44444444UL && tamp_model.BKP4R == 0x55555555UL, "BKP0R..BKP4R each get their own value");
+      for (i = 0U; i < 5U; i++) back |= (MRtc_BkpRead(i) == 0x11111111UL * (uint32_t)(i + 1U)) ? (1UL << i) : 0UL;
+      CHECK(back == 0x1FUL, "and read back from the same registers (mask 0x%02lX)", (unsigned long)back);
+      MRtc_BkpWrite(5U, 0xDEADUL); MRtc_BkpWrite(200U, 0xDEADUL); CHECK(MRtc_BkpRead(5U) == 0UL && tamp_model.BKP4R == 0x55555555UL && tamp_model.BKP0R == 0x11111111UL, "an index above 4 reads 0 and writes nothing"); }
     printf("  %d checks, %d failures\n  RESULT: %s\n", tot, bad, bad ? "FAILURES" : "ALL PASSED");
     return bad ? 1 : 0;
 }

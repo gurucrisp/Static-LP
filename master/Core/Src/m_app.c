@@ -128,6 +128,20 @@ static void rec_update(MApp_t *a, const MAppData_t *d, uint32_t now)
     else if ((uint32_t)(now - a->rec_t0) >= 30000UL) a->rec_active = 0U;
 }
 
+/* The CT peak backup (see m_app.h): above 3 x the Overload Current, or at the ADC full scale, continuously for 20 ms. */
+static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
+{
+    uint8_t hi = 0U;
+    if (d->ct_max_x16 != 0U)
+    {
+        uint32_t lim_da = (uint32_t)a->settings.ovl_current * 10U * MAPP_CT_PEAK_FACTOR;
+        if ((d->ct_max_x16 >= MAPP_CT_FULL_X16) || ((uint32_t)ct_to_da(&a->cal, d->ct_max_x16) > lim_da)) hi = 1U;
+    }
+    if (hi == 0U) { a->ct_hi = 0U; a->ct_peak_on = 0U; return; }
+    if (a->ct_hi == 0U) { a->ct_hi = 1U; a->ct_hi_t0 = now; }
+    a->ct_peak_on = (uint8_t)(((uint32_t)(now - a->ct_hi_t0) >= MAPP_CT_PEAK_MS) ? 1U : 0U);
+}
+
 static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now);
 static void vcal_service(MApp_t *a, uint32_t now);
 
@@ -166,10 +180,10 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             uint8_t meas = (uint8_t)((d->have != 0U) && (d->state == 2U) && (dv <= (int32_t)MAPP_BAND_DV) && (dv >= -(int32_t)MAPP_BAND_DV));
             in.ph[0].in_band = (uint8_t)(((d->e_valid != 0U) && (d->in_band != 0U)) || (meas != 0U));
         }
-        in.ph[0].heat = d->heat; in.ph[0].ct_peak = d->ct_peak;
+        in.ph[0].heat = d->heat; in.ph[0].ct_peak = (uint8_t)(d->ct_peak | a->ct_peak_on);
         in.ph[0].slave_state = d->state; in.ph[0].state_valid = d->have;                    /* PWM off = load off */
         /* the Y and B slaves have no link yet: in Industrial and Domestic they count as missing, so those modes do not start */
-        in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : (now / 60000UL);       /* the log time: the real-time clock when it is set, else the running minutes */
+        in.setmode = MUI_SetModeOpen(&a->ui); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : a->run_min_total;       /* the log time: the real-time clock when it is set, else the running minutes */
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
         {   MSettings_t es = a->settings;                                                /* what the engine judges by */
             if (a->no_cuts != 0U) { es.ip_lv = 1U; es.ip_hv = 999U; es.op_lv = 1U; es.op_hv = 999U; }   /* TEST: no voltage limits */
@@ -208,7 +222,12 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     if (MUI_Take(&a->ui, MUI_REQ_CLEAR_LOG)) (void)MLog_Clear(&a->log);
     MUI_SetClock(&a->ui, &d->clock, d->clock_ok);                                       /* the Date and Time items start from the clock */
     a->t_now = now;
+    {   /* the running time: whole minutes while the contactor is closed (a step longer than 1 s, a stalled loop, adds only 1 s) */
+        uint32_t dt = (uint32_t)(now - a->t_run_last); a->t_run_last = now; if (dt > 1000U) dt = 1000U;
+        if (a->eout.contactor[0] != 0U) { a->run_acc_ms += dt; while (a->run_acc_ms >= 60000UL) { a->run_acc_ms -= 60000UL; a->run_min_total++; a->run_dirty = 1U; } }
+    }
     rec_update(a, d, now);
+    ct_peak_update(a, d, now);
     if (MUI_Take(&a->ui, MUI_REQ_VCAL_SAVE)) vcal_request(a, d, now);
     vcal_service(a, now);
     if (MUI_Take(&a->ui, MUI_REQ_SET_CLOCK)) { a->clk_set = *MUI_ClockToSet(&a->ui); a->clk_set_pending = 1U; }
@@ -293,10 +312,23 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     /* row 3: the slave's own state, fault code and IN_BAND */
     copy(t, "Slv st:0 F:00 inb:0"); t[7] = (char)('0' + (d->state % 10U)); put2(&t[11], d->fault); t[18] = (char)('0' + (d->in_band & 1U));
     if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U)) { char w[10]; copy(&t[14], "W:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (16U + i < 20U)) { t[16U + i] = w[i]; i++; } t[16U + i] = '\0'; } }
+    if (d->slave_wdg != 0U) { n = 0U; while (t[n] != '\0') n++; while (n < 19U) t[n++] = ' '; t[19] = 'w'; t[20] = '\0'; }      /* the slave's last reset was its watchdog */
     for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
 }
 
 /* ---------------- voltage calibration over the link ---------------- */
+void MApp_BootReset(MApp_t *a, uint8_t wdg)
+{
+    MLogRec_t r;
+    if (wdg == 0U) return;
+    r.type = (uint8_t)MLOG_T_WDG_RESET; r.phase = 3U; r.slave_code = 0U; r.vin_dv = 0U; r.vout_dv = 0U; r.load_da = 0U; r.run_min = a->run_min_total;
+    (void)MLog_Append(&a->log, &r);
+}
+
+void MApp_SetRunMinutes(MApp_t *a, uint32_t minutes) { a->run_min_total = minutes & 0x7FFFFFFFUL; a->run_acc_ms = 0U; a->run_dirty = 0U; }      /* the top bit of a log time marks a real date and time */
+uint32_t MApp_RunMinutes(const MApp_t *a) { return a->run_min_total; }
+uint8_t MApp_TakeRunDirty(MApp_t *a) { uint8_t d = a->run_dirty; a->run_dirty = 0U; return d; }
+
 uint8_t MApp_NextKId(MApp_t *a) { uint8_t id = a->k_id; a->k_id = (uint8_t)((a->k_id >= 255U) ? 1U : (a->k_id + 1U)); return id; }
 
 static void vcal_message(MApp_t *a, uint8_t status, int32_t value)

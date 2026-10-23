@@ -10,6 +10,8 @@
 #include "master_monitor.h"
 #if (MASTER_RTC_ENABLED == 1)
 #include "master_rtc.h"
+#include "master_iwdg.h"
+#include "m_hours.h"
 #endif
 #include "lcd.h"
 #include "link_v2.h"
@@ -76,7 +78,7 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
             if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_t_ms = now_ms; }
             else if (t2 == (int32_t)LINKV2_R) { g_mon.r_id = f2.u.r.id; g_mon.r_status = f2.u.r.status; g_mon.r_value = f2.u.r.value; g_mon.r_n++; }
-            else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; }
+            else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; g_mon.h_rst = f2.u.h.rst; }
         }
     }
     *rd = r;
@@ -504,6 +506,10 @@ void MasterMonitor_Run(void)
 extern uint32_t ADC_Read(uint32_t channel);       /* the original firmware's single-sample ADC read (main.c) */
 
 /* The CT, R phase: the average of MASTER_CT_SAMPLES readings (12 bit), times 16, for the application's calibration (zero and gain, in flash). */
+#if (MASTER_RTC_ENABLED == 1)
+static const MHoursIo_t s_hours_io = { MRtc_BkpRead, MRtc_BkpWrite };
+#endif
+
 static uint16_t ct_read_x16(void)
 {
     uint32_t sum = 0U, i;
@@ -520,13 +526,14 @@ void MasterApp_Run(void)
     static char   want[MON_LCD_ROWS][MON_LCD_COLS + 1U];
     MonLcd_t      lcd;
     uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
-    uint16_t      ct_x16 = 0U;
+    uint16_t      ct_x16 = 0U, ct_fast_max = 0U;
     MDateTime_t   clk = { 0U, 0U, 0U, 0U, 0U }; uint8_t clk_ok = 0U, rtc_src = 0U; uint16_t rtc_bd = 0U, rtc_ic = 0U; uint32_t t_clk = 0U;      /* the real-time clock as last read, and when */
     uint8_t       seq_tx = 0U, have_last = 0U; uint32_t r_seen = 0U;
     MCtlOut_t     last;
 
     HAL_GPIO_WritePin(GPIOA, CONT_1_Pin | CONT_2_Pin | CONT_3_Pin, GPIO_PIN_RESET);
     Mon_Reset();
+    g_mon.rst_wdg = (uint8_t)(((RCC->CSR & RCC_CSR_IWDGRSTF) != 0U) ? 1U : 0U); RCC->CSR |= RCC_CSR_RMVF;        /* why this start: read once, then clear the flags */
     MonLcd_Init(&lcd);
     last.run = 0U; last.clr = 0U; last.setv_dv = 0U; last.maxc_dv = 0U;
     MApp_Init(&app, MFlashG0_Iface(), MAPP_PAGE_SETTINGS_A, MAPP_PAGE_SETTINGS_B, MAPP_PAGE_LOG_A, MAPP_PAGE_LOG_B, HAL_GetTick());
@@ -538,6 +545,10 @@ void MasterApp_Run(void)
     MRtc_Init();                                                            /* the real-time clock: crystal + battery; a running clock is left alone */
 #endif
     MApp_InitCal(&app, MAPP_PAGE_CALIB_A, MAPP_PAGE_CALIB_B);
+#if (MASTER_RTC_ENABLED == 1)
+    MApp_SetRunMinutes(&app, MHours_Load(&s_hours_io));                          /* the running hours from the battery-backed registers (0 without a battery) */
+#endif
+    MApp_BootReset(&app, g_mon.rst_wdg);                                         /* a restart by the watchdog is logged */
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
     MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
     rx_start();
@@ -546,10 +557,19 @@ void MasterApp_Run(void)
 #endif
     if (MFlashG0_ImageEnd() > MFLASHG0_LOW) MUI_Notify(&app.ui, "Flash Full", "Settings Not Saved", HAL_GetTick());     /* the program reaches the storage pages: saving is refused, see MASTER_UI.md */
 
+#if (MASTER_WATCHDOG != 0)
+    (void)MasterIwdg_Start(MASTER_WATCHDOG_MS);        /* after ALL the slow initialisation; it cannot be stopped again */
+#endif
     for (;;)
     {
         uint32_t now;
+#if (MASTER_WATCHDOG != 0)
+        MasterIwdg_Kick();                             /* once per pass of the main loop, never from an interrupt */
+#endif
         rx_service();
+#if (MASTER_CT_PEAK == 1)
+        {   uint16_t cs = (uint16_t)(ADC_Read(ADC_CHANNEL_0) * 16U); if (cs > ct_fast_max) ct_fast_max = cs; }      /* every pass: the largest reading of the 10 ms step */
+#endif
         now = HAL_GetTick();
         if ((uint32_t)(now - t_step) >= 10U)
         {
@@ -576,6 +596,11 @@ void MasterApp_Run(void)
             {   /* the load current, every 200 ms (the averaging takes a few milliseconds: the receive DMA ring has 12.8 ms and the slave's frames come every 10 ms, so nothing is lost) */
                 t_ct = now; ct_x16 = ct_read_x16();
             }
+#if (MASTER_CT_PEAK == 1)
+            d.ct_max_x16 = ct_fast_max; ct_fast_max = 0U;
+#else
+            d.ct_max_x16 = 0U;
+#endif
             d.ct_x16 = ct_x16; d.ct_raw = (uint8_t)(t_ct != 0U); d.load_da = 0U; d.load_ok = 0U;
 #if (MASTER_RTC_ENABLED == 1)
             if (((uint32_t)(now - t_clk) >= 1000U) || (t_clk == 0U)) { t_clk = now; clk_ok = MRtc_Get(&clk); MRtc_Status(&rtc_src, &rtc_bd, &rtc_ic); }        /* about once a second */
@@ -583,6 +608,10 @@ void MasterApp_Run(void)
 #if (MASTER_HEAT_INPUT == 1)
             d.heat = key_down(MHEAT_PORT, MHEAT_PIN);                                  /* PA5 low = overheat */
 #endif
+#if (MASTER_RTC_ENABLED == 1)
+            if (MApp_TakeRunDirty(&app) != 0U) MHours_Save(&s_hours_io, MApp_RunMinutes(&app));      /* once a minute while the output is on */
+#endif
+            d.slave_wdg = (uint8_t)((g_mon.h_valid != 0U) && (g_mon.h_rst == 1U));       /* the slave's last reset was its watchdog */
             d.clock = clk; d.clock_ok = clk_ok; d.rtc_src = rtc_src; d.rtc_bdcr = rtc_bd; d.rtc_icsr = rtc_ic;
             MApp_Step(&app, key_down(MKEY_MENU_PORT, MKEY_MENU_PIN), key_down(MKEY_START_PORT, MKEY_START_PIN), key_down(MKEY_STOP_PORT, MKEY_STOP_PIN),
                       key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);

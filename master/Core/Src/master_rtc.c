@@ -92,3 +92,14 @@ void MRtc_Set(const MDateTime_t *t)
     if (wait_bit(&RTC->ICSR, ICSR_INITF, 1U, 100UL) != 0U) { RTC->TR = tr; RTC->DR = dr; RTC->ICSR &= ~ICSR_INIT; }
     RTC->WPR = 0xFFUL;
 }
+
+/* The battery-backed backup registers of the TAMP block (the running-hours counter lives in them). A switch, not pointer arithmetic: nothing depends on how the CMSIS structure is laid out. */
+uint32_t MRtc_BkpRead(uint8_t reg)
+{
+    switch (reg) { case 0U: return TAMP->BKP0R; case 1U: return TAMP->BKP1R; case 2U: return TAMP->BKP2R; case 3U: return TAMP->BKP3R; case 4U: return TAMP->BKP4R; default: return 0UL; }
+}
+
+void MRtc_BkpWrite(uint8_t reg, uint32_t value)
+{
+    switch (reg) { case 0U: TAMP->BKP0R = value; break; case 1U: TAMP->BKP1R = value; break; case 2U: TAMP->BKP2R = value; break; case 3U: TAMP->BKP3R = value; break; case 4U: TAMP->BKP4R = value; break; default: break; }
+}

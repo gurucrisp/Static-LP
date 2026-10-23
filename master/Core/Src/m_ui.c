@@ -69,7 +69,7 @@ static const char *full_text(uint8_t type)
     case MLOG_T_FLIP: return "Transformer Flip";     case MLOG_T_INRUSH: return "Inrush";
     case MLOG_T_PHASE_SEQ: return "Phase Sequence";  case MLOG_T_MAINS: return "Mains Unstable";
     case MLOG_T_POWER_STAGE: return "Power Stage Fault"; case MLOG_T_RETUNE: return "Re-tune Required";
-    case MLOG_T_LINK_LOST: return "Slave Link Lost"; default: return "";
+    case MLOG_T_LINK_LOST: return "Slave Link Lost"; case MLOG_T_WDG_RESET: return "Watchdog Reset"; default: return "";
     }
 }
 /* the short text after "R : " in three-phase: at most 16 characters */
@@ -84,6 +84,7 @@ static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
     case MLOG_T_FLIP: s = "TRF Flip"; break;        case MLOG_T_INRUSH: s = "INRUSH"; break;
     case MLOG_T_PHASE_SEQ: s = (seq == 2U) ? "PH SEQ SAME" : "PH SEQ REVERSE"; break;
     case MLOG_T_RETUNE: s = "RETUNE REQ"; break;    case MLOG_T_LINK_LOST: s = "LINK LOST"; break;
+    case MLOG_T_WDG_RESET: s = "WDG RESET"; break;
     case MLOG_T_MAINS: case MLOG_T_POWER_STAGE:
     {   uint32_t n = 0U; const char *p = (type == MLOG_T_MAINS) ? "MAINS F" : "PS F"; while (p[n] != '\0') { o[n] = p[n]; n++; }
         o[n++] = (char)('0' + ((code / 10U) % 10U)); o[n++] = (char)('0' + (code % 10U)); o[n] = '\0'; return; }

@@ -45,6 +45,7 @@
 #include "slave_meas.h"
 #include "slave_features.h"
 #include "slave_cal_hw.h"
+#include "slave_iwdg.h"
 #include "slave_link.h"
 #include "slave_power.h"       /* TIM1/TIM15 setup now lives here (htim1, htim15, POWER_*) */
 #if (SLAVE_POWER_STAGE >= 1)
@@ -398,8 +399,14 @@ int main(void)
 #endif
 #endif
 
+#if (SLAVE_WATCHDOG != 0) && (BRINGUP_REPORT_MODE == 2)
+    (void)SlaveIwdg_Start(SLAVE_WATCHDOG_MS);   /* after ALL the slow initialisation; it cannot be stopped again */
+#endif
     while (1)
     {
+#if (SLAVE_WATCHDOG != 0) && (BRINGUP_REPORT_MODE == 2)
+        SlaveIwdg_Kick();                       /* once per pass of the main loop, never from an interrupt */
+#endif
 #if (BRINGUP_REPORT_MODE == 2)
         /* Silent: only keep the measurement and the master link running. */
         SlaveMeas_Service();

@@ -41,6 +41,15 @@
  * 0 = no such check (every standalone build). The master-control configs set 1. */
 /* 1 = the voltage calibration over the link ($K CALV / CALO / CALR): single-point gain from the meter reading the master sends, only while the unit is STOPPED, averaged for 1 s, +-10 % of nominal, 50 V minimum,
  * stored in two CRC-protected copies in the last two flash pages (0x0803F000 and 0x0803F800). 0 = no calibration commands (they are answered UNKNOWN_CMD). The master-control configs set 1. */
+/* 1 = the independent watchdog (IWDG) runs: the main loop kicks it once per pass; if the loop stops for SLAVE_WATCHDOG_MS the CPU is reset, the timers and all pins go back to their reset state (pulses off) and the unit
+ * waits for the master again. The reason is reported to the master in $H (rst = 1). 0 = no watchdog. */
+#ifndef SLAVE_WATCHDOG
+#define SLAVE_WATCHDOG         1
+#endif
+#ifndef SLAVE_WATCHDOG_MS
+#define SLAVE_WATCHDOG_MS      500U      /* the longest a main-loop pass may take: the flash erase of a calibration save takes tens of ms; the real timeout is 0.75 to 1.3 times this (LSI spread) */
+#endif
+
 #ifndef SLAVE_VOLTAGE_CAL
 #define SLAVE_VOLTAGE_CAL      0
 #endif
@@ -62,7 +71,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       926UL
+#define SLAVE_FW_VERSION       927UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

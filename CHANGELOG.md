@@ -2,7 +2,17 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.26 — the fast output-high cut margin is 30 V (current)
+## v0.9.27 — PHASE 1: watchdogs, CT peak backup, running hours (current)
+* **Independent watchdog on both boards** (`slave_iwdg`, `master_iwdg`: direct register access, no HAL IWDG module needed). The slave resets if its main loop stops for `SLAVE_WATCHDOG_MS` 500 ms (the timers and pins return to their reset state: pulses off; it waits for the master again) and reports it to the master in `$H`
+  (a `w` in the corner of the diagnostics page, row 3). The master resets if its loop stops for `MASTER_WATCHDOG_MS` 1000 ms (the contactor outputs go low) and logs **"Watchdog Reset"** (new log event type 14) at the next start. Both can be switched off (`SLAVE_WATCHDOG 0`, `MASTER_WATCHDOG 0`).
+  Started after all slow initialisation, kicked once per pass of the main loop, never from an interrupt; a debugger halt does not reset the unit.
+* **CT peak backup (master):** the CT channel is sampled every pass of the main loop; a reading above 3 x the Overload Current, or at the ADC full scale (4000 counts), held continuously for 20 ms is an Inrush (retry rules as the slave's own). `MASTER_CT_PEAK 0` switches it off.
+  The condition is defined in TIME (20 ms), not in calls (a test found the first version counted calls: the glue calls the application every 10 ms, the tests every 5 ms).
+* **Running hours that survive power-off:** the minutes the output has been ON are kept in the battery-backed TAMP registers (two redundant copies, the older copy is rewritten first, so a power cut at any point loses at most one minute). They are the log time while the clock is not set (it was minutes since power-up). Needs the RTC battery.
+* Tests: watchdog drivers 879, running-hours counter 134 (a power cut after every write, 20000 random cuts), application 305, RTC 22. Mutation checks: 12 of 12. A real weakness found and fixed: the first save order could lose two minutes at two power cuts in a row.
+* NOT compiled here (they need the HAL / CMSIS headers): the glue in master_monitor.c and slave main.c, `MRtc_BkpRead/Write` (TAMP), the IWDG register access against the real part. NOT tried on hardware. See docs/PHASE1_ROBUSTNESS.md for the bench checks.
+
+## v0.9.26 — the fast output-high cut margin is 30 V
 * Report: on a high voltage the unit was cut at once instead of waiting for the Volt Cut Delay. Cause: the master's fast output cut (v0.9.15) opened the contactor when the output was more than 15 V above the O/P HV setting for 0.2 s. A variac step up passes straight through the series transformer, so the output is above that for the 0.5 to 1.5 s the correction needs to bring it back.
 * `MF_OP_HV_FAST_V` 15 -> 30 V (approved): the fast cut is now more than 30 V above O/P HV (O/P HV 250 V: above 280 V, the same point where the slave's own 280 V output guard stops the unit anyway). Smaller over-voltages wait for the Volt Cut Delay. Not changed: the slave's own limits (output 280 V = F06, input window 80 to 300 V = F09) stop at once, as before.
 * Tests: the fast-cut tests rewritten (281 V cuts, exactly 280 V waits, 266 V no longer cuts and a correction in time prevents any trip, the setting moves the cut); the old 15 V fails them.

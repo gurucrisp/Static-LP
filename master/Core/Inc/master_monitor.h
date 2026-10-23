@@ -68,6 +68,15 @@ extern "C" {
 
 /* The OVERHEAT input on PA5 (m_board.h MHEAT_PORT / MHEAT_PIN): active LOW, external pull-up on the board. 1 = read it (the master configures the pin as a plain input without a pull). The pin must stay low for the "Overheat Trip Delay"
  * (Set-Mode item 12) before the unit trips; after it has been high for the Restart Time the unit restarts by itself (Auto restart mode), or on START (Manual); three trips within 30 minutes need START. 0 = no overheat input (the flag is never set). */
+/* 1 = the independent watchdog (IWDG) runs: the main loop kicks it once per pass; if it stops for MASTER_WATCHDOG_MS the CPU is reset: the contactor outputs go low (open) and the unit starts again. A reset by the watchdog is
+ * logged ("Watchdog Reset") at the next start. 0 = no watchdog. */
+#define MASTER_WATCHDOG         1
+#define MASTER_WATCHDOG_MS      1000U    /* the longest a main-loop pass may take: a flash erase takes tens of ms, the RTC start-up wait (up to 3 s) is BEFORE the watchdog starts */
+
+/* 1 = the CT peak backup: the CT channel is also sampled once per pass of the main loop and the largest reading of each 10 ms step goes to the application, which treats more than 3 x the Overload Current (or the ADC full scale) for 20 ms
+ * as an Inrush. 0 = off (the slave's own over-current protection stays the only one). */
+#define MASTER_CT_PEAK          1
+
 #define MASTER_HEAT_INPUT       0        /* OFF since v0.9.21: with the pin read as low (floating, no pull-up fitted, or another function) the master saw permanent overheat and would not start. Set 1 only after checking PA5 with a meter: it must read HIGH (3.3 V) when cool. */
 
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
@@ -105,6 +114,8 @@ typedef struct
     uint16_t     h_win_lo_dv, h_win_hi_dv, h_vout_max_dv;
     uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
     uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
+    uint8_t      rst_wdg;            /* this master was restarted by its watchdog (RCC reset flags, read at start) */
+    uint8_t      h_rst;              /* the slave's reset cause from its last $H: 1 = its watchdog */
     int32_t      r_value;
     uint32_t     r_n;                /* how many $R frames arrived */
 } MasterMon_t;

@@ -11,4 +11,7 @@ extern RCC_TypeDef rcc_m; extern PWR_TypeDef pwr_m; extern RTC_TypeDef rtc_m;
 #define PWR (&pwr_m)
 #define RTC (&rtc_m)
 uint32_t HAL_GetTick(void);
+typedef struct { volatile uint32_t BKP0R, BKP1R, BKP2R, BKP3R, BKP4R; } TAMP_TypeDef;
+extern TAMP_TypeDef tamp_model;
+#define TAMP (&tamp_model)
 #endif

@@ -53,6 +53,8 @@ typedef struct
     MDateTime_t clock;           /* the real-time clock, read by the glue about once a second            */
     uint8_t  clock_ok;           /* the clock has been set (the RTC never returns 2000, and the battery kept it) */
     uint8_t  rtc_src;            /* the RTC clock source: 0 none, 1 crystal (LSE), 2 internal LSI */
+    uint8_t  slave_wdg;          /* the slave's last reset (from its $H) was its watchdog: a "w" on the diagnostics page */
+    uint16_t ct_max_x16;         /* the largest CT reading (12 bit x 16) of the fast samples since the last step; 0 = not sampled: the CT peak backup is idle */
     uint16_t rtc_bdcr, rtc_icsr; /* raw status bits, for the Clock page */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint8_t  wait_valid;         /* the slave is in its start-up wait and says what for (its $S flags)  */
@@ -79,6 +81,10 @@ typedef struct
     uint8_t      lim_set;
     uint8_t      retries_cfg;
     uint8_t      k_id;                 /* the next $K id, 1..255 */
+    uint8_t      ct_hi, ct_peak_on;    /* CT peak backup: the reading is above the limit now; the debounced condition that the engine sees as an Inrush */
+    uint32_t     ct_hi_t0;             /* when the reading went above the limit */
+    uint32_t     run_min_total, run_acc_ms, t_run_last;   /* running time: minutes the output has been ON in all (loaded at start, saved by the glue), the milliseconds towards the next minute, the last step */
+    uint8_t      run_dirty;                               /* a whole minute was added: the glue saves the counter */
     uint8_t      rec_active, rec_have; /* response timer: an excursion (output more than 5 V from the set voltage) is being timed / one has been timed */
     uint16_t     rec_peak, rec_s10, rec_pk_v;   /* the largest error so far (tenths of a volt); the last recovery time (tenths of a second); its largest error (volts) */
     uint32_t     rec_t0;
@@ -119,8 +125,17 @@ typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /*
 #define MAPP_KCMD_CALV  1U            /* num = the true input voltage, tenths of a volt   */
 #define MAPP_KCMD_CALO  2U            /* num = the true output voltage, tenths of a volt  */
 #define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
+/* CT PEAK BACKUP (approved: the slave's IGBT over-current is primary, the master's CT the backup): a CT reading above 3 x the Overload Current, or at the full scale of the ADC, for 20 ms in a row is an Inrush
+ * (retry rules as for the slave's own). The CT here is an averaged level, not the instantaneous current: the glue samples it every pass of the main loop and passes the largest reading of each step. */
+#define MAPP_CT_PEAK_FACTOR    3U
+#define MAPP_CT_FULL_X16       (4000U * 16U)
+#define MAPP_CT_PEAK_MS        20UL    /* the condition must hold continuously for this long (in time, not in calls: the glue calls the application every 10 ms, the tests every 5 ms) */
 #define MAPP_VCAL_TIMEOUT_MS   3000UL /* the slave averages for 1 s: it has this long to answer                                   */
 #define MAPP_VCAL_RETRY_MS     200UL  /* a $K is repeated (same id) every 200 ms, three times in all                               */
+void    MApp_SetRunMinutes(MApp_t *a, uint32_t minutes);                      /* once at start-up: the counter loaded from the battery-backed registers */
+uint32_t MApp_RunMinutes(const MApp_t *a);                                   /* the minutes the output has been ON in all */
+uint8_t MApp_TakeRunDirty(MApp_t *a);                                        /* 1 once per minute while the output is on: save MApp_RunMinutes() */
+void    MApp_BootReset(MApp_t *a, uint8_t wdg);                               /* once at start-up, after the log is open: a restart by the watchdog is logged ("Watchdog Reset") */
 uint8_t MApp_NextKId(MApp_t *a);                                              /* ONE id counter for every $K (a repeated id is a retry for the slave): HELLO and calibration use it */
 uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now);             /* 1 = a $K frame is due now (first send or a retry): build and send it */
 void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived */
