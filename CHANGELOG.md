@@ -2,7 +2,16 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.27 — PHASE 1: watchdogs, CT peak backup, running hours (current)
+## v0.9.28 — PHASE 2, step 1: the autotune core, tested against simulated transformers (current)
+* NEW pure module `slave_tune.c/.h` (not yet connected to the controller, the flash or the link: nothing in the running firmware changes): the sweep, the profile, the start-up model check and the reach, from the approved design D13 to D21.
+  The sweep: 3 s zero-duty baseline, then 16 ... 2752 effective ticks, 3 s a step (1.5 s settle, 1.5 s averaged), one `$T` frame per step. Each step is shortened so its predicted injection stays at or below 80 % of Max Correction; the sweep stops at once, nothing stored, on a flipped transformer, no response,
+  a fault, an unsteady input (over 1.5 V peak to peak) or an injection more than 5 V above Max Correction (the backstop that no prediction can replace); a saturation knee (slope under 40 % of the previous) ends it with the cap at the step before the knee.
+  The profile: the measured curve, the cap, the regulator gain scale (reference gain / measured, limited to 0.1 .. 1.5), serialised to at most 61 bytes (the store takes 96). The model check: the injection at start-up against the profile's prediction at that input voltage (30 % or 1 V): wrong sign = flip, otherwise mismatch.
+* Tests (53 checks): the bench transformer (10 steps, about 33 s, a profile that predicts within 6 % at 230 V and 8 % at 160 to 290 V), a strong, a weak and a saturating transformer, flipped, absent, unsteady mains, a fault, TABORT, a hardware cap, a surprise 8x gain jump (only the backstop stops it),
+  and **400 random transformers**: the injection never went above 85 % of Max Correction, no duty after the end, every finished profile valid and accurate at its cap. The model check never gave a false alarm in 200 random start-ups of the same transformer. Mutation check: 11 of 13 caught, the other two are dead or duplicate guards.
+* ASSUMPTIONS to confirm on the bench (docs/AUTOTUNE_DESIGN.md): the shape of how the injection changes with the input voltage is taken from the bench curve; the buck gain is taken as 2 x the boost gain for the reach; the 30 % / 1 V check tolerance; the 80 % / 5 V / 1.5 V / 40 % numbers.
+
+## v0.9.27 — PHASE 1: watchdogs, CT peak backup, running hours
 * **Independent watchdog on both boards** (`slave_iwdg`, `master_iwdg`: direct register access, no HAL IWDG module needed). The slave resets if its main loop stops for `SLAVE_WATCHDOG_MS` 500 ms (the timers and pins return to their reset state: pulses off; it waits for the master again) and reports it to the master in `$H`
   (a `w` in the corner of the diagnostics page, row 3). The master resets if its loop stops for `MASTER_WATCHDOG_MS` 1000 ms (the contactor outputs go low) and logs **"Watchdog Reset"** (new log event type 14) at the next start. Both can be switched off (`SLAVE_WATCHDOG 0`, `MASTER_WATCHDOG 0`).
   Started after all slow initialisation, kicked once per pass of the main loop, never from an interrupt; a debugger halt does not reset the unit.

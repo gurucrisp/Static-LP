@@ -1,0 +1,186 @@
+/* Tests for the transformer autotune (slave_tune): the sweep against a SIMULATED FAMILY of transformers (gain, dead time, saturation knee, flipped, absent, noisy, unsteady input, faults), the profile, the model check, the reach. */
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include "slave_tune.h"
+static int tot = 0, bad = 0;
+#define CHECK(c, ...) do { tot++; if (!(c)) { bad++; printf("      FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+static uint32_t rs = 4242U;
+static double rnd(void) { rs = rs * 1664525U + 1013904223U; return (double)((rs >> 8) & 0xFFFFFFU) / 8388608.0 - 1.0; }       /* -1..1 */
+static double gauss(void) { return (rnd() + rnd() + rnd()) / 1.732; }                                                           /* about unit variance */
+
+typedef struct
+{
+    double k;            /* gain against the reference curve (1 = the bench transformer) */
+    double dead;         /* dead time, ticks: nothing is injected below it */
+    double knee;         /* ticks where the slope collapses (0 = no knee) */
+    double knee_slope;   /* the slope above the knee, fraction */
+    double sign;         /* +1, or -1 = connected backwards, 0 = no transformer */
+    double noise;        /* volts, on every vout - vin sample */
+    double offset;       /* sensor offset vout - vin at rest */
+    double vin;          /* mains */
+    double drift;        /* slow random walk of the mains, volts per second */
+    double jump_t, jump_v;  /* the mains steps by jump_v at jump_t ms (0 = never) */
+    double tau;          /* output lag, seconds */
+    double superlin;     /* the real injection is this much larger than the linear model above 600 ticks (1 = none) */
+    double jump_at, jump_gain;   /* above jump_at effective ticks the gain suddenly becomes jump_gain times larger (0 = never): a surprise that no step prediction can foresee */
+} Plant_t;
+static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; return p; }
+
+static double true_inj(const Plant_t *p, double ticks, double vin)
+{
+    double eff = (ticks > p->dead) ? (ticks - p->dead) : 0.0, v;
+    if (p->knee > 0.0 && eff > p->knee) eff = p->knee + p->knee_slope * (eff - p->knee);
+    if (p->jump_at > 0.0 && eff > p->jump_at) eff = p->jump_at + p->jump_gain * (eff - p->jump_at);
+    v = p->sign * p->k * (double)Tune_RefG((float)vin) * eff;
+    if (p->superlin != 1.0 && ticks > 600.0) v *= 1.0 + (p->superlin - 1.0) * (ticks - 600.0) / 2000.0;
+    return v;
+}
+
+typedef struct { uint8_t result; uint32_t ms; int frames, steps; double max_inj, max_ticks_over; uint8_t profile_ok; TuneProfile_t prof; uint8_t request_after_done; TuneFrame_t last; } Run_t;
+
+/* run one sweep: abort_at / fault_at in ms (0 = never) */
+static Run_t sim(Plant_t p, double maxc, uint16_t hw_cap, uint32_t abort_at, uint32_t fault_at, uint32_t limit_ms)
+{
+    Run_t r; TuneIn_t in; TuneOut_t out; TuneFrame_t f; double inj = 0.0, vin = p.vin; uint32_t t = 100000U, t0 = t; uint16_t req = 0U;
+    memset(&r, 0, sizeof r); memset(&in, 0, sizeof in); memset(&out, 0, sizeof out);
+    if (Tune_Start((float)maxc, t) != 0U) { r.result = 255U; return r; }
+    while ((t - t0) < limit_ms)
+    {
+        double target, a = 1.0 - exp(-0.01 / p.tau);
+        t += 10U; vin += p.drift * 0.01 * rnd();
+        if (p.jump_t > 0.0 && (t - t0) == (uint32_t)p.jump_t) vin += p.jump_v;
+        target = true_inj(&p, (double)req, vin); inj += (target - inj) * a;
+        if (fabs(inj) > r.max_inj) r.max_inj = fabs(inj);
+        if (inj > r.max_inj) r.max_inj = inj;
+        if ((double)req > (double)hw_cap) r.max_ticks_over = (double)req - (double)hw_cap;
+        in.vin = (float)(vin + 0.05 * gauss()); in.vout = (float)(vin + p.offset + inj + p.noise * gauss()); in.meas_valid = 1U; in.vin_in_window = 1U;
+        in.fault = (uint8_t)((fault_at != 0U && (t - t0) >= fault_at) ? 1U : 0U); in.maxc_v = (float)maxc; in.hw_cap_ticks = hw_cap;
+        if (abort_at != 0U && (t - t0) == abort_at) Tune_Abort();
+        Tune_Service(t, &in, &out); req = out.request_ticks;
+        while (Tune_TakeFrame(&f)) { r.frames++; if (f.result == TUNE_R_STEP) r.steps++; r.last = f; }
+        if (out.done) { r.result = r.last.result; r.ms = t - t0; r.profile_ok = Tune_GetProfile(&r.prof);
+            { uint32_t k; for (k = 0U; k < 50U; k++) { Tune_Service(t + 10U * (k + 1U), &in, &out); if (out.request_ticks != 0U || out.active) r.request_after_done = 1U; } }
+            return r; }
+    }
+    r.result = 254U; r.ms = limit_ms; return r;
+}
+
+int main(void)
+{
+    Plant_t p; Run_t r; double e; int i;
+    /* ---- the nominal transformer (the bench one), Max Correction 120 V so that the whole list fits: finishes, about 33 s, a valid profile ---- */
+    p = nominal(); r = sim(p, 120.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && Tune_ProfileValid(&r.prof), "the nominal transformer: FINISHED with a valid profile (result %u)", r.result);
+    CHECK(r.ms >= 31000U && r.ms <= 40000U, "it takes about 33 s: 3 s baseline and 10 steps of 3 s (%u ms)", (unsigned)r.ms);
+    CHECK(r.steps == 10 && r.frames == 11, "one $T frame per step and a final one (%d steps, %d frames)", r.steps, r.frames);
+    CHECK(r.request_after_done == 0U, "after the end nothing is requested and it is no longer active");
+    CHECK(r.prof.kib_m >= 940U && r.prof.kib_m <= 1060U && r.prof.kib_m == r.prof.kiu_m, "gain scale about 1.0 for the bench transformer (%u)", r.prof.kib_m);
+    CHECK(r.prof.cap_ticks == 2752U && r.prof.knee == 0U, "no knee: the cap is at the end of the list (%u)", r.prof.cap_ticks);
+    CHECK(r.max_inj <= 0.85 * 120.0, "the injection never went above 85 %% of Max Correction (%.1f V of 120 V)", r.max_inj);
+    for (i = 0, e = 0.0; i < 6; i++) { double t_ = 100.0 + 450.0 * i, v = (double)Tune_PredictDv(&r.prof, (float)t_, 230.0f), tr = true_inj(&p, t_, 230.0); if (tr > 3.0 && fabs(v - tr) / tr > e) e = fabs(v - tr) / tr; }
+    CHECK(e < 0.06, "the profile predicts the injection at 230 V within 6 %% over its range (worst %.1f %%)", e * 100.0);
+    for (i = 0, e = 0.0; i < 4; i++) { double vv[4] = { 160.0, 190.0, 260.0, 290.0 }, tr = true_inj(&p, 1500.0, vv[i]), v = (double)Tune_PredictDv(&r.prof, 1500.0f, (float)vv[i]); if (fabs(v - tr) / tr > e) e = fabs(v - tr) / tr; }
+    CHECK(e < 0.08, "and at other input voltages (160 to 290 V) within 8 %% by the shape of the bench curve (worst %.1f %%)", e * 100.0);
+    /* ---- the 80 % rule with Max Correction 60 V: the sweep stops at about 48 V (about 1560 ticks), after 8 steps, the last one shortened ---- */
+    p = nominal(); r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.steps == 8 && r.prof.cap_ticks >= 1400U && r.prof.cap_ticks <= 1700U && r.max_inj <= 0.85 * 60.0 && r.ms >= 24000U && r.ms <= 30000U,
+          "Max Correction 60 V: FINISHED after %d steps at a cap of %u ticks, the injection stays at or below 80 %% of 60 V (%.1f V), %u ms", r.steps, r.prof.cap_ticks, r.max_inj, (unsigned)r.ms);
+    /* ---- a strong transformer: the 80 % rule shortens the last step, the cap is lower ---- */
+    p = nominal(); p.k = 2.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.prof.cap_ticks < 2752U && r.max_inj <= 0.85 * 60.0, "k = 2: FINISHED, the cap is below the list end (%u) and the injection stays at or below 80 %% of 60 V (%.1f V)", r.prof.cap_ticks, r.max_inj);
+    CHECK(r.prof.kib_m >= 440U && r.prof.kib_m <= 560U, "its gain scale is about 0.5 (%u)", r.prof.kib_m);
+    /* ---- a weak transformer: the whole list, the scale limit 1.5 ---- */
+    p = nominal(); p.k = 0.4; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.prof.cap_ticks == 2752U && r.prof.kib_m == 1500U, "k = 0.4: the whole list, the scale is limited to 1.5 (cap %u, scale %u)", r.prof.cap_ticks, r.prof.kib_m);
+    /* ---- a saturating transformer: the knee ends the sweep, the cap is the step before it ---- */
+    p = nominal(); p.knee = 800.0; p.knee_slope = 0.15; r = sim(p, 80.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.prof.knee == 1U && r.prof.cap_ticks <= 1100U && r.prof.cap_ticks >= 500U, "a knee at 800 ticks: FINISHED with the knee flag, the cap is the step before it (%u)", r.prof.cap_ticks);
+    /* ---- flipped: stops early, nothing stored, little wrong-way injection ---- */
+    p = nominal(); p.sign = -1.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FLIPPED && !r.profile_ok && r.ms < 25000U && r.max_inj < 4.0, "a flipped transformer: FLIPPED, nothing stored, stopped after %u ms with at most %.1f V the wrong way", (unsigned)r.ms, r.max_inj);
+    /* ---- nothing connected ---- */
+    p = nominal(); p.sign = 0.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_NO_RESPONSE && !r.profile_ok, "no transformer: NO_RESPONSE, nothing stored");
+    /* ---- Max Correction not set ---- */
+    CHECK(Tune_Start(0.0f, 1000U) == 1U && Tune_Running() == 0U, "Max Correction 0: refused, nothing started");
+    /* ---- a second start while running ---- */
+    (void)Tune_Start(60.0f, 1000U); CHECK(Tune_Start(60.0f, 1010U) == 2U, "a start while running is refused"); Tune_Abort();
+    /* ---- unsteady input ---- */
+    p = nominal(); p.jump_t = 20000.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "the mains jumps 4 V in the middle of a step: UNSTEADY, nothing stored (result %u)", r.result);
+    p = nominal(); p.drift = 40.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_UNSTEADY, "a mains that never settles: UNSTEADY after waiting (result %u, %u ms)", r.result, (unsigned)r.ms);
+    p = nominal(); p.jump_t = 1500.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED, "a jump during the first baseline window only restarts the window: the tune still finishes (result %u)", r.result);
+    /* ---- faults and the master ---- */
+    p = nominal(); r = sim(p, 60.0, 2752U, 0U, 14000U, 120000U);
+    CHECK(r.result == TUNE_R_ABORTED && r.request_after_done == 0U && !r.profile_ok, "a fault (FLT, break, over-voltage) at 14 s: ABORTED, duty to zero at once, nothing stored");
+    p = nominal(); r = sim(p, 60.0, 2752U, 17000U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_BY_MASTER && r.request_after_done == 0U && !r.profile_ok, "TABORT at 17 s: BY_MASTER, nothing stored");
+    p = nominal(); p.superlin = 6.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK((r.result == TUNE_R_ABORTED || r.result == TUNE_R_FINISHED) && r.max_inj <= 60.0 + 5.0 + 3.0, "a transformer that injects 6 times more than the model predicts: the over-voltage backstop holds it (%.1f V of 60 V, result %u)", r.max_inj, r.result);
+    /* ---- the surprise: the gain jumps 8 times above 500 ticks. The step prediction cannot see it: the over-voltage backstop is the only thing that stops the injection ---- */
+    p = nominal(); p.jump_at = 500.0; p.jump_gain = 8.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_ABORTED && !r.profile_ok && r.max_inj <= 60.0 + 5.0 + 6.0 && r.request_after_done == 0U,
+          "the gain jumps 8 x: ABORTED by the over-voltage backstop, nothing stored, the injection peaked at %.1f V (Max Correction 60 V plus 5 V of margin plus one sample's rise)", r.max_inj);
+    /* ---- the hardware cap is never exceeded ---- */
+    p = nominal(); p.k = 0.4; r = sim(p, 60.0, 1000U, 0U, 0U, 120000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.prof.cap_ticks <= 1000U && r.max_ticks_over == 0.0, "a hardware cap of 1000 ticks: never exceeded, the cap is at most 1000 (%u)", r.prof.cap_ticks);
+    /* ---- a family of 400 random transformers: the safety properties hold for every one ---- */
+    { int ok_inj = 1, ok_valid = 1, ok_after = 1, ok_cap = 1, ok_pred = 1, n_fin = 0, n_other = 0, worst_i = -1; double worst = 0.0;
+      for (i = 0; i < 400; i++)
+      {
+          Plant_t q = nominal(); double maxc = 20.0 + 100.0 * (rnd() * 0.5 + 0.5);
+          q.k = 0.3 + 2.7 * (rnd() * 0.5 + 0.5); q.dead = 120.0 * (rnd() * 0.5 + 0.5); q.noise = 0.05 + 0.15 * (rnd() * 0.5 + 0.5); q.offset = 0.5 * rnd(); q.vin = 120.0 + 170.0 * (rnd() * 0.5 + 0.5);
+          if (rnd() > 0.6) { q.knee = 300.0 + 1500.0 * (rnd() * 0.5 + 0.5); q.knee_slope = 0.05 + 0.3 * (rnd() * 0.5 + 0.5); }
+          r = sim(q, maxc, 2752U, 0U, 0U, 120000U);
+          if (r.max_inj > 0.85 * maxc) { ok_inj = 0; if (r.max_inj / maxc > worst) { worst = r.max_inj / maxc; worst_i = i; } }
+          if (r.request_after_done != 0U) ok_after = 0;
+          if (r.result == TUNE_R_FINISHED)
+          {
+              n_fin++; if (!r.profile_ok || !Tune_ProfileValid(&r.prof)) ok_valid = 0;
+              if (r.prof.cap_ticks > 2752U) ok_cap = 0;
+              { double tc = true_inj(&q, (double)r.prof.cap_ticks, q.vin), pc = (double)Tune_PredictDv(&r.prof, (float)r.prof.cap_ticks, (float)q.vin); if (tc > 3.0 && fabs(pc - tc) / tc > 0.10) ok_pred = 0; }
+          }
+          else n_other++;
+      }
+      CHECK(ok_inj, "400 random transformers: the injection never went above 85 %% of Max Correction (worst %.0f %% at #%d)", worst * 100.0, worst_i);
+      CHECK(ok_after && ok_valid && ok_cap, "no duty after the end, every finished profile valid, no cap above the hardware limit");
+      CHECK(ok_pred, "every finished profile predicts the injection at its own cap within 10 %%");
+      CHECK(n_fin > 300, "most of the family finishes (%d of 400; the others stopped on the 80 %% / noise rules)", n_fin); (void)n_other; }
+    /* ---- serialisation ---- */
+    p = nominal(); r = sim(p, 120.0, 2752U, 0U, 0U, 120000U);
+    { uint8_t buf[96]; TuneProfile_t q; uint32_t n = Tune_Serialize(&r.prof, buf, sizeof buf);
+      CHECK(n == TUNE_BYTES(r.prof.n) && n <= 96U, "a profile serialises to %u bytes (the store takes 96)", (unsigned)n);
+      CHECK(Tune_Deserialize(buf, n, &q) == 1U && q.cap_ticks == r.prof.cap_ticks && q.kib_m == r.prof.kib_m && q.n == r.prof.n && q.ticks[3] == r.prof.ticks[3] && q.dv_dv[5] == r.prof.dv_dv[5], "and comes back identical");
+      CHECK(Tune_Serialize(&r.prof, buf, 20U) == 0U, "no room: nothing written");
+      CHECK(Tune_Deserialize(buf, n - 1U, &q) == 0U && Tune_Deserialize(buf, 5U, &q) == 0U, "a truncated record is rejected");
+      buf[1] = 13U; CHECK(Tune_Deserialize(buf, n, &q) == 0U, "a point count above 12 is rejected"); buf[1] = r.prof.n;
+      { TuneProfile_t b = r.prof; b.cap_ticks = 0U; CHECK(Tune_ProfileValid(&b) == 0U, "cap 0 is invalid"); b = r.prof; b.kib_m = 50U; CHECK(Tune_ProfileValid(&b) == 0U, "a gain scale of 0.05 is invalid"); b = r.prof; b.kiu_m = 2000U; CHECK(Tune_ProfileValid(&b) == 0U, "a gain scale of 2.0 is invalid");
+        b = r.prof; b.ticks[2] = b.ticks[1]; CHECK(Tune_ProfileValid(&b) == 0U, "ticks that do not increase are invalid"); b = r.prof; b.version = 9U; CHECK(Tune_ProfileValid(&b) == 0U, "an unknown version is invalid"); b = r.prof; b.n = 2U; CHECK(Tune_ProfileValid(&b) == 0U, "fewer than 3 points is invalid"); } }
+    /* ---- the model check ---- */
+    { TuneProfile_t pr = r.prof; double tr = true_inj(&p, 1000.0, 230.0), tr2 = true_inj(&p, 1000.0, 180.0); int i2, okc = 1;
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)tr) == TUNE_CHECK_OK, "the same transformer at 230 V: OK");
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 180.0f, (float)tr2) == TUNE_CHECK_OK, "and at 180 V (the shape of the bench curve carries it): OK");
+      for (i2 = 0; i2 < 200; i2++) { double v = 110.0 + 180.0 * (rnd() * 0.5 + 0.5), tt = 300.0 + 1500.0 * (rnd() * 0.5 + 0.5), m = true_inj(&p, tt, v) + 0.1 * gauss(); if (Tune_ModelCheck(&pr, (float)tt, (float)v, (float)m) != TUNE_CHECK_OK) okc = 0; }
+      CHECK(okc, "200 random start-ups of the SAME transformer (110 to 290 V, 300 to 1800 ticks, 0.1 V of noise): never a false alarm");
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)(tr * 0.60)) == TUNE_CHECK_MISMATCH, "a transformer with 60 %% of the gain: MISMATCH");
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)(tr * 1.50)) == TUNE_CHECK_MISMATCH, "one with 150 %% of the gain: MISMATCH");
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)(tr * 0.85)) == TUNE_CHECK_OK && Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)(tr * 1.15)) == TUNE_CHECK_OK, "+-15 %% is inside the tolerance");
+      CHECK(Tune_ModelCheck(&pr, 1000.0f, 230.0f, (float)(-tr)) == TUNE_CHECK_FLIP, "the wrong sign: FLIP");
+      CHECK(Tune_ModelCheck(&pr, 20.0f, 230.0f, 0.0f) == TUNE_CHECK_SKIP, "too little injection to judge (20 ticks): SKIP"); }
+    /* ---- the reach ---- */
+    { double rl = (double)Tune_ReachLoDv(&r.prof, 230.0f) / 10.0, rh = (double)Tune_ReachHiDv(&r.prof, 230.0f) / 10.0; TuneProfile_t weak; Run_t rw; Plant_t pw = nominal(); pw.k = 0.5; rw = sim(pw, 60.0, 2752U, 0U, 0U, 120000U); weak = rw.prof;
+      CHECK(rl > 100.0 && rl < 230.0 && 230.0 - rl >= 40.0 && rh > 230.0 && rh <= 400.0, "the reach for a 230 V set voltage: from %.1f V to %.1f V", rl, rh);
+      { double chk = rl + true_inj(&p, (double)r.prof.cap_ticks, rl); CHECK(fabs(chk - 230.0) < 4.0, "at the lowest input the cap really reaches the set voltage (%.1f V)", chk); }
+      CHECK((double)Tune_ReachLoDv(&weak, 230.0f) / 10.0 > rl, "a weaker transformer reaches less low (%.1f V against %.1f V)", (double)Tune_ReachLoDv(&weak, 230.0f) / 10.0, rl); }
+    /* ---- the frames ---- */
+    p = nominal(); r = sim(p, 120.0, 2752U, 0U, 0U, 120000U);
+    CHECK(r.last.result == TUNE_R_FINISHED && r.last.ticks >= 2000U && r.last.vin_dv > 2200U && r.last.vin_dv < 2400U, "the last frame says FINISHED with the last step's ticks and the input (ticks %u, vin %u)", r.last.ticks, r.last.vin_dv);
+    printf("  autotune: the sweep against 400+ simulated transformers (gain, dead time, knee, noise, flipped, absent, unsteady, faults), the profile, the model check, the reach\n");
+    printf("  %d checks, %d failures\n  RESULT: %s\n", tot, bad, bad ? "FAILURES" : "ALL PASSED");
+    return bad ? 1 : 0;
+}
