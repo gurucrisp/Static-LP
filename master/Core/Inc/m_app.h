@@ -79,6 +79,9 @@ typedef struct
     uint8_t      lim_set;
     uint8_t      retries_cfg;
     uint8_t      k_id;                 /* the next $K id, 1..255 */
+    uint8_t      rec_active, rec_have; /* response timer: an excursion (output more than 5 V from the set voltage) is being timed / one has been timed */
+    uint16_t     rec_peak, rec_s10, rec_pk_v;   /* the largest error so far (tenths of a volt); the last recovery time (tenths of a second); its largest error (volts) */
+    uint32_t     rec_t0;
     uint8_t      vcal_wait, vcal_due, vcal_id, vcal_cmd, vcal_ch, vcal_tx_n;   /* a calibration command is out: waiting for its $R; a (re)send is due; its id, command, channel, transmissions so far */
     int32_t      vcal_num; char vcal_letter; uint32_t vcal_t0, vcal_t_tx, t_now;
     uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */

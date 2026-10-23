@@ -23,3 +23,21 @@ At 150 ms the transformer-flip tests failed (5.2 V instead of under 5 V of wrong
 2. The fast-correction config (60 V/s): the same steps. Any F02 / F01 that did not happen before: go back.
 3. Only if both are quiet: 100 V/s (`#define CTRL_GUARD_RESTART_SLOPE_VPS 100.0f` in the config).
 The simulation cannot tell what a real transformer and IGBT stage suffer from a faster ramp: the bench has the last word.
+
+## v0.9.25: the response timer and the second profile
+**Measure instead of guessing.** LOG, MENU x2 (the diagnostics page): row 0 shows `S:Y E:Y H:Y 3.4s/41V` after the first recovery: the time from the output being more than 5 V from the set voltage until it is back within 1 V (3.4 s), and the largest error in between (41 V). Do a 20 V and a 40 V variac step up and down and write the four readings down.
+Only recoveries while the unit runs with the contactor closed are timed; an excursion longer than 30 s is dropped (it is not a recovery).
+
+**The profiles (all need a slave reflash; the plain configs are unchanged)**
+| config | guard slope | final slope | 40 V step to within 0.5 V (simulation) |
+|---|---|---|---|
+| fast_start (plain) | 30 V/s | 10 V/s | 1.6 s |
+| fast_start_fast_correction | 60 V/s | 10 V/s | 1.0 s |
+| fast_start_fast_correction_100 | 100 V/s | 30 V/s | 0.6 s |
+
+**What is NOT offered and why**
+* A higher regulator gain: no speed gain in the simulation, and the transformer-flip check lets the output move further the wrong way before it stops (buck unit, test limit 3.5 V): x1.0 1.46 V, x1.5 3.38 V, x1.75 4.88 V, x2.0 6.76 V. That is a protection; it is not traded for speed.
+* A shorter freeze debounce: at 150 ms the flip tests failed too.
+
+**If the real unit is still 3 to 4 s with the 100 profile**
+Then the limit is in the real stage (its response lag, the real injection gain at low input, the duty cap), which the model does not have. Send me the timer readings and which config is flashed; the next step would be a trace of the duty and the voltages during a step.

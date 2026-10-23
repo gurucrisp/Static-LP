@@ -58,7 +58,9 @@ extern "C" {
 #endif
 #define REG_FREEZE_BAND_V         0.75f
 #define REG_BLEND_BAND_V          0.2f        /* buck/boost gain blending band        */
-/* Scale of the integral gain (both boost and buck). 1.0 = the original firmware's gain (the host tests compare against it). Higher = faster correction after a change of the input or the load, less margin before it oscillates. */
+/* Scale of the integral gain (both boost and buck). 1.0 = the original firmware's gain (the host tests compare against it). DO NOT RAISE IT without measuring: the gain also sets how far the output moves the WRONG way
+ * (a transformer connected backwards adds instead of subtracts) before the flip check stops the unit. Measured in the simulation, buck unit, limit of the test 3.5 V: x1.0 = 1.46 V, x1.5 = 3.38 V (almost no margin left),
+ * x1.75 = 4.9 V, x2.0 = 6.8 V (the flip test fails). The simulation also showed NO gain in speed from a higher gain; the guard ramp (CTRL_GUARD_RESTART_SLOPE_VPS) is what limits the recovery. */
 #ifndef REG_KI_SCALE
 #define REG_KI_SCALE              1.0f
 #endif

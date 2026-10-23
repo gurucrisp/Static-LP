@@ -2,7 +2,15 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.24 — faster correction after input steps (optional config) (current)
+## v0.9.25 — a response timer, and the 100 V/s correction profile (current)
+* Report: with the unit running and the contactor on, a 40 V change of the input by the variac takes 3 to 4 s to come back to the set voltage. The simulation gives 1.6 s (default ramp), so the real unit is slower than the model: the model has an instant plant and cannot show where.
+* NEW response timer (master): while the unit runs with the contactor closed, an output more than 5 V from the set voltage starts a clock, back within 1 V stops it. The last result is shown on the DIAGNOSTICS page (LOG, MENU x2), row 0: `S:Y E:Y H:Y 3.4s/41V` = 3.4 s to come back from a 41 V error (10 s or more: `12s/35V`). It replaces the frame count once a result exists.
+  Use it with the variac to measure the real recovery time instead of a stopwatch.
+* NEW config `..._MASTER_fast_start_fast_correction_100.h`: guard restart slope 100 V/s and final slope 30 V/s. Simulation, 40 V step: within 0.5 V in 0.6 s (1.6 s default, 1.0 s with the 60 profile). New runner job `s3_fast_correction_100` (the whole master-control group passes).
+* FINDING, protection: the regulator gain (`REG_KI_SCALE`) sets how far the output moves the wrong way before the transformer-flip check stops the unit (buck unit, limit 3.5 V): x1.0 1.46 V, x1.5 3.38 V, x1.75 4.9 V, x2.0 6.8 V. And a higher gain gave no speed in the simulation. So the gain stays at 1.0 and is NOT offered as a way to go faster; a warning is written next to the constant.
+* NOT tried on hardware. If the real recovery is still 3 to 4 s with the 100 profile, the limit is something the model cannot show (a slower real stage); send me the timer readings for 20 V and 40 V steps up and down.
+
+## v0.9.24 — faster correction after input steps (optional config)
 * Request: the correction is slow. Measured in the simulation first: the recovery time after an input step is almost exactly step / 30 V/s (10 V 0.34 s, 20 V 1.0 s, 50 V 1.66 s), because after a step of 15 V or more the injection guard restarts the correction from zero and ramps it back at `CTRL_GUARD_RESTART_SLOPE_VPS` (30 V/s).
   The regulator gain hardly matters (0.98 s against 0.94 s at three times the gain).
 * NEW config `slave_config_STAGE3_cap2752_full_range_MASTER_fast_start_fast_correction.h`: the fast-start master-control config with `CTRL_GUARD_RESTART_SLOPE_VPS 60`: a 50 V step comes back within 5 V in 0.9 s (1.7 s before), a 70 V buck step within 1 s. The plain configs are unchanged: nothing changes unless you copy this one.

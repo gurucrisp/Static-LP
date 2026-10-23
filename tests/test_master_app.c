@@ -584,6 +584,30 @@ static void t_vcal_app(void)
     printf("  voltage calibration in the application: refused while running, CALV / CALO / CALR with the typed value, 3 sends with one id, the timeout, every answer in words, one at a time\n");
 }
 
+
+static void t_response_timer(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U]; uint32_t g;
+    /* the unit runs at 230 V: nothing timed yet, the diagnostics row shows the frame count as before */
+    fresh(); D.vin_dv = 2300U; D.vout_dv = 2300U; to_run(); run(12000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "running with the contactor closed");
+    tap(3, 100U); tap(0, 100U); tap(0, 100U); run(100U); CHECK(MApp_ShowsDiag(&A), "the diagnostics page is open"); MApp_Diag(&A, T, fr);
+    CHECK(strstr(fr[0], "M:") != NULL && strstr(fr[0], "s/") == NULL, "nothing timed yet: the frame count is shown ('%s')", fr[0]);
+    /* a 40 V excursion that comes back after 1.5 s: "1.5s/40V" */
+    D.vout_dv = 1900U; run(1500U); D.vout_dv = 2295U; run(300U); MApp_Diag(&A, T, fr);
+    CHECK(strncmp(fr[0], "S:Y E:", 6) == 0 && (strstr(fr[0], " 1.5s/40V") != NULL || strstr(fr[0], " 1.6s/40V") != NULL || strstr(fr[0], " 1.4s/40V") != NULL), "a 40 V error that lasted 1.5 s: 'x.xs/40V' on row 0 ('%s')", fr[0]);
+    /* an excursion under 5 V is not timed */
+    D.vout_dv = 2260U; run(3000U); D.vout_dv = 2300U; run(300U); MApp_Diag(&A, T, fr); CHECK(strstr(fr[0], "/40V") != NULL, "a 4 V error does not start the clock: the last result is still 1.5 s / 40 V ('%s')", fr[0]);
+    /* a longer one (inside the output limits, so the unit keeps running): 12 s shows whole seconds; the largest error counts, not the first */
+    D.vout_dv = 2200U; run(2000U); D.vout_dv = 2150U; run(10000U); D.vout_dv = 2300U; run(300U); MApp_Diag(&A, T, fr);
+    CHECK(strstr(fr[0], " 12s/15V") != NULL || strstr(fr[0], " 13s/15V") != NULL, "12 s with the largest error 15 V: '12s/15V' ('%s')", fr[0]);
+    /* the output never comes back within 30 s: not a recovery time, the old result stays */
+    D.vout_dv = 2150U; run(32000U); D.vout_dv = 2300U; run(300U); MApp_Diag(&A, T, fr); CHECK(strstr(fr[0], "s/15V") != NULL, "an excursion that lasts over 30 s is dropped, the last result stays ('%s')", fr[0]);
+    /* the unit is stopped: the clock stops with it */
+    D.vout_dv = 2150U; run(500U); stop_unit(); D.vout_dv = 2300U; run(2000U); MApp_Diag(&A, T, fr); CHECK(strstr(fr[0], "s/15V") != NULL, "a stopped unit is not timed ('%s')", fr[0]);
+    (void)g;
+    printf("  response timer: the time from a 5 V error back to within 1 V, and its largest error, on the diagnostics page\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -631,6 +655,7 @@ int main(void)
     t_clock_page();
     t_heat_inrush_app();
     t_vcal_app();
+    t_response_timer();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

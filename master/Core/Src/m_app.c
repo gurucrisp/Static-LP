@@ -111,6 +111,23 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     MUI_SetFeatures(&a->ui, 0U);                                           /* calibration and re-tune are not available yet */
 }
 
+/* The response timer: while the unit runs with the contactor closed, an output more than 5 V from the set voltage starts the clock; back within 1 V stops it. The last result is shown on the diagnostics page
+ * (row 0: "3.4s/41V" = 3.4 s to come back from a 41 V error). A tool to measure the correction speed with a variac without a scope. An excursion that has not recovered after 30 s is dropped. */
+static void rec_update(MApp_t *a, const MAppData_t *d, uint32_t now)
+{
+    int32_t err; uint32_t ae;
+    if ((d->have == 0U) || (d->state != 2U) || (a->eout.contactor[0] == 0U)) { a->rec_active = 0U; return; }
+    err = (int32_t)d->vout_dv - (int32_t)(a->settings.set_v * 10U); ae = (uint32_t)((err < 0) ? -err : err);
+    if (a->rec_active == 0U) { if (ae > 50U) { a->rec_active = 1U; a->rec_t0 = now; a->rec_peak = (uint16_t)ae; } return; }
+    if (ae > a->rec_peak) a->rec_peak = (uint16_t)ae;
+    if (ae <= 10U)
+    {
+        uint32_t t10 = (uint32_t)(now - a->rec_t0) / 100U;
+        a->rec_s10 = (uint16_t)((t10 > 999U) ? 999U : t10); a->rec_pk_v = (uint16_t)((a->rec_peak + 5U) / 10U); a->rec_have = 1U; a->rec_active = 0U;
+    }
+    else if ((uint32_t)(now - a->rec_t0) >= 30000UL) a->rec_active = 0U;
+}
+
 static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now);
 static void vcal_service(MApp_t *a, uint32_t now);
 
@@ -191,6 +208,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     if (MUI_Take(&a->ui, MUI_REQ_CLEAR_LOG)) (void)MLog_Clear(&a->log);
     MUI_SetClock(&a->ui, &d->clock, d->clock_ok);                                       /* the Date and Time items start from the clock */
     a->t_now = now;
+    rec_update(a, d, now);
     if (MUI_Take(&a->ui, MUI_REQ_VCAL_SAVE)) vcal_request(a, d, now);
     vcal_service(a, now);
     if (MUI_Take(&a->ui, MUI_REQ_SET_CLOCK)) { a->clk_set = *MUI_ClockToSet(&a->ui); a->clk_set_pending = 1U; }
@@ -241,6 +259,16 @@ void MApp_Diag(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U
     /* row 0: what has been heard from the slave, and how many $M frames went out */
     copy(t, "S:  E:  H:  M:00000"); t[2] = (d->have != 0U) ? 'Y' : 'N'; t[6] = (d->e_valid != 0U) ? 'Y' : 'N'; t[10] = (a->lim_set != 0U) ? 'Y' : 'N';
     { uint32_t m = a->m_sent % 100000UL; t[14] = (char)('0' + (m / 10000U)); t[15] = (char)('0' + ((m / 1000U) % 10U)); t[16] = (char)('0' + ((m / 100U) % 10U)); t[17] = (char)('0' + ((m / 10U) % 10U)); t[18] = (char)('0' + (m % 10U)); }
+    if (a->rec_have != 0U)
+    {   /* the last response time replaces the frame count, columns 12 to 19: "3.4s/41V" (a recovery of 10 s or more shows whole seconds: "12s/41V"; an error over 99 V shows 99) */
+        char u[12]; uint32_t k = 0U, sec = a->rec_s10 / 10U, tn = a->rec_s10 % 10U, pv = (a->rec_pk_v > 99U) ? 99U : a->rec_pk_v;
+        if (sec >= 10U) { u[k++] = (char)('0' + ((sec / 10U) % 10U)); u[k++] = (char)('0' + (sec % 10U)); }
+        else { u[k++] = (char)('0' + sec); u[k++] = '.'; u[k++] = (char)('0' + tn); }
+        u[k++] = 's'; u[k++] = '/'; u[k++] = (char)('0' + (pv / 10U)); u[k++] = (char)('0' + (pv % 10U)); u[k++] = 'V'; u[k] = '\0';
+        for (c = 0U; c < 8U; c++) t[12U + c] = ' ';
+        for (c = 0U; (u[c] != '\0') && (c < 8U); c++) t[12U + c] = u[c];
+        t[20] = '\0';
+    }
     for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
     /* row 1: the unit's state, the run level it sends, the clear counter */
     s = US[(a->eng.u[0].st < 6U) ? a->eng.u[0].st : 0U];
