@@ -61,15 +61,14 @@ static int fl_prog(uint32_t addr, const uint8_t *buf, uint32_t n)
 
 static int fl_erase(uint32_t page_addr)
 {
-    FLASH_EraseInitTypeDef e; uint32_t err = 0U; HAL_StatusTypeDef st; uint8_t dual = 0U;
+    FLASH_EraseInitTypeDef e; uint32_t err = 0U; HAL_StatusTypeDef st;
     dual_now();
     if (((page_addr - SFL_BASE) % SFL_PAGE) != 0UL) return fail(2U, 0U);
     if (allowed(page_addr, SFL_PAGE) == 0U) return fail(1U, 0U);
-#ifdef FLASH_OPTR_DBANK
-    dual = (uint8_t)(((FLASH->OPTR & FLASH_OPTR_DBANK) != 0U) ? 1U : 0U);            /* dual-bank mode: the pages are numbered inside each bank */
-#endif
     e.TypeErase = FLASH_TYPEERASE_PAGES;
-    if ((dual != 0U) && (page_addr >= SFL_BANK2_BASE)) { e.Banks = FLASH_BANK_2; e.Page = (page_addr - SFL_BANK2_BASE) / SFL_PAGE; }
+    /* The page number is counted INSIDE the bank (0..127) whatever the flash mode, and the calibration pages are pages 126 and 127 of bank 1: the same number in single-bank and in dual-bank mode.
+     * (v0.9.22 used the last two pages of the chip, 254 and 255 in single-bank mode: the page number field holds only 0..127, the erase hit another page and the calibration could be saved once only.) */
+    if (page_addr >= SFL_BANK2_BASE) { e.Banks = FLASH_BANK_2; e.Page = (page_addr - SFL_BANK2_BASE) / SFL_PAGE; }
     else { e.Banks = FLASH_BANK_1; e.Page = (page_addr - SFL_BASE) / SFL_PAGE; }
     e.NbPages = 1U;
     HAL_FLASH_Unlock();

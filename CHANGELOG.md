@@ -2,7 +2,14 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.22 — the flash failure explains itself (current)
+## v0.9.23 — the calibration pages move to pages 126 and 127 (current)
+* Report: `Save Failed  S1 R5 D0 E0000`: the erase of the page failed ("S1"), the HAL said OK but the page was not blank ("R5") at its first byte ("E0000"), on a chip in single-bank mode ("D0").
+  Cause: v0.9.22 and before used the LAST two pages of the chip (254, 255 in single-bank mode). The page number field holds only 0..127, so the erase hit another page: each page could be written once while still empty, never again.
+  Fix: the two calibration pages are now **0x0803F000 and 0x0803F800** (pages 126 and 127 of bank 1: the same page numbers in single-bank and dual-bank mode); the page number is always counted inside the bank. The program must end below 0x0803F000 (252 KB; the driver refuses otherwise).
+  A calibration saved by v0.9.22 or before is NOT found (it was at the old addresses): calibrate again. The erases that failed earlier most probably erased pages 126 and 127 of bank 1, which a program of this size does not use.
+* Inrush F02 (the FLT input) when the input is below 215 V: not a flash matter; being investigated (see the notes).
+
+## v0.9.22 — the flash failure explains itself
 * Report: the first calibration saves, later ones fail with "Save Failed / Flash Error". The slave now reports WHERE it failed in the answer: the master shows e.g. `Save Failed` / `S2 R3 D1 E0080` = store stage (1 erase, 2 write, 3 commit word), driver reason (1 address refused, 2 misaligned,
   3 HAL error with its flags, 4 the erase reported a failing page, 5 the erase said OK but the page is not blank: the number is the offset of the first byte that is not blank), D = dual-bank flash mode, E = the HAL error flags in hex. A blank check after every erase was added (an erase that does nothing would explain "writes once, never again").
 * The cause is NOT yet known. Send me the `S R D E` line.

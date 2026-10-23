@@ -1,7 +1,7 @@
 /**
   * @file    slave_flash.h
-  * @brief   The slave's flash access for the calibration record (STM32G0B1, 2 KB pages): the LAST TWO pages of the 512 KB flash, 0x0807F000 and 0x0807F800, as the two slots of the store (slave_store.h).
-  *          The driver refuses any address outside those two pages, so it can never touch the program. It works in single-bank and in dual-bank mode (the page number is derived from the address and the DBANK option bit).
+  * @brief   The slave's flash access for the calibration record (STM32G0B1, 2 KB pages): pages 126 and 127 (the last two pages of the first 256 KB), 0x0803F000 and 0x0803F800, as the two slots of the store (slave_store.h).
+  *          The driver refuses any address outside those two pages, so it can never touch the program. They are pages 126 and 127 of bank 1: the same page numbers in single-bank and in dual-bank mode. The program must end below 0x0803F000 (252 KB).
   *          Erasing or programming stalls the CPU for tens of milliseconds: the calibration only runs while the unit is stopped, so no interrupt that matters is waiting.
   */
 #ifndef SLAVE_FLASH_H
@@ -12,8 +12,8 @@
 extern "C" {
 #endif
 
-#define SFLASH_CAL_PAGE_A   0x0807F000UL
-#define SFLASH_CAL_PAGE_B   0x0807F800UL
+#define SFLASH_CAL_PAGE_A   0x0803F000UL
+#define SFLASH_CAL_PAGE_B   0x0803F800UL
 
 extern const SFlash_t g_slave_flash;
 uint32_t SlaveFlash_Diag(void);            /* why the LAST failed erase / program failed, packed in decimal: reason x 1,000,000 + dual-bank flag x 100,000 + the HAL error flags or the failing page (16 bits).
