@@ -9,6 +9,10 @@ Each entry is a git tag. One tag = one delivered package. `python tools/which_ve
 * The flash driver now guards FOUR pages (profile 124, 125 and calibration 126, 127) and the program must end below **0x0803E000** (248 KB; it refused at 252 KB before). Same page numbers in single-bank and dual-bank mode.
 * New switch `SLAVE_AUTOTUNE` (slave_features.h, **default 0**): with 0 nothing changes at all (`$H tuned` = 1, the built-in profile). With 1 the store is initialised at start and `$H tuned` follows it. The later steps (link commands, the controller's tune mode) will use the same switch.
 * Tests: profile store 80 checks (every 4 bytes of a save and a re-tune cut), flash driver 26. Mutation checks 3 of 3.
+* **Display speed (master, requested, same version number):** the voltages and the load current now change more calmly. The shown number follows the reading through a filter of about 1 s (was 0.64 s) and may change at most once every 300 ms; a real step of 5 V (5 A for the load) or more is still shown at once,
+  and the hysteresis on the last digit is unchanged (0.7 V, 0.3 A). Both numbers are named constants in m_app.h (`MAPP_DISP_EMA_DIV` 96, `MAPP_DISP_HOLD_MS` 300): larger = calmer.
+  Tests: a 5 V/s drift never changes the number twice within 300 ms, two real 8 V steps 150 ms apart are both shown at once, a 3 V step is still on its way after 0.9 s (test cadence 5 ms, i.e. 1.8 s in the unit); the three ways to undo it are caught. A Load Calibration test that only passed by luck of the old filter's path
+  was corrected: the load display has always had a 0.3 A hysteresis, so it may show 2.9 A for a true 3.0 A.
 
 ## v0.9.28 — PHASE 2, step 1: the autotune core, tested against simulated transformers
 * NEW pure module `slave_tune.c/.h` (not yet connected to the controller, the flash or the link: nothing in the running firmware changes): the sweep, the profile, the start-up model check and the reach, from the approved design D13 to D21.

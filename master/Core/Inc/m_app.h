@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include "m_ui.h"
 #include "m_ctl.h"
+
+/* one display filter: the filtered reading, the number shown, whether it is initialised, when the shown number last changed */
+typedef struct { int32_t ema; int32_t shown; uint8_t init; uint32_t t_chg; } MDispFilt_t;    /* one display filter */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -100,7 +103,7 @@ typedef struct
     char         status[21];           /* what the unit is waiting for, for the Run screen */
     MAppData_t   last;                 /* the latest data, for the diagnostics page */
     uint8_t      no_cuts;              /* TEST: the master applies no voltage limits (see MApp_SetTestNoCuts)  */
-    struct { int32_t ema; int32_t shown; uint8_t init; } f_vin, f_vout, f_load;    /* the display filters */
+    MDispFilt_t  f_vin, f_vout, f_load;    /* the display filters */
     uint8_t      settings_from_flash;   /* 1 = the settings were read from flash, 0 = the defaults are in use */
     uint32_t     save_failures;
 } MApp_t;
@@ -127,6 +130,11 @@ typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /*
 #define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
 /* CT PEAK BACKUP (approved: the slave's IGBT over-current is primary, the master's CT the backup): a CT reading above 3 x the Overload Current, or at the full scale of the ADC, for 20 ms in a row is an Inrush
  * (retry rules as for the slave's own). The CT here is an averaged level, not the instantaneous current: the glue samples it every pass of the main loop and passes the largest reading of each step. */
+/* DISPLAY SPEED of the voltages and the load current: the shown value follows the reading through a first-order filter (time constant about MAPP_DISP_EMA_DIV x 10 ms) and may change at most once every MAPP_DISP_HOLD_MS;
+ * a real step (5 V or more) is shown at once. Larger = calmer display. (v0.9.29: 96 and 300 ms; before 64 and no hold, which was about 0.6 s.) */
+#define MAPP_DISP_EMA_DIV      96
+#define MAPP_DISP_HOLD_MS      300UL
+
 #define MAPP_CT_PEAK_FACTOR    3U
 #define MAPP_CT_FULL_X16       (4000U * 16U)
 #define MAPP_CT_PEAK_MS        20UL    /* the condition must hold continuously for this long (in time, not in calls: the glue calls the application every 10 ms, the tests every 5 ms) */

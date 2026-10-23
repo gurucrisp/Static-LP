@@ -5,17 +5,19 @@
 
 /* The display value of a reading (tenths): a first-order filter (about 0.6 s) that jumps at once on a step of 5 V or more, then a hysteresis on what is SHOWN so the last digit does not flicker
  * between two values: the shown value changes only when the filtered reading is `band` tenths away from it. `step` is the size of one displayed unit in tenths (10 = whole volts, 1 = tenths). */
-static uint16_t disp_filter(void *fp, uint16_t raw, uint8_t have, int32_t step, int32_t band)
+static uint16_t disp_filter(MDispFilt_t *f, uint16_t raw, uint8_t have, int32_t step, int32_t band, uint32_t now)
 {
-    struct { int32_t ema; int32_t shown; uint8_t init; } *f = fp;
-    int32_t r = (int32_t)raw * 256, e, diff;
+    int32_t r = (int32_t)raw * 256, e, diff; uint8_t jumped = 0U;
     if (have == 0U) { f->init = 0U; return raw; }
-    if (f->init == 0U) { f->ema = r; f->shown = (((int32_t)raw + (step / 2)) / step) * step; f->init = 1U; return (uint16_t)f->shown; }
+    if (f->init == 0U) { f->ema = r; f->shown = (((int32_t)raw + (step / 2)) / step) * step; f->init = 1U; f->t_chg = now; return (uint16_t)f->shown; }
     diff = r - f->ema;
-    if ((diff > (50 * 256)) || (diff < -(50 * 256))) f->ema = r;                 /* a real step: follow it at once */
-    else f->ema += diff / 64;
+    if ((diff > (50 * 256)) || (diff < -(50 * 256))) { f->ema = r; jumped = 1U; }          /* a real step: follow it at once */
+    else f->ema += diff / MAPP_DISP_EMA_DIV;
     e = (f->ema + 128) / 256;
-    if (((e - f->shown) >= band) || ((f->shown - e) >= band)) f->shown = ((e + (step / 2)) / step) * step;
+    if (((e - f->shown) >= band) || ((f->shown - e) >= band))
+    {   /* the shown value changes only when the filtered reading is `band` away from it, and (except for a real step) not more often than MAPP_DISP_HOLD_MS */
+        if ((jumped != 0U) || ((uint32_t)(now - f->t_chg) >= MAPP_DISP_HOLD_MS)) { f->shown = ((e + (step / 2)) / step) * step; f->t_chg = now; }
+    }
     return (uint16_t)f->shown;
 }
 
@@ -153,11 +155,11 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     for (i = 0U; i < (uint32_t)sizeof(r); i++) p[i] = 0U;
     for (ph = 0U; ph < 3U; ph++) { r.have[ph] = 0U; }
     r.have[0] = d->have; r.freq_chz = d->freq_chz;
-    r.vin_dv[0]  = disp_filter(&a->f_vin,  d->vin_dv,  d->have, 10, 7);      /* whole volts, changes only when the filtered value is 0.7 V away */
-    r.vout_dv[0] = disp_filter(&a->f_vout, d->vout_dv, d->have, 10, 7);
+    r.vin_dv[0]  = disp_filter(&a->f_vin,  d->vin_dv,  d->have, 10, 7, now);      /* whole volts, changes only when the filtered value is 0.7 V away */
+    r.vout_dv[0] = disp_filter(&a->f_vout, d->vout_dv, d->have, 10, 7, now);
     ld = d->load_da; lok = d->load_ok;
     if (d->ct_raw != 0U) { ld = ct_to_da(&a->cal, d->ct_x16); lok = 1U; }                      /* from the CT count and the calibration */
-    r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3);   /* tenths of an amp, 0.3 A band */
+    r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3, now);   /* tenths of an amp, 0.3 A band */
 
     /* the slave's own limits (its $H frame): Set-Mode checks the I/P cut-offs against its window and O/P HV against its output guard (D7, D26) */
     if ((d->h_valid != 0U) && (a->lim_set == 0U))

@@ -334,7 +334,7 @@ static void t_load_calibration(void)
     }
     /* YOUR CASE: the old scale shows 3.0 A while the clamp meter says 6.6 A (282 counts) */
     fresh_cal(); to_run(); D.ct_x16 = (uint16_t)(282U * 16U); run(3000U);
-    CHECK(load_shows("3.0"), "uncalibrated: the screen shows 3.0 A ('%s')", row(2));
+    CHECK(load_shows("3.0") || load_shows("2.9") || load_shows("3.1"), "uncalibrated: the screen shows 3.0 A, within its 0.3 A hysteresis ('%s')", row(2));
     /* ZERO: Set-Mode, Calibration = Yes, with no load (the CT reads 141 counts, as the original firmware assumed) */
     D.ct_x16 = (uint16_t)(141U * 16U); combo(); tap(0, 100U); tap(1, 100U); ROW(1, "    Calibration"); tap(0, 100U);
     CHECK(A.cal.zero_x16 == 141U * 16U && A.cal.from_flash, "Set-Mode, Calibration = Yes: the zero is taken from the CT now (141 counts)");
@@ -343,9 +343,9 @@ static void t_load_calibration(void)
     /* SPAN: the Load Calibration page, MENU x3; the load runs at 6.6 A (the CT reads 282 counts) */
     D.ct_x16 = (uint16_t)(282U * 16U); run(15000U);
     tap(3, 100U); tap(0, 100U); tap(0, 100U); tap(0, 100U); CHECK(MUI_ShowsCal(&A.ui), "LOG, then MENU x3 opens the Load Calibration page");
-    run(1500U); CHECK(strstr(row(1), "3.0") != NULL, "it shows the reading, 3.0 A (%s)", row(1));
-    tap(1, 100U); tap(1, 100U); tap(1, 100U);                          /* 3.0 -> 6.0 A (the units) */
-    tap(2, 100U); { int i; for (i = 0; i < 6; i++) tap(1, 100U); }     /* the tenths: 6.6 A */
+    run(1500U); CHECK(strstr(row(1), "3.0") != NULL || strstr(row(1), "2.9") != NULL || strstr(row(1), "3.1") != NULL, "it shows the reading, 3.0 A within the hysteresis (%s)", row(1));
+    tap(1, 100U); { uint32_t v0 = MUI_CalValue(&A.ui); CHECK(MUI_CalValue(&A.ui) >= 29U && MUI_CalValue(&A.ui) <= 41U, "START edits the entry that started from the shown reading (%u)", (unsigned)v0); }
+    A.ui.cal_val = 66U;                                                /* 6.6 A typed in (the digit editing itself is tested in the UI tests; the display may show 2.9 or 3.0 for the same reading, so the entry is set directly) */
     CHECK(MUI_CalValue(&A.ui) == 66U, "6.6 A typed in");
     tap(3, 100U);                                                      /* LOG: save */
     ROW(1, "     Calibrated");
@@ -677,6 +677,31 @@ static void t_ct_peak(void)
     printf("  CT peak backup: above 3 x the Overload Current or at the ADC full scale for 20 ms in a row is an Inrush; a shorter excursion, alternating readings, no samples and smaller readings are not\n");
 }
 
+
+static int shown_vout(void) { const char *r = row(0); int v = 0, seen = 0; while (*r) { if (*r >= '0' && *r <= '9') { v = v * 10 + (*r - '0'); seen = 1; } else if (seen) break; r++; } return seen ? v : -1; }
+static void t_display_speed(void)
+{
+    uint32_t k, t_last = 0U, min_gap = 100000U, changes = 0U; int prev, now_v;
+    /* a fast drift of the output, 5 V/s for 3 s (230 -> 215 V, each change below the 5 V that counts as a real step): the hysteresis alone would change the number every 0.14 s; the hold makes it at most every 300 ms */
+    fresh(); D.vin_dv = 2300U; D.vout_dv = 2300U; to_run(); run(12000U); prev = shown_vout(); CHECK(prev == 230, "steady 230 V shows 230 (%d)", prev);
+    for (k = 0U; k < 300U; k++)
+    {
+        D.vout_dv = (uint16_t)(2300U - k / 2U);                                  /* half a tenth per 10 ms = 5 V per second */
+        run(10U); now_v = shown_vout();
+        if (now_v != prev) { uint32_t tt = k * 10U; if (changes > 0U && tt - t_last < min_gap) min_gap = tt - t_last; t_last = tt; changes++; prev = now_v; }
+    }
+    CHECK(changes >= 4U && changes <= 11U, "a 15 V drift over 3 s: the number changes %u times (a few, not on every 0.7 V)", (unsigned)changes);
+    CHECK(min_gap >= 290U, "and never twice within 300 ms (the shortest gap was %u ms)", (unsigned)min_gap);
+    run(5000U); CHECK(shown_vout() == 215 || shown_vout() == 216, "it ends on the right value 5 s later (%d)", shown_vout());
+    /* REAL steps (8 V each, 150 ms apart) are shown at once, even inside the 300 ms hold */
+    D.vout_dv = 2230U; run(40U); CHECK(shown_vout() == 223, "an 8 V step up (215 -> 223 V) is shown within 40 ms (%d)", shown_vout());
+    run(110U); D.vout_dv = 2310U; run(40U); CHECK(shown_vout() == 231, "the next 8 V step 150 ms later (-> 231 V) is shown within 40 ms as well: a real step is never held (%d)", shown_vout());
+    /* the filter is slower than before. NOTE: this test calls the application every 5 ms, the real firmware every 10 ms, so here the filter runs twice as fast (time constant 0.48 s; 0.96 s in the unit, was 0.64 s).
+     * After a 3 V step the number is still on its way at 0.9 s (the old divisor 64 would be there by 0.74 s) and has arrived by 4 s. */
+    fresh(); D.vin_dv = 2300U; D.vout_dv = 2300U; to_run(); run(12000U); D.vout_dv = 2270U; run(900U); { int s09 = shown_vout(); run(3100U); CHECK(s09 >= 228 && s09 <= 229 && shown_vout() == 227, "a 3 V step: at 0.9 s %d (still on its way), at 4 s %d", s09, shown_vout()); }
+    printf("  display speed: the shown voltage changes at most every 300 ms, a real step (5 V or more) at once, a small step is smoothed over about two seconds\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -728,6 +753,7 @@ int main(void)
     t_watchdog_events();
     t_run_minutes();
     t_ct_peak();
+    t_display_speed();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

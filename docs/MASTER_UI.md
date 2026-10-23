@@ -236,3 +236,8 @@ LOG, then MENU x5 = **I/P Calibration**; MENU = **O/P Calibration**; MENU again 
 Each page shows the slave's reading (`Reading 226.8 V`) and the value you type (`Actual 230.2 V`): START changes the digit, STOP moves the cursor, LOG sends it. **The unit must be stopped**: while it runs the page says `Press STOP first` and STOP stops it.
 Typing **000.0** and LOG resets that channel to nominal. Answers: `Calibrated  I/P +1.50 %` (the total correction against nominal), `No Steady Signal Min 50 V`, `Out Of Range Max +/-10 %`, `Stop The Unit First`, `Save Failed Flash Error`, `Not Supported Update The Slave`, `No Answer From The Slave` (after 3 s).
 See docs/VOLTAGE_CALIBRATION.md for the bench procedure.
+
+
+## How fast the numbers change (v0.9.29)
+The input voltage, the output voltage and the load current are shown through a filter: the shown number follows the reading with a time constant of about 1 s, changes at most once every 300 ms, and moves only when the filtered reading is 0.7 V (0.3 A for the load) away from it. A step of 5 V or more (5 A for the load) is shown at once.
+To change it: `MAPP_DISP_EMA_DIV` (96: larger = slower filter) and `MAPP_DISP_HOLD_MS` (300) in `m_app.h`. The load display can show 0.1 A below a true value (the hysteresis); that is by design.
