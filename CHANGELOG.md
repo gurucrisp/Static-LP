@@ -2,7 +2,14 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.43 — a converter-current guard in the sweep, and a shorter hold (current)
+## v0.9.44 — three-phase groundwork: USART3 and USART4 at the link baud rate (current)
+* The master's three slave links (R: USART1 on PC4/PC5, Y: USART4 on PC10/PC11, B: USART3 on PB2/PB0) are all at **500000 baud** in monitor mode (`MASTER_MONITOR_MODE 1`, the default): USART3 and USART4 were at 115200. The master runs from the 16 MHz HSI with no divider, so 500000 is exact (BRR = 32). In the original-application build (`MASTER_MONITOR_MODE 0`) they stay at 115200.
+* **Y link pins confirmed: TX-Y on PC10 and RX-Y on PC11**, exactly what the master's HAL setup configures (USART4_TX / USART4_RX): nothing is swapped. The B and R pins were already as given.
+* **Found in the old firmware: the master has the three phase inputs, PA5 (R), PA6 (Y), PA7 (B)**, digital, no pull; the old application finds the phase sequence with them. So the phase sequence and angles need no slave timestamp (docs/THREE_PHASE_PLAN.md, section 5).
+* **PA5 is also the pin my `MASTER_HEAT_INPUT` (v0.9.20) assumed for an overheat input**: that is the R-phase input of this board, which is probably why it "floated" and blocked the start. The switch stays 0; a warning is now at its definition in master_monitor.h.
+* Master `main.c` only (two lines) and a comment; the slave is unchanged apart from its version number. The receive and transmit code for USART3 and USART4 (the rings, the transmitters) is the next step: until it exists, the master does not talk to the Y and B slaves.
+
+## v0.9.43 — a converter-current guard in the sweep, and a shorter hold
 * **From your bench (v0.9.42, Max Correction 75 V):** the EI core finished (profile Cap 2752, Gain 1.500 = the upper limit of the scale, n10); a first toroid run stopped after step 7 (19.2 V) with "Input Not Steady, moved 8 V", a later one (Max Correction 50, 240 V in) finished: Cap 886, Gain 1.186, Max 30 V (the headroom), n07. Input swinging 8 V at only 19 V of injection can be a core starting to saturate, and since v0.9.38 the sweep held the duty of a refused window for up to 30 s.
 * **Converter-current guard**: the sweep measures the no-load converter RMS in the baseline and, from 0.4 s into a step, ABORTS (duty to zero) when the RMS stays above max(3 x baseline, baseline + 2 A) or the peak above 20 A for 3 readings, or the amplifier clips. The frame carries the current, the master says `Current Too High / Converter 5.2 A`. **The sweep does not run without a converter-current reading** (`TUNE_REQUIRE_IOUT 1`, needs `SLAVE_IOUT 1`): `No Current Reading / Needs SLAVE_IOUT 1`.
 * **A step whose window is refused is held 9 s at most (it was 30 s)** before the sweep gives up (`TUNE_STEP_WAIT_MS`); the baseline, with no duty, may still wait 30 s.

@@ -77,7 +77,7 @@ extern "C" {
  * as an Inrush. 0 = off (the slave's own over-current protection stays the only one). */
 #define MASTER_CT_PEAK          1
 
-#define MASTER_HEAT_INPUT       0        /* OFF since v0.9.21: with the pin read as low (floating, no pull-up fitted, or another function) the master saw permanent overheat and would not start. Set 1 only after checking PA5 with a meter: it must read HIGH (3.3 V) when cool. */
+#define MASTER_HEAT_INPUT       0        /* WARNING: PA5 is ALSO the R-phase input (R_Phase_Pin, main.h) of the original board, and PA6 and PA7 are the Y and B phase inputs: do NOT switch this on without the schematic. OFF since v0.9.21: with the pin read as low (floating, no pull-up fitted, or another function) the master saw permanent overheat and would not start. Set 1 only after checking PA5 with a meter: it must read HIGH (3.3 V) when cool. */
 
 /* The load current (the master CT): the average of MASTER_CT_SAMPLES ADC readings. The application converts it with its own CALIBRATION (zero and gain, in flash; the defaults reproduce the original firmware's
  * scale and 3 A offset). Zero: Set-Mode "Calibration" = Yes (no load). Span: the Load Calibration page (MENU x3 in Run-Mode), typing the clamp-meter reading while the load runs. */

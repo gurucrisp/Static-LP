@@ -4,10 +4,11 @@
 | Phase | USART | Master TX pin | Master RX pin | AF | DMA RX / TX (DMA1) | Baud now | To do |
 |---|---|---|---|---|---|---|---|
 | R | USART1 | PC4 | PC5 | AF1 | ch1 / ch2 | 500000 (LINK_BAUDRATE) | works today |
-| Y | USART4 | PC10 | PC11 | AF1 | ch7 / ch3 | 115200 | 500000, RX ring, TX |
-| B | USART3 | PB2 | PB0 | AF4 | ch5 / ch6 | 115200 | 500000, RX ring, TX |
+| Y | USART4 | PC10 | PC11 | AF1 | ch7 / ch3 | 500000 since v0.9.44 | the RX ring and the transmitter |
+| B | USART3 | PB2 | PB0 | AF4 | ch5 / ch6 | 500000 since v0.9.44 | the RX ring and the transmitter |
+(In the original-application build, `MASTER_MONITOR_MODE 0`, USART3 and USART4 stay at 115200 as before.) The master runs from the 16 MHz HSI with no divider, so 500000 baud is exact on all three (BRR = 32).
 * The master's `stm32g0xx_hal_msp.c` already sets exactly these pins, alternate functions and DMA channels; the three serial ports are initialised in `main.c`. USART3 and USART4 share one interrupt vector (`USART3_4_IRQHandler`).
-* **Check the Y wiring.** The datasheet gives PC10 only TX functions (USART3_TX, USART4_TX) and PC11 only RX functions (USART3_RX, USART4_RX). The master's TX-Y must therefore be on **PC10** and RX-Y on **PC11**. If the board has them the other way round (TX-Y on PC11), the USART's SWAP bit crosses them in software (`AdvFeatureInit = UART_ADVFEATURE_SWAP_INIT`, `Swap = UART_ADVFEATURE_SWAP_ENABLE`); say so and it is one setting.
+* **The Y wiring is confirmed (v0.9.44): TX-Y on PC10 and RX-Y on PC11,** which is what the master's setup configures. (The datasheet gives PC10 only TX functions (USART3_TX, USART4_TX) and PC11 only RX functions (USART3_RX, USART4_RX). The master's TX-Y must therefore be on **PC10** and RX-Y on **PC11**. Had the board been wired the other way round, the USART's SWAP bit would cross them in software; it is not needed.)
 * The slave link has NO addressing, so each slave needs its own serial line: this is why three ports are used.
 
 ## 2. What exists
@@ -31,9 +32,10 @@
 * **S6. Per-phase autotune,** only after the single-phase sweeps are proven safe on the bench.
 
 ## 5. Phase timing: how the master learns the angle between R, Y and B
-Option A (needs no new master hardware): the master sends one SYNC frame on the three links at the same moment; each slave measures the time from receiving it to its next rising zero-cross and reports it in an optional field of `$E`. The master turns the three delays into the angles: the sequence and, with the three RMS values, the phase-to-phase voltages.
+**Found in the old firmware (v0.9.44): the master board HAS the phase inputs: PA5 (R_Phase), PA6 (Y_Phase) and PA7 (B_Phase), plain digital inputs with no pull.** The old application finds the sequence with them: at each rising edge of one phase it reads the levels of the other two (OK when B rising sees Y high and R low, R rising sees B high and Y low; two equal levels = the same phase twice; anything else = reversed). So option B is available and needs no new hardware, and no timestamp in the slave: the sequence and the angles can be taken from these three inputs. (PA5 is also the pin that `MASTER_HEAT_INPUT` assumed for an overheat input: that input must stay off, or be moved after the schematic is checked.)
+Option A (the alternative, now not needed) (needs no new master hardware): the master sends one SYNC frame on the three links at the same moment; each slave measures the time from receiving it to its next rising zero-cross and reports it in an optional field of `$E`. The master turns the three delays into the angles: the sequence and, with the three RMS values, the phase-to-phase voltages.
 Accuracy: each slave must timestamp the received SYNC in the serial interrupt (the main-loop polling jitter of about 1 ms would be 18 degrees at 50 Hz); with an interrupt timestamp it is about 50 microseconds, about 1 degree.
-Option B (if the master board has R, Y and B zero-cross or voltage inputs): the master measures the timing itself. I need the master's schematic page(s) for any R, Y and B voltage or zero-cross inputs to know whether B is possible.
+Option B (the one to use): the master measures the timing itself, from PA5, PA6 and PA7. What those pins carry electrically (a squared mains signal, an opto output, its polarity) still has to be read from the schematic.
 
 ## 6. Before any three-phase power-up
 * The single-phase stage must be proven safe on the bench first: the over-current trip lowered (about 60 A peak with the 22.67 ohm burden), the gate drivers' desaturation checked, a current-limited source for the first run (see AUTOTUNE_BENCH.md, the first section).
@@ -41,6 +43,6 @@ Option B (if the master board has R, Y and B zero-cross or voltage inputs): the 
 * Industrial mode trips all three phases together by design; Domestic does not: test Domestic first.
 
 ## 7. Decisions needed
-1. Confirm TX-Y is on PC10 (section 1).
+1. (Done) TX-Y is on PC10.
 2. Domestic first (recommended: three independent units, the simplest) or Industrial first?
-3. Phase timing: option A, or does the master board have R, Y and B timing inputs (option B)?
+3. Phase timing: option B, from PA5, PA6 and PA7 (found in the old firmware). Needed: what those pins carry electrically (the schematic).

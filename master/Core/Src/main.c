@@ -5749,7 +5749,7 @@ static void MX_USART3_UART_Init(void)
 
   /* USER CODE END USART3_Init 1 */
   huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
+  huart3.Init.BaudRate = (MASTER_MONITOR_MODE ? LINK_BAUDRATE : 115200UL);   /* B slave link: PB2 = TX, PB0 = RX (AF4). Monitor mode: the new link, 500000 baud, as USART1 */
   huart3.Init.WordLength = UART_WORDLENGTH_8B;
   huart3.Init.StopBits = UART_STOPBITS_1;
   huart3.Init.Parity = UART_PARITY_NONE;
@@ -5785,7 +5785,7 @@ static void MX_USART4_UART_Init(void)
 
   /* USER CODE END USART4_Init 1 */
   huart4.Instance = USART4;
-  huart4.Init.BaudRate = 115200;
+  huart4.Init.BaudRate = (MASTER_MONITOR_MODE ? LINK_BAUDRATE : 115200UL);   /* Y slave link: PC10 = TX, PC11 = RX (AF1). Monitor mode: the new link, 500000 baud, as USART1 */
   huart4.Init.WordLength = UART_WORDLENGTH_8B;
   huart4.Init.StopBits = UART_STOPBITS_1;
   huart4.Init.Parity = UART_PARITY_NONE;
