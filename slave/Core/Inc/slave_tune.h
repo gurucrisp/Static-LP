@@ -43,6 +43,13 @@ extern "C" {
 #define TUNE_LIMIT_FRAC      0.80f       /* no step is predicted to inject more than this fraction of Max Correction */
 #define TUNE_OVERSHOOT_V     5.0f        /* the output more than this above input + Max Correction: abort */
 #define TUNE_KNEE_FRAC       0.40f       /* a slope below this fraction of the previous one is a saturation knee */
+#ifndef TUNE_KNEE_MIN_V
+#define TUNE_KNEE_MIN_V      8.0f        /* ... but only when the injection at the cap point is at least this much. A core saturates near its rated injection (tens of volts); a slope that changes at 2 to 6 V is the noise (plus or minus 0.3 V) and the
+                                          * non-linear low-duty region of the converter, not a knee: v0.9.38 and earlier called it one (a "knee" at 64 ticks, about 4 V) and, with SLAVE_TUNE_APPLY on, that cap held the regulator to about 4 V of correction */
+#endif
+#ifndef TUNE_FIT_MIN_V
+#define TUNE_FIT_MIN_V       3.0f        /* the gain is fitted (least squares) over the points whose injection is at least this much, up to the cap: a long baseline of real signal, not the 16 and 32 tick points that are mostly noise */
+#endif
 #define TUNE_NO_RESP_V       0.5f        /* after a step of 256 ticks or more the injection must be at least this */
 #define TUNE_FLIP_V          1.0f        /* an injection more negative than this (after 128 ticks or more) is a flipped transformer */
 #define TUNE_SCALE_MIN       0.1f

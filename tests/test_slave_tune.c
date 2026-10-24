@@ -25,16 +25,18 @@ typedef struct
     double jump_t, jump_v;  /* the mains steps by jump_v at jump_t ms (0 = never) */
     double tau;          /* output lag, seconds */
     double superlin;     /* the real injection is this much larger than the linear model above 600 ticks (1 = none) */
+    double sh_lo, sh_hi, sh_frac;   /* a SHOULDER in the low-duty region: between sh_lo and sh_hi effective ticks only sh_frac of the slope is injected, outside it the full slope (0 = none): what the converter's non-linear low-duty region looks like */
     double wob;          /* the mains wanders: the sum of two sines (2.3 s and 0.7 s periods) of this amplitude, volts: up to 3 x wob peak to peak (a variac with a converter on it) */
     double jump_at, jump_gain;   /* above jump_at effective ticks the gain suddenly becomes jump_gain times larger (0 = never): a surprise that no step prediction can foresee */
 } Plant_t;
-static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; return p; }
+static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; p.sh_lo = 0.0; p.sh_hi = 0.0; p.sh_frac = 1.0; return p; }
 
 static double true_inj(const Plant_t *p, double ticks, double vin)
 {
     double eff = (ticks > p->dead) ? (ticks - p->dead) : 0.0, v;
     if (p->knee > 0.0 && eff > p->knee) eff = p->knee + p->knee_slope * (eff - p->knee);
     if (p->jump_at > 0.0 && eff > p->jump_at) eff = p->jump_at + p->jump_gain * (eff - p->jump_at);
+    if (p->sh_hi > p->sh_lo && eff > p->sh_lo) { double in_sh = ((eff < p->sh_hi) ? eff : p->sh_hi) - p->sh_lo; eff = p->sh_lo + p->sh_frac * in_sh + ((eff > p->sh_hi) ? (eff - p->sh_hi) : 0.0); }
     v = p->sign * p->k * (double)Tune_RefG((float)vin) * eff;
     if (p->superlin != 1.0 && ticks > 600.0) v *= 1.0 + (p->superlin - 1.0) * (ticks - 600.0) / 2000.0;
     return v;
@@ -115,6 +117,21 @@ int main(void)
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "the mains jumps 4 V in the middle of a step: that step's window is measured AGAIN and the tune finishes (result %u)", r.result);
     p = nominal(); p.drift = 40.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
     CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "a mains that never settles: UNSTEADY after waiting, nothing stored (result %u, %u ms)", r.result, (unsigned)r.ms);
+    /* ---- YOUR PROFILE (v0.9.38 and earlier): "Cap 64 ticks, Knee, n04" at 234 V in with 36 V of headroom: readings of about 0.7, 1.9, 4.4 V and then only 1.5 V more at 128 ticks (twice the reference gain, then a slope of a third).
+     *      A slope that changes at 4 V of injection is noise and the converter's low-duty region, not a saturation knee: it must not become the cap (with SLAVE_TUNE_APPLY on it held the regulator to 4 V of correction) ---- */
+    { Plant_t q = nominal(); TuneProfile_t pf; q.vin = 234.0; q.dead = 0.0; q.k = 2.2; q.knee = 64.0; q.knee_slope = 0.3; q.noise = 0.25;
+      r = sim(q, 36.0, 2752U, 0U, 0U, 300000U); (void)Tune_GetProfile(&pf);
+      CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && pf.knee == 0U && pf.n >= 6U && pf.cap_ticks >= 300U, "a slope that changes at 4 V is NOT a knee: no knee flag, %u points, cap %u ticks (the old rule: cap 64, knee, 4 points)", (unsigned)pf.n, (unsigned)pf.cap_ticks);
+      CHECK(r.max_inj <= 0.8 * 36.0 + 4.0, "and the sweep still stays under 80 %% of the headroom: %.1f V of 28.8", r.max_inj); }
+    { Plant_t q = nominal(); TuneProfile_t pf; q.vin = 230.0; q.dead = 0.0; q.knee = 800.0; q.knee_slope = 0.12; q.noise = 0.2;
+      r = sim(q, 120.0, 2752U, 0U, 0U, 300000U); (void)Tune_GetProfile(&pf);
+      CHECK(r.result == TUNE_R_FINISHED && pf.knee == 1U && pf.cap_ticks >= 512U && pf.cap_ticks <= 1024U, "a REAL knee (800 ticks, about 25 V of injection) is still found: knee flag, cap %u ticks", (unsigned)pf.cap_ticks); }
+    { int nbad = 0, seeds, worst_n = 99; for (seeds = 0; seeds < 120; seeds++)
+      { Plant_t q = nominal(); TuneProfile_t pf; q.vin = 234.0; q.dead = 0.0; q.k = 1.4 + 0.8 * (double)(seeds % 7) / 6.0; q.noise = 0.2 + 0.25 * (double)(seeds % 4) / 3.0; rs = 4242U + (uint32_t)seeds * 7919U;
+        r = sim(q, 36.0, 2752U, 0U, 0U, 300000U); (void)Tune_GetProfile(&pf);
+        if (!((r.result == TUNE_R_FINISHED) && (pf.knee == 0U) && (pf.cap_ticks >= 250U))) { nbad++; }
+        if (pf.n < worst_n) { worst_n = pf.n; } }
+      CHECK(nbad == 0, "120 noisy sweeps at 234 V (gain 1.4 to 2.2, noise 0.2 to 0.45 V): no false knee, a cap of at least 250 ticks (%d bad, the fewest points %d)", nbad, worst_n); }
     /* a VARIAC with the converter on it: the input wanders by 2 to 3 V peak to peak in every window. v0.9.36 stopped the sweep at the first such window (1.5 V limit) */
     p = nominal(); p.wob = 0.9; r = sim(p, 60.0, 2752U, 0U, 0U, 200000U);
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "a wandering mains (up to 2.7 V peak to peak): the tune finishes (result %u, %u ms)", r.result, (unsigned)r.ms);

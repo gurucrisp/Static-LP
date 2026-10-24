@@ -50,8 +50,16 @@ static void build_profile(uint8_t knee, uint8_t cap_idx)
     p->vin_ref_dv = (uint16_t)(s.vin_ref * 10.0f + 0.5f); p->maxc_dv = (uint16_t)(s.maxc * 10.0f + 0.5f);
     for (i = 0U; i < s.npts; i++) { p->ticks[i] = s.pt_t[i]; p->dv_dv[i] = (int16_t)((s.pt_dv[i] < 0.0f) ? (s.pt_dv[i] * 10.0f - 0.5f) : (s.pt_dv[i] * 10.0f + 0.5f)); }
     p->cap_ticks = (s.pt_t[cap_idx] > s.hw_cap) ? s.hw_cap : s.pt_t[cap_idx];
-    for (i = 0U; i <= cap_idx; i++) if (s.pt_dv[i] >= 1.0f) { a = i; break; }       /* the linear region: from the first point with a real injection to the cap point */
-    if ((a != 0xFFU) && (cap_idx > a)) g = (s.pt_dv[cap_idx] - s.pt_dv[a]) / (float)(s.pt_t[cap_idx] - s.pt_t[a]);
+    for (i = 0U; i <= cap_idx; i++) if (s.pt_dv[i] >= TUNE_FIT_MIN_V) { a = i; break; }       /* the fit region: from the first point with a REAL injection (3 V) to the cap point */
+    if ((a != 0xFFU) && (cap_idx > a))
+    {   /* the gain: the least-squares slope through those points (more robust against the noise of single points than two end points) */
+        float st = 0.0f, sd = 0.0f, n = (float)(cap_idx - a + 1U), mt, md, num = 0.0f, den = 0.0f;
+        for (i = a; i <= cap_idx; i++) { st += (float)s.pt_t[i]; sd += s.pt_dv[i]; }
+        mt = st / n; md = sd / n;
+        for (i = a; i <= cap_idx; i++) { num += ((float)s.pt_t[i] - mt) * (s.pt_dv[i] - md); den += ((float)s.pt_t[i] - mt) * ((float)s.pt_t[i] - mt); }
+        g = (den > 0.0f) ? (num / den) : (s.pt_dv[cap_idx] / (float)s.pt_t[cap_idx]);
+    }
+    else if ((cap_idx >= 1U) && (s.pt_dv[cap_idx] > s.pt_dv[0])) g = (s.pt_dv[cap_idx] - s.pt_dv[0]) / (float)(s.pt_t[cap_idx] - s.pt_t[0]);        /* too little signal for a fit: the slope over the whole span */
     else g = s.pt_dv[cap_idx] / (float)s.pt_t[cap_idx];
     gref = Tune_RefG(s.vin_ref); ratio = (gref > 0.0f) ? (g / gref) : 1.0f;
     scale = (ratio > 0.0001f) ? (1.0f / ratio) : TUNE_SCALE_MAX;
@@ -98,7 +106,7 @@ static void step_done(float dv, float vin)
     {   /* a saturation knee: the slope falls below 40 % of the previous one (judged only when the previous increment was a real one, not noise) */
         float inc_prev = s.pt_dv[i - 2U] - s.pt_dv[i - 3U], sp = inc_prev / (float)(s.pt_t[i - 2U] - s.pt_t[i - 3U]);
         float sc = (s.pt_dv[i - 1U] - s.pt_dv[i - 2U]) / (float)(s.pt_t[i - 1U] - s.pt_t[i - 2U]);
-        if ((inc_prev >= 1.0f) && (sc < TUNE_KNEE_FRAC * sp)) { finish(TUNE_R_FINISHED, 1U, (uint8_t)(i - 2U)); return; }      /* the cap is the step BEFORE the knee */
+        if ((inc_prev >= 1.0f) && (s.pt_dv[i - 2U] >= TUNE_KNEE_MIN_V) && (sc < TUNE_KNEE_FRAC * sp)) { finish(TUNE_R_FINISHED, 1U, (uint8_t)(i - 2U)); return; }      /* the cap is the step BEFORE the knee */
     }
     if (last != 0U) { finish(TUNE_R_FINISHED, 0U, (uint8_t)(i - 1U)); return; }          /* that was the shortened step at the limit */
     /* the next step: predicted from the last slope, shortened so that it stays at or below 80 % of Max Correction */

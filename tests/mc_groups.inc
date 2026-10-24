@@ -855,6 +855,14 @@ static void t_mc_tune_apply(void)
     CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U && pf.maxc_dv < 1200U && pf.knee == 0U, "a profile made at 230 V with Max Correction 120 V is limited by the headroom: cap %u, made with %u (tenths of a volt), no knee", (unsigned)pf.cap_ticks, (unsigned)pf.maxc_dv);
     memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
     CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0 && tn.max_eff > (uint32_t)pf.cap_ticks, "a start from 190 V needs about 1300 ticks: the regulator is NOT held to that profile's %u: it applied %u, the output is %.1f V, no fault", (unsigned)pf.cap_ticks, (unsigned)tn.max_eff, (double)W.vout);
+    /* ---- YOUR stored profile (v0.9.38 and earlier): "Cap 64 ticks, Knee, n04", made at 234 V with 36 V: it must NOT hold the regulator to 4 V of correction ---- */
+    tn_stop_unit();
+    { TuneProfile_t bad; memset(&bad, 0, sizeof bad); bad.version = pf.version; bad.n = 4U; bad.knee = 1U; bad.vin_ref_dv = 2340U; bad.maxc_dv = 360U; bad.cap_ticks = 64U; bad.kib_m = 502U; bad.kiu_m = 502U;
+      bad.ticks[0] = 16U; bad.ticks[1] = 32U; bad.ticks[2] = 64U; bad.ticks[3] = 128U; bad.dv_dv[0] = 10; bad.dv_dv[1] = 20; bad.dv_dv[2] = 40; bad.dv_dv[3] = 81;
+      CHECK(Tune_ProfileValid(&bad) == 1U && SlaveProfile_Save(&bad) == 0, "a profile like the one on your screen (cap 64, knee, gain 0.502, 4 points) is stored");
+      ma.settings.maxcorr_v = 30U; ma_run(1500U);                                                       /* the current Max Correction is BELOW the profile's 36 V: the old rule would have applied the cap */
+      memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.99; tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
+      CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0 && tn.max_eff > 64U, "with it stored, a start from 190 V is NOT held to 64 ticks (4 V): it applied %u ticks, the output is %.1f V, no fault", (unsigned)tn.max_eff, (double)W.vout); }
     printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it\n");
 }
 #endif
