@@ -52,7 +52,7 @@ void MApp_InitCal(MApp_t *a, uint32_t pa, uint32_t pb)
         uint16_t z = (uint16_t)(b[0] | (b[1] << 8)), g = (uint16_t)(b[2] | (b[3] << 8));
         if ((g >= 200U) && (g <= 5000U) && (z <= (uint16_t)(4095U * 16U))) { a->cal.zero_x16 = z; a->cal.gain_x1000 = g; a->cal.from_flash = 1U; }
     }
-    MUI_SetFeatures(&a->ui, MUI_FEAT_CALIBRATE);
+    MUI_SetFeatures(&a->ui, (uint8_t)(MUI_FEAT_CALIBRATE | MUI_FEAT_RETUNE));            /* calibration is available now; Re-tune stays available (MUI_SetFeatures ASSIGNS: it must not drop the flag MApp_Init set) */
 }
 
 
@@ -109,9 +109,8 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     cal_defaults(&a->cal);                                                  /* until MApp_InitCal: the original firmware's scale and 3 A offset */
     a->k_id = 1U;                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
     MUI_Init(&a->ui, &a->settings, &a->log, now);
-    a->ui.features |= MUI_FEAT_RETUNE;                                              /* the Re-tune item starts a transformer sweep (behind the Set-Mode password); a slave that cannot answers "Not Supported" */
     MUI_SetLimits(&a->ui, 0);                                              /* the slave's window and output guard come with its $H frame (stage 7c) */
-    MUI_SetFeatures(&a->ui, 0U);                                           /* calibration and re-tune are not available yet */
+    MUI_SetFeatures(&a->ui, MUI_FEAT_RETUNE);                              /* Re-tune starts a transformer sweep (behind the Set-Mode password; a slave that cannot answers "Not Supported"); calibration is added by MApp_InitCal */
 }
 
 /* The response timer: while the unit runs with the contactor closed, an output more than 5 V from the set voltage starts the clock; back within 1 V stops it. The last result is shown on the diagnostics page

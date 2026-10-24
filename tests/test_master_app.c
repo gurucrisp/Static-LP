@@ -785,6 +785,27 @@ static void t_tune_app(void)
     printf("  autotune, master side: the request, the answers in words, the progress screens, the result screens, STOP, timeouts, stale frames, the unit held off, Set-Mode kept open\n");
 }
 
+
+/* the Re-tune ITEM reached with the REAL keys after the REAL start-up order (MApp_Init, then MApp_InitCal): v0.9.33 to v0.9.35 lost the flag in exactly this order and every test raised the request directly */
+static void t_retune_item_keys(void)
+{
+    int q, found = 0; MCalK_t k; int still_cal = 0;
+    fresh_cal(); to_run(); run(2000U); stop_unit(); run(500U);
+    combo(); run(500U); CHECK(MApp_SetModeOpen(&A), "Set-Mode is open");
+    for (q = 0; q < 40 && !found; q++) { if (strstr(row(0), "Re-tune") != NULL || strstr(row(1), "Re-tune") != NULL || strstr(row(2), "Re-tune") != NULL) found = 1; else tap(0, 100U); }
+    CHECK(found, "MENU reaches the Re-tune item (%d presses; rows '%s' / '%s' / '%s')", q, row(0), row(1), row(2));
+    tap(1, 100U); CHECK(strstr(row(2), "Yes") != NULL || strstr(row(1), "Yes") != NULL || strstr(row(3), "Yes") != NULL, "START makes the value Yes ('%s' / '%s' / '%s')", row(1), row(2), row(3));
+    tap(0, 100U); run(100U);
+    CHECK(strstr(row(1), "Not Available") == NULL && strstr(row(2), "Not Available") == NULL, "MENU on Re-tune = Yes does NOT say 'Not Available' ('%s' / '%s')", row(1), row(2));
+    CHECK(MApp_ShowsTune(&A) && MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_TUNE, "it starts a sweep: the tuning screen is up and a TUNE command is due");
+    /* Calibration (item 2) must still be available in the same start-up order */
+    fresh_cal(); to_run(); run(2000U); stop_unit(); run(500U); combo(); run(500U);
+    for (q = 0; q < 6 && !still_cal; q++) { if (strstr(row(0), "Calibration") != NULL || strstr(row(1), "Calibration") != NULL || strstr(row(2), "Calibration") != NULL) still_cal = 1; else tap(0, 100U); }
+    tap(1, 100U); tap(0, 100U); run(100U);
+    CHECK(still_cal && strstr(row(1), "Not Available") == NULL && strstr(row(2), "Not Available") == NULL, "Calibration is still available too ('%s' / '%s')", row(1), row(2));
+    printf("  Re-tune item with the real keys after the real start-up order: reachable, Yes + MENU starts a sweep, no 'Not Available', Calibration unchanged\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -839,6 +860,7 @@ int main(void)
     t_display_speed();
     t_iout_page();
     t_tune_app();
+    t_retune_item_keys();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

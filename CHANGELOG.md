@@ -2,7 +2,14 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.35 — PHASE 2, step 6: the stored profile IN USE, the same-transformer check, "Re-tune Required" (current)
+## v0.9.36 — FIX: the Re-tune item said "Not Available" on a real master (current)
+* **Found on your bench: Set-Mode item 19 Re-tune, Yes, MENU showed "Not Available" even on a v0.9.34 master.** The cause was mine, in `m_app.c` since v0.9.33: `MApp_Init` switched the Re-tune item on and then, two lines later, `MUI_SetFeatures(..., 0U)` (which ASSIGNS) switched everything off again; `MApp_InitCal` then set the features to Calibration only.
+  Both functions run at every real start-up, so the item was off in v0.9.33, v0.9.34 and v0.9.35. Fixed: both now keep the Re-tune flag (`MApp_Init`: `MUI_FEAT_RETUNE`; `MApp_InitCal`: `MUI_FEAT_CALIBRATE | MUI_FEAT_RETUNE`).
+* **Why my tests missed it:** every autotune test raised the Re-tune request directly (`ui.req |= MUI_REQ_RETUNE`) instead of going through the Set-Mode item with the keys. NEW test `t_retune_item_keys`: the real start-up order (`MApp_Init` then `MApp_InitCal`), MENU to the Re-tune item, START for Yes, MENU, and it must start a sweep with no "Not Available" (and Calibration must still work).
+  It FAILS on the v0.9.35 code with exactly your screen ("Re-tune / Not Available") and passes on the fix.
+* Master only (`m_app.c`); the slave is unchanged apart from the version number. Master application tests: 370 checks.
+
+## v0.9.35 — PHASE 2, step 6: the stored profile IN USE, the same-transformer check, "Re-tune Required"
 Built while the v0.9.34 bench runs are pending. **Everything here is OFF by default** (`SLAVE_TUNE_APPLY 0`, `SLAVE_TUNE_ENFORCE 0`): a unit behaves exactly as v0.9.34 until you switch it on, and the new code is only tested on the PC model, not on the bench.
 * **Reviewed and verified before release** (the work was found uncommitted in the repository and checked, not rewritten): the whole runner passes (81 groups), and seven deliberate breakages of the profile-in-use logic (the cap, the gain scale, the refusal without a profile, the mismatch stop, Re-tune out of the latch, the reload at every start, the master's Re-tune from the latch) are each caught by the real-controller job.
 * **Fixed in the review: a profile made at a HIGH input must not cap the regulator.** Since v0.9.34 the sweep is limited by the output headroom as well as by Max Correction, so a profile made at 230 V has a cap of only about 1000 ticks (about 32 V of boost). With `SLAVE_TUNE_APPLY 1` that cap held the regulator down: a 190 V input gave **218 V out instead of 230 V** (shown by the new test).
