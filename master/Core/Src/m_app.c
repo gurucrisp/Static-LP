@@ -179,6 +179,7 @@ static void tune_key(MApp_t *a, uint8_t ev, uint32_t now)
 
 static void tune_service(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
+    a->tune_sl_state = d->state; a->tune_sl_wv = d->wait_valid; a->tune_sl_wait = (uint8_t)(d->wait_ctx & 0x7FU); a->tune_sl_fault = d->fault;
     if (a->tune_state == TS_IDLE) return;
     if (a->tune_state == TS_DONE) { if ((uint32_t)(now - a->tune_t_done) >= MAPP_TUNE_RESULT_MS) a->tune_state = TS_IDLE; return; }
     /* a command is repeated with the same id until it is answered (3 sends, 200 ms apart) */
@@ -253,7 +254,21 @@ void MApp_TuneScreen(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COL
         return;
     }
     copy(t, "Transformer Tuning"); for (n = 0U; t[n] != '\0'; n++) frame[0][1U + n] = t[n];
-    if ((a->tune_state == TS_ASK) || (a->tune_step == 0U)) { copy(t, (a->tune_state == TS_ASK) ? "Starting..." : "Measuring baseline"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Please wait"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; }
+    if ((a->tune_state == TS_ASK) || (a->tune_step == 0U))
+    {
+        copy(t, (a->tune_state == TS_ASK) ? "Starting..." : "Measuring baseline"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
+        /* WHAT THE SLAVE IS DOING: so that a start-up that does not progress says why (a normal start shows the same on the Run screen: "Slave Waits: Z") */
+        if (a->tune_state == TS_ASK) copy(t, "Please wait");
+        else if (a->tune_sl_state == 3U) { copy(t, "Slave Fault F00"); t[13] = (char)('0' + ((a->tune_sl_fault / 10U) % 10U)); t[14] = (char)('0' + (a->tune_sl_fault % 10U)); }
+        else if (a->tune_sl_state == 2U) copy(t, "Slave In RUN");
+        else if (a->tune_sl_state == 1U)
+        {
+            if ((a->tune_sl_wv != 0U) && (a->tune_sl_wait != 0U)) { char w[10]; copy(t, "Slave Waits: "); (void)wait_letters(a->tune_sl_wait, w); { uint32_t i = 0U; while ((w[i] != '\0') && (13U + i < 20U)) { t[13U + i] = w[i]; i++; } t[13U + i] = '\0'; } }
+            else copy(t, "Slave Starting...");
+        }
+        else copy(t, "Slave Not Started");                   /* the slave was told to start but is still OFF: its converter and inverter pulses are not on */
+        for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
+    }
     else
     {
         copy(t, "Step 00 of 10"); t[5] = (char)('0' + ((a->tune_step / 10U) % 10U)); t[6] = (char)('0' + (a->tune_step % 10U)); if (t[5] == '0') t[5] = ' ';

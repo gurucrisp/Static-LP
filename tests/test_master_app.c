@@ -749,6 +749,15 @@ static void t_tune_app(void)
     { int n = 1; uint32_t g; uint8_t same = 1U; for (g = 0U; g < 1500U; g += 10U) { run(10U); if (MApp_TakeKCommand(&A, &k2, T)) { n++; if (k2.id != k.id || k2.cmd != k.cmd) same = 0U; } } CHECK(n == 3 && same, "TUNE is sent 3 times with the same id (%d)", n); }
     MApp_OnKResult(&A, k.id, 0U, 0); run(50U); tune_screen(fr); CHECK(fr_has(fr, "Measuring baseline"), "R status 0: 'Measuring baseline'");
     run(2000U); tune_screen(fr); CHECK(fr_has(fr, "Measuring baseline"), "the stale frame counted before the request is NOT taken as progress");
+    /* what the slave is doing is shown while the sweep has not started: a start-up that does not progress says why */
+    D.state = 0U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Not Started"), "the slave is still OFF: 'Slave Not Started' ('%s')", fr[2]);
+    D.state = 1U; D.wait_valid = 1U; D.wait_ctx = 0x01U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Waits: Z"), "waiting for the zero-cross: 'Slave Waits: Z' ('%s')", fr[2]);
+    D.wait_ctx = 0x03U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Waits: ZV"), "waiting for the zero-cross and the input window: 'Slave Waits: ZV' ('%s')", fr[2]);
+    D.wait_ctx = 0x7FU; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Waits: ZVMFBOR") && strlen(fr[2]) == 20U, "every reason at once still fits the 20 columns ('%s')", fr[2]);
+    D.wait_valid = 0U; D.wait_ctx = 0U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Starting..."), "starting, nothing to wait for: 'Slave Starting...' ('%s')", fr[2]);
+    D.state = 3U; D.fault = 6U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave Fault F06"), "a fault in the slave: 'Slave Fault F06' ('%s')", fr[2]);
+    D.state = 2U; D.fault = 0U; run(30U); tune_screen(fr); CHECK(fr_has(fr, "Slave In RUN"), "in RUN, measuring the baseline: 'Slave In RUN' ('%s')", fr[2]);
+    D.state = 0U;
     send_t(1, 0, 16, 2300, 3); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  1 of 10") && fr_has(fr, "Injected +0.3 V"), "step 1: 'Step  1 of 10', 'Injected +0.3 V' ('%s' / '%s')", fr[1], fr[2]);
     send_t(6, 0, 512, 2300, 124); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  6 of 10") && fr_has(fr, "Injected +12.4 V"), "step 6: +12.4 V");
     send_t(8, 0, 1600, 2300, 485); run(30U); tune_screen(fr); CHECK(fr_has(fr, "+48.5 V"), "a two-digit injection: +48.5 V ('%s')", fr[2]);

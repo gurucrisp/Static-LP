@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.36 — FIX: the Re-tune item said "Not Available" on a real master (current)
+## v0.9.37 — the tuning screen shows what the slave is doing (current)
+* From your bench: with v0.9.36 the Re-tune item works, but the tune ended with "slave not responding" and the slave did not switch on its converter and inverter pulses at the start. The screen only said "Please wait", so the cause could not be told from here.
+  The third line of the tuning screen now shows the slave's real state while the sweep has not started: `Slave Not Started` (accepted TUNE but still OFF: no pulses), `Slave Starting...`, `Slave Waits: ZV...` (the same letters as the Run screen: Z zero-cross, V input window, M measurement, F FLT low, B break input low, O output high, R relays), `Slave In RUN`, `Slave Fault F06`.
+  Master only (`m_app.c`, `m_app.h`); the slave is unchanged apart from the version number. Master application tests: 377 checks (7 new). docs/AUTOTUNE_BENCH.md has the table.
+* **No cause is claimed yet.** The code was read again (the main loop runs the tune service in the config's mode, the link hooks and the `$T` receiving in the master are as designed, and the PC tests with the real controller start it by itself), so what stops the slave on your bench needs what this screen shows.
+
+## v0.9.36 — FIX: the Re-tune item said "Not Available" on a real master
 * **Found on your bench: Set-Mode item 19 Re-tune, Yes, MENU showed "Not Available" even on a v0.9.34 master.** The cause was mine, in `m_app.c` since v0.9.33: `MApp_Init` switched the Re-tune item on and then, two lines later, `MUI_SetFeatures(..., 0U)` (which ASSIGNS) switched everything off again; `MApp_InitCal` then set the features to Calibration only.
   Both functions run at every real start-up, so the item was off in v0.9.33, v0.9.34 and v0.9.35. Fixed: both now keep the Re-tune flag (`MApp_Init`: `MUI_FEAT_RETUNE`; `MApp_InitCal`: `MUI_FEAT_CALIBRATE | MUI_FEAT_RETUNE`).
 * **Why my tests missed it:** every autotune test raised the Re-tune request directly (`ui.req |= MUI_REQ_RETUNE`) instead of going through the Set-Mode item with the keys. NEW test `t_retune_item_keys`: the real start-up order (`MApp_Init` then `MApp_InitCal`), MENU to the Re-tune item, START for Yes, MENU, and it must start a sweep with no "Not Available" (and Calibration must still work).

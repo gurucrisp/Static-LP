@@ -46,3 +46,15 @@ Off by default. With it on, the profile loaded at every start (a) scales the reg
 A sweep made at a high input is stopped early by the output headroom and does not cap the regulator, but it still sets the gain scale. For a complete profile tune at about 160 V (see the table above). If you change Max Correction afterwards, tune again.
 `SLAVE_TUNE_ENFORCE 1` (needs APPLY and TUNE_MODE) makes a start without a profile latch fault 18, "Re-tune Required"; Re-tune works from that state. Leave it OFF until the sweep has been run on a real unit and the check's tolerance (a first value: 30 % or 1 V) has been confirmed.
 Config: `..._fast_correction_100_iout_tune_apply.h` (tune mode and APPLY; ENFORCE left off).
+
+## The tuning screen says what the slave is doing (v0.9.37)
+While the sweep has not started (the first 6 to 10 s: the slave starts itself and measures the baseline), the third line of the tuning screen shows the slave's real state, so a start-up that does not progress says why:
+| Third line | Meaning |
+|---|---|
+| `Please wait` | the master is waiting for the slave's answer to TUNE |
+| `Slave Not Started` | the slave accepted TUNE but is still OFF: its converter and inverter pulses are NOT on. Nothing is starting it: see below |
+| `Slave Starting...` | the start sequence is running (converter, inverter, shunts) |
+| `Slave Waits: ZV...` | the start is held by: Z the zero-cross pattern is not validated, V the input is outside the start window, M no valid measurement yet, F the FLT line reads low, B a break input reads low (a FLOATING one counts), O the output is above the protection limit, R the relays have not settled |
+| `Slave In RUN` | the slave is running and measuring the baseline; the steps follow |
+| `Slave Fault F06` | the slave has a fault (the code): read it in the master's fault log |
+`Slave Not Started` for more than a few seconds after "Starting..." means the slave never began: check that its build has `SLAVE_TUNE_MODE 1` AND `SLAVE_MASTER_CONTROL 1`, that a normal START still runs the unit, and the slave's own wait letters on the Run screen after the tune fails.

@@ -91,6 +91,7 @@ typedef struct
     uint8_t      retries_cfg;
     uint8_t      k_id;                 /* the next $K id, 1..255 */
     uint8_t      tune_state, tune_id, tune_cmd, tune_due, tune_tx_n, tune_seen, tune_step, tune_result, tune_abort_sent;   /* the autotune: see m_app.c */
+    uint8_t      tune_sl_state, tune_sl_wv, tune_sl_wait, tune_sl_fault;      /* what the slave is doing (its $S state, the start-up wait, its fault), shown on the tuning screen */
     int16_t      tune_dv_dv;
     uint16_t     tune_ticks;
     uint32_t     tune_t0, tune_t_tx, tune_t_frame, tune_t_done;
