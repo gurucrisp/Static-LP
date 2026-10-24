@@ -35,7 +35,10 @@ extern "C" {
 #define TUNE_STEP_MS         3000UL
 #define TUNE_SETTLE_MS       1500UL      /* the first part of a step is not averaged */
 #define TUNE_WAIT_STEADY_MS  30000UL     /* how long to wait for a steady input before giving up */
-#define TUNE_STEADY_PP_V     1.5f        /* the input may move this much (peak to peak) during a window */
+#ifndef TUNE_STEADY_PP_V
+#define TUNE_STEADY_PP_V     3.0f        /* the input may move this much (peak to peak) during a measuring window. It was 1.5 V and a step then ENDED the sweep: a variac with a converter on it wanders more than that, and the measurement is the DIFFERENCE output - input, which moves with the input, so
+                                          * a few volts cost almost no accuracy (3 V is 1.3 % of the gain). A window in which the input moved more is measured AGAIN (for at most TUNE_WAIT_STEADY_MS on one step), it does not end the sweep. */
+#endif
 #define TUNE_STALE_MS        300UL       /* no valid measurement for this long: abort */
 #define TUNE_LIMIT_FRAC      0.80f       /* no step is predicted to inject more than this fraction of Max Correction */
 #define TUNE_OVERSHOOT_V     5.0f        /* the output more than this above input + Max Correction: abort */

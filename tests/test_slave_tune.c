@@ -25,9 +25,10 @@ typedef struct
     double jump_t, jump_v;  /* the mains steps by jump_v at jump_t ms (0 = never) */
     double tau;          /* output lag, seconds */
     double superlin;     /* the real injection is this much larger than the linear model above 600 ticks (1 = none) */
+    double wob;          /* the mains wanders: the sum of two sines (2.3 s and 0.7 s periods) of this amplitude, volts: up to 3 x wob peak to peak (a variac with a converter on it) */
     double jump_at, jump_gain;   /* above jump_at effective ticks the gain suddenly becomes jump_gain times larger (0 = never): a surprise that no step prediction can foresee */
 } Plant_t;
-static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; return p; }
+static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; return p; }
 
 static double true_inj(const Plant_t *p, double ticks, double vin)
 {
@@ -56,7 +57,8 @@ static Run_t sim(Plant_t p, double maxc, uint16_t hw_cap, uint32_t abort_at, uin
         if (fabs(inj) > r.max_inj) r.max_inj = fabs(inj);
         if (inj > r.max_inj) r.max_inj = inj;
         if ((double)req > (double)hw_cap) r.max_ticks_over = (double)req - (double)hw_cap;
-        in.vin = (float)(vin + 0.05 * gauss()); in.vout = (float)(vin + p.offset + inj + p.noise * gauss()); in.meas_valid = 1U; in.vin_in_window = 1U;
+        { double vm = vin + p.wob * (sin(6.2831853 * (double)(t - t0) / 2300.0) + 0.5 * sin(6.2831853 * (double)(t - t0) / 700.0));
+          in.vin = (float)(vm + 0.05 * gauss()); in.vout = (float)(vm + p.offset + inj + p.noise * gauss()); } in.meas_valid = 1U; in.vin_in_window = 1U;
         in.fault = (uint8_t)((fault_at != 0U && (t - t0) >= fault_at) ? 1U : 0U); in.maxc_v = (float)maxc; in.hw_cap_ticks = hw_cap;
         if (abort_at != 0U && (t - t0) == abort_at) Tune_Abort();
         Tune_Service(t, &in, &out); req = out.request_ticks;
@@ -110,9 +112,19 @@ int main(void)
     (void)Tune_Start(60.0f, 1000U); CHECK(Tune_Start(60.0f, 1010U) == 2U, "a start while running is refused"); Tune_Abort();
     /* ---- unsteady input ---- */
     p = nominal(); p.jump_t = 20000.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
-    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "the mains jumps 4 V in the middle of a step: UNSTEADY, nothing stored (result %u)", r.result);
+    CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "the mains jumps 4 V in the middle of a step: that step's window is measured AGAIN and the tune finishes (result %u)", r.result);
     p = nominal(); p.drift = 40.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
-    CHECK(r.result == TUNE_R_UNSTEADY, "a mains that never settles: UNSTEADY after waiting (result %u, %u ms)", r.result, (unsigned)r.ms);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "a mains that never settles: UNSTEADY after waiting, nothing stored (result %u, %u ms)", r.result, (unsigned)r.ms);
+    /* a VARIAC with the converter on it: the input wanders by 2 to 3 V peak to peak in every window. v0.9.36 stopped the sweep at the first such window (1.5 V limit) */
+    p = nominal(); p.wob = 0.9; r = sim(p, 60.0, 2752U, 0U, 0U, 200000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "a wandering mains (up to 2.7 V peak to peak): the tune finishes (result %u, %u ms)", r.result, (unsigned)r.ms);
+    { TuneProfile_t pf; p = nominal(); p.wob = 0.9; r = sim(p, 60.0, 2752U, 0U, 0U, 200000U); (void)Tune_GetProfile(&pf);
+      CHECK(pf.kib_m >= 940U && pf.kib_m <= 1060U && pf.cap_ticks >= 1500U, "and its profile is as good as with a steady mains (gain scale %u, cap %u)", (unsigned)pf.kib_m, (unsigned)pf.cap_ticks); }
+    p = nominal(); p.wob = 0.9; p.k = 1.9; r = sim(p, 80.0, 2752U, 0U, 0U, 200000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "a transformer with 1.9 times the gain on a wandering mains (your bench): finishes (result %u)", r.result);
+    p = nominal(); p.wob = 3.0; r = sim(p, 60.0, 2752U, 0U, 0U, 400000U);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "a mains that wanders 9 V peak to peak never gives a quiet window: UNSTEADY, nothing stored (result %u)", r.result);
+    { Plant_t q = nominal(); q.vin = 230.0; q.wob = 0.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U); CHECK(r.result == TUNE_R_FINISHED, "a steady mains: unchanged, finishes"); }
     p = nominal(); p.jump_t = 1500.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
     CHECK(r.result == TUNE_R_FINISHED, "a jump during the first baseline window only restarts the window: the tune still finishes (result %u)", r.result);
     /* ---- faults and the master ---- */

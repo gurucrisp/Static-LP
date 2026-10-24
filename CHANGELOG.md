@@ -2,7 +2,16 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.37 — the tuning screen shows what the slave is doing (current)
+## v0.9.38 — the sweep tolerates a wandering input (a variac) (current)
+* **From your bench (v0.9.37): the sweep started, step 1 injected 0.7 V, step 2 1.9 V, then "Input Not Steady", with the input from a variac.** The cause was the sweep's own steadiness check: each step is measured over a 1.5 s window and, if the input moved more than 1.5 V peak to peak in it, the WHOLE sweep ended at once (only the baseline could restart its window).
+  A variac with a converter running on it wanders more than that, yet the measurement is the DIFFERENCE output minus input, which moves with the input, so a few volts cost almost no accuracy.
+  Now: the limit is **3 V peak to peak** (`TUNE_STEADY_PP_V`, can be set in the config), and **a window in which the input moved more is measured again** with the duty unchanged; the sweep gives up (Input Not Steady) only after 30 s on one step. A mains that really never settles (a drift of 40 V/s, or 9 V peak to peak) still ends with Input Not Steady and stores nothing.
+* The new sweep tests fail on the v0.9.37 core with exactly your result (5, Input Not Steady) and pass now: a mains wandering up to 2.7 V peak to peak, a 4 V jump in the middle of a step (it used to END the sweep, now it only costs a window), and a transformer with 1.9 times the gain on a wandering mains. 58 checks.
+* **Also fixed (master): the screen flickered.** The slave's heartbeat frame (step 0, sent when nothing else was sent for 2 s) sent the screen back to "Measuring baseline" once during every 3 s step. A step 0 frame now only keeps the timeout away. Two new tests (fail on v0.9.37). Master application 379 checks.
+* **Both boards change**: the sweep core (`slave_tune.c/.h`) is in the slave, the heartbeat fix in the master (`m_app.c`).
+* Your first readings (0.7 V at 16 ticks, 1.9 V at 32) are about 1.5 to 2 times the reference transformer's (0.5 V and 1.0 V at 200 V): a transformer with a higher gain, which is what the sweep measures. docs/AUTOTUNE_BENCH.md has the reference numbers and variac advice.
+
+## v0.9.37 — the tuning screen shows what the slave is doing
 * From your bench: with v0.9.36 the Re-tune item works, but the tune ended with "slave not responding" and the slave did not switch on its converter and inverter pulses at the start. The screen only said "Please wait", so the cause could not be told from here.
   The third line of the tuning screen now shows the slave's real state while the sweep has not started: `Slave Not Started` (accepted TUNE but still OFF: no pulses), `Slave Starting...`, `Slave Waits: ZV...` (the same letters as the Run screen: Z zero-cross, V input window, M measurement, F FLT low, B break input low, O output high, R relays), `Slave In RUN`, `Slave Fault F06`.
   Master only (`m_app.c`, `m_app.h`); the slave is unchanged apart from the version number. Master application tests: 377 checks (7 new). docs/AUTOTUNE_BENCH.md has the table.

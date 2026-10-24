@@ -190,7 +190,10 @@ static void tune_service(MApp_t *a, const MAppData_t *d, uint32_t now)
         if (d->tune_n != a->tune_seen)
         {   /* a new $T frame */
             a->tune_seen = d->tune_n; a->tune_t_frame = now;
-            if (d->tune_result == 0U) { a->tune_step = d->tune_step; a->tune_ticks = d->tune_ticks; a->tune_dv_dv = d->tune_dv_dv; }
+            if (d->tune_result == 0U)
+            {   /* a step frame. Step 0 is the slave's HEARTBEAT ("still here"): it only keeps the timeout away, it must NOT send a sweep that is under way back to "Measuring baseline" */
+                if (d->tune_step != 0U) { a->tune_step = d->tune_step; a->tune_ticks = d->tune_ticks; a->tune_dv_dv = d->tune_dv_dv; }
+            }
             else { a->tune_result = d->tune_result; a->tune_step = d->tune_step; a->tune_dv_dv = d->tune_dv_dv; a->tune_state = TS_DONE; a->tune_t_done = now; if (d->tune_result == 1U) MF_RetuneDone(&a->eng); return; }
         }
         if ((a->tune_abort_sent != 0U) && ((uint32_t)(now - a->tune_t0) >= 5000UL)) { a->tune_result = 6U; a->tune_state = TS_DONE; a->tune_t_done = now; return; }       /* the abort was never confirmed: say so */

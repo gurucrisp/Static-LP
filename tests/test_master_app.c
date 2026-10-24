@@ -761,6 +761,9 @@ static void t_tune_app(void)
     send_t(1, 0, 16, 2300, 3); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  1 of 10") && fr_has(fr, "Injected +0.3 V"), "step 1: 'Step  1 of 10', 'Injected +0.3 V' ('%s' / '%s')", fr[1], fr[2]);
     send_t(6, 0, 512, 2300, 124); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  6 of 10") && fr_has(fr, "Injected +12.4 V"), "step 6: +12.4 V");
     send_t(8, 0, 1600, 2300, 485); run(30U); tune_screen(fr); CHECK(fr_has(fr, "+48.5 V"), "a two-digit injection: +48.5 V ('%s')", fr[2]);
+    /* the slave's heartbeat (step 0) arrives between the steps: the screen must stay on the step, and the timeout must stay away */
+    send_t(0, 0, 0, 2300, 0); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Step  8 of 10") && fr_has(fr, "+48.5 V"), "a heartbeat (step 0) does NOT send the screen back to the baseline ('%s' / '%s')", fr[1], fr[2]);
+    { int alive = 1; for (q = 0; q < 12; q++) { run(2000U); send_t(0, 0, 0, 2300, 0); if (A.tune_state != 2U) alive = 0; } tune_screen(fr); CHECK(alive && fr_has(fr, "Step  8 of 10"), "24 s with only heartbeats every 2 s (a long wait for a quiet input): still running, still on step 8"); }
     /* the unit stays off for the whole sweep, in Auto mode, and the keys do nothing */
     { int ok = 1; for (q = 0; q < 30; q++) { D.state = 0U; run(1000U); send_t(6, 0, 512, 2300, 124); if (A.eout.run[0] != 0U || A.eout.contactor[0] != 0U) ok = 0; } CHECK(ok, "30 s of a sweep in Auto mode: the engine never starts the unit"); }
     { uint8_t scr0 = A.ui.screen; tap(0, 100U); tap(3, 100U); CHECK(A.ui.screen == scr0, "one LOG press while tuning does not open the log viewer"); tap(1, 100U); tap(0, 100U);

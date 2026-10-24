@@ -146,7 +146,7 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
             else if (((uint32_t)(now - s.t0) >= TUNE_BASE_MS) && (s.n > 0U))
             {
                 s.base = s.sum / (float)s.n; s.vin_ref = s.vin_sum / (float)s.n;
-                s.step_i = 0U; s.cur_ticks = (float)S_TICKS[0]; s.last_step = 0U; s.st = TS_STEP; reset_accum(now);
+                s.step_i = 0U; s.cur_ticks = (float)S_TICKS[0]; s.last_step = 0U; s.st = TS_STEP; reset_accum(now); s.wait_t0 = now;
             }
         }
         else
@@ -155,13 +155,17 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
             if (el >= TUNE_SETTLE_MS)
             {
                 s.sum += d; s.vin_sum += in->vin; s.n++; if (in->vin < s.vin_min) s.vin_min = in->vin; if (in->vin > s.vin_max) s.vin_max = in->vin;
-                if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V) { finish(TUNE_R_UNSTEADY, 0U, 0U); goto out; }
+                if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V)
+                {   /* the input moved during this step's window (a variac, a wandering mains): measure again with the duty unchanged; give up only after TUNE_WAIT_STEADY_MS on this one step */
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { finish(TUNE_R_UNSTEADY, 0U, 0U); goto out; }
+                    reset_accum(now);
+                }
             }
             if ((el >= TUNE_STEP_MS) && (s.n > 0U))
             {
                 float dv = (s.sum / (float)s.n) - s.base, vin = s.vin_sum / (float)s.n;
                 step_done(dv, vin);
-                if (s.st == TS_STEP) reset_accum(now);
+                if (s.st == TS_STEP) { reset_accum(now); s.wait_t0 = now; }
             }
         }
     }

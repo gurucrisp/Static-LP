@@ -31,7 +31,7 @@ Below 20 V of headroom (input above 250 V) a `TUNE` is refused: `Input Too High 
 * `Tuning Complete`: the profile is stored. The unit still runs on its built-in profile (the stored one is not used yet).
 * `Reversed Transformer`: the injection went the wrong way after 128 ticks. Check the transformer connections. Nothing is stored.
 * `No Response`: nothing appeared on the output at 256 ticks. No transformer, an open winding, or the stage is not switching.
-* `Input Not Steady`: the input moved more than 1.5 V during a step. Use a variac, wait, retry.
+* `Input Not Steady`: the input never settled. Each measuring window (1.5 s) must have the input within 3 V peak to peak; a window in which it moved more is measured AGAIN with the duty unchanged, and only after 30 s on ONE step does the sweep give up. (Until v0.9.37 the limit was 1.5 V and the first bad window ended the sweep.) See the variac notes below.
 * `Aborted By Slave`: a fault in the unit (the master log shows which), the flash refused the profile, or the controller never reached RUN in 25 s.
 * `Slave Not Answering`: no progress frame for 8 s. The link or the slave stopped.
 * The controller has its OWN limit: if the output rises more than Max Correction + 8 V above the input, it stops and latches the over-voltage fault (code 6), whatever the sweep thinks. That is a bug or a wrong transformer, not a normal result.
@@ -58,3 +58,14 @@ While the sweep has not started (the first 6 to 10 s: the slave starts itself an
 | `Slave In RUN` | the slave is running and measuring the baseline; the steps follow |
 | `Slave Fault F06` | the slave has a fault (the code): read it in the master's fault log |
 `Slave Not Started` for more than a few seconds after "Starting..." means the slave never began: check that its build has `SLAVE_TUNE_MODE 1` AND `SLAVE_MASTER_CONTROL 1`, that a normal START still runs the unit, and the slave's own wait letters on the Run screen after the tune fails.
+
+## A variac as the source (what to expect and how to help it)
+A variac with the converter running on it is not a steady source: the converter's input current and the injection's magnetizing current make the voltage sag, the brush contact adds small jumps, and the mains wanders by itself. Since v0.9.38 the sweep tolerates 3 V peak to peak in a window and measures a bad window again, so a normal variac works.
+To help it:
+* Use the LARGEST variac you have (its rating well above the converter's input current), on a mains that does not share heavy loads.
+* Set the dial first, then do not touch it during the sweep (a turn of the knob is a jump of several volts and costs a window, or the whole step if it keeps moving).
+* Look at the I/P voltage on the Run screen before you start: if it moves by more than a volt or two by itself, wait or use a steadier source.
+* If you still get `Input Not Steady`, the input did not stay within 3 V peak to peak for one whole 1.5 s window within 30 s on one step: the source is too soft.
+
+## Reading the first steps: your transformer's gain
+The reference transformer gives, per effective tick: 0.0255 V at 180 V in, 0.0297 V at 200 V, 0.0316 V at 230 V. So at 200 V: 16 ticks about 0.5 V, 32 ticks about 1.0 V, 512 ticks about 15 V, 2752 ticks about 82 V. Readings that are consistently 1.5 to 2 times those (for example 0.7 V at 16 ticks and 1.9 V at 32) mean a transformer with about that much more gain: the sweep finds out exactly, shortens the steps so that the injection stays under the limit, and stores a gain scale below 1 (a transformer with twice the gain gets half the regulator's integral gain when `SLAVE_TUNE_APPLY` is on). Single readings below 2 V are noisy (plus or minus 0.3 V): judge by the later steps.
