@@ -37,6 +37,7 @@ extern "C" {
 #define MUI_REQ_STOP        0x20U
 #define MUI_REQ_VCAL_SAVE   0x0100U /* LOG on a Voltage Calibration page: the entered meter value is MUI_CalValue(), the channel is page 5 (input) or 6 (output) */
 #define MUI_REQ_SET_CLOCK   0x80U   /* Set-Mode was saved with a new Date or Time: the value is MUI_ClockToSet() */   /* the STOP key in Run-Mode  */
+#define MUI_REQ_SLCAL_SAVE  0x0200U /* LOG on the Slave Load Cal page (the ninth service page): the entered meter value is MUI_CalValue(); 00.0 sets the zero, a load sets the gain */
 #define MUI_REQ_CAL_SAVE    0x40U   /* LOG on the Load Calibration page: the entered meter value is MUI_CalValue() */
 /* what the app can do: a request the app cannot serve is answered "Not Available" on the screen */
 #define MUI_FEAT_CALIBRATE  0x01U
@@ -51,6 +52,8 @@ typedef struct
     uint16_t vll_dv[3];               /* R-Y, Y-B, B-R phase-to-phase; 0 = a phase is missing ("---")            */
     uint8_t  out_on;                  /* the output is on                                                        */
     uint16_t vin_raw_dv, vout_raw_dv; /* the slave's calibrated voltage readings, unfiltered, tenths of a volt (the Voltage Calibration pages show them) */
+    uint16_t sl_pk_ca, sl_rms_ca;     /* the slave's converter current, hundredths of an ampere: the peak and the RMS (the Slave Load Cal page shows both)       */
+    uint8_t  sl_valid, sl_run;        /* the converter current is measured / the slave is in RUN (the zero is taken with the unit running)                    */
     uint8_t  active;                  /* the unit is running or starting (the Voltage Calibration pages ask for it to be stopped first) */
     uint16_t wait_s[3];               /* per phase: seconds until the next AUTOMATIC restart attempt after an Inrush / Power-stage / Heat trip, 0 = none or not counting */
     uint8_t  fault[3];                /* per phase: MLOG_T_* fault or "Appear" shown for it, 0 = none            */

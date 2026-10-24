@@ -261,6 +261,37 @@ static void t_settings_store(void)
     printf("  settings storage: round trip, invalid never written, a rule-breaking record not trusted, 100,000 pack round trips\n");
 }
 
+
+/* v0.9.45: the slave load calibration and the Load Source live in bytes 26 to 31 of the settings record, which were always zero: a record written by an older firmware must load as "Master CT, not calibrated", and nothing before byte 26 may move */
+static void t_settings_slave_load(void)
+{
+    MStore_t st; MSettings_t a, b; uint8_t raw[32], old[32]; int i, same = 1;
+    MS_Defaults(&a); a.set_v = 235U; a.maxcorr_v = 45U; { uint16_t x1, x2, x3, x4; MS_DefaultLimits(&a, 0, &x1, &x2, &x3, &x4); a.ip_lv = x1; a.ip_hv = x2; a.op_lv = x3; a.op_hv = x4; }
+    a.load_src = 0U; a.sl_zero_ca = 0U; a.sl_gain = 0U; MS_Pack(&a, old);
+    CHECK(old[26] == 0U && old[27] == 0U && old[28] == 0U && old[29] == 0U && old[30] == 0U && old[31] == 0U, "with the new fields at their defaults the record is byte for byte what the older firmware wrote: bytes 26 to 31 are zero");
+    a.load_src = 1U; a.sl_zero_ca = 250U; a.sl_gain = 1282U; MS_Pack(&a, raw);
+    for (i = 0; i < 26; i++) if (raw[i] != old[i]) same = 0;
+    CHECK(same, "setting the new fields changes NOTHING in bytes 0 to 25");
+    CHECK(raw[26] == 1U && raw[27] == 0U && (raw[28] | (raw[29] << 8)) == 250 && (raw[30] | (raw[31] << 8)) == 1282, "Load Source at byte 26, the zero (hundredths of an ampere) at 28 and 29, the gain at 30 and 31");
+    MS_Unpack(&b, raw); CHECK(b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U && b.set_v == 235U && b.maxcorr_v == 45U, "and they unpack to the same values");
+    /* an OLD record in flash loads fine */
+    flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MStore_Save(&st, old) == 0, "an old-format record is written"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 235U && b.load_src == 0U && b.sl_zero_ca == 0U && b.sl_gain == 0U, "and it LOADS (the version and length are unchanged): Master CT, not calibrated, every other setting intact");
+    /* the new fields are saved and restored */
+    CHECK(MS_Save(&st, &a) == 0, "a record with them is saved"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 1U && b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U, "and comes back");
+    /* what is refused */
+    { MSettings_t x; static const struct { int field; uint16_t v; } BAD[] = { {0, 2}, {0, 255}, {1, 4001}, {1, 65535}, {2, 199}, {2, 5001}, {2, 100}, {2, 65535} };
+      unsigned k; for (k = 0U; k < sizeof BAD / sizeof BAD[0]; k++) { x = a; if (BAD[k].field == 0) x.load_src = (uint8_t)BAD[k].v; else if (BAD[k].field == 1) x.sl_zero_ca = BAD[k].v; else x.sl_gain = BAD[k].v;
+          CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG && MS_Save(&st, &x) != 0, "refused: field %d = %u (%d)", BAD[k].field, (unsigned)BAD[k].v, (int)MS_Validate(&x, 0)); } }
+    { MSettings_t x = a; x.sl_gain = 0U; x.sl_zero_ca = 4000U; CHECK(MS_Validate(&x, 0) == MS_OK, "gain 0 (not calibrated) and a zero of 40.00 A are valid"); x.sl_gain = 200U; CHECK(MS_Validate(&x, 0) == MS_OK, "so are the ends of the gain range, 0.200"); x.sl_gain = 5000U; CHECK(MS_Validate(&x, 0) == MS_OK, "and 5.000"); }
+    /* a record whose NEW bytes are corrupt but whose CRC is right is not trusted either: the defaults */
+    raw[26] = 7U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 0U && b.load_src == 0U && b.sl_gain == 0U, "a record with Load Source 7 and a good CRC is not trusted: the defaults");
+    printf("  settings record: Load Source and the slave load calibration in bytes 26 to 31, old records still load, the ranges are enforced\n");
+}
+
 static void t_settings_powercut(void)
 {
     MStore_t st; MSettings_t a, b, r; int cuts, bad = 0; uint32_t total;
@@ -386,6 +417,7 @@ int main(void)
     t_settings_validate();
     t_settings_limits_model();
     t_settings_store();
+    t_settings_slave_load();
     t_settings_powercut();
     t_log_basic();
     t_log_powercut();

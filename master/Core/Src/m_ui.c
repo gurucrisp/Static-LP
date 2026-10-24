@@ -95,15 +95,15 @@ static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
 static const char *mode_text(uint8_t m) { return (m == (uint8_t)M_MODE_INDUSTRIAL) ? "Industrial" : ((m == (uint8_t)M_MODE_DOMESTIC) ? "Domestic" : "Single Phase"); }
 
 /* ---------------------------------------------------------------------------------------------------- Set-Mode items */
-typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN, K_DATE, K_TIME } MKind_t;
+typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN, K_DATE, K_TIME, K_LOADSRC } MKind_t;
 typedef struct { uint8_t id; const char *name; uint8_t kind, digits; char unit; } MItem_t;
-#define N_ITEMS 24U
+#define N_ITEMS 25U
 static const MItem_t ITEMS[N_ITEMS] =
 {
     {  1, "Mode",                K_MODE,    0U, ' ' }, {  2, "Calibration",         K_YN,   0U, ' ' }, {  3, "Set Voltage",         K_NUM,  3U, 'V' },
     {  4, "Max Correction",      K_NUM,     3U, 'V' }, {  5, "I/P LV",              K_NUM,  3U, 'V' }, {  6, "I/P HV",              K_NUM,  3U, 'V' },
     {  7, "O/P LV",              K_NUM,     3U, 'V' }, {  8, "O/P HV",              K_NUM,  3U, 'V' }, {  9, "Volt Cut Delay",      K_NUM,  2U, 's' },
-    { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' },
+    { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 25, "Load Source",         K_LOADSRC, 0U, ' ' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' },
     { 13, "Phase Sequence",      K_YN,      0U, ' ' }, { 14, "Display Scroll",      K_YN,   0U, ' ' }, { 15, "Scroll Time",         K_NUM,  2U, 's' },
     { 16, "Password",            K_NUM,     3U, ' ' }, { 17, "Restart Mode",        K_AUTOMAN, 0U, ' ' }, { 18, "Restart Time",     K_NUM,  3U, 's' },
     { 23, "Date",                K_DATE,    8U, ' ' }, { 24, "Time",                K_TIME, 4U, ' ' },
@@ -131,7 +131,7 @@ static uint16_t item_get(const MSettings_t *s, uint8_t id)
     {
     case 1: return s->mode;   case 3: return s->set_v;  case 4: return s->maxcorr_v; case 5: return s->ip_lv; case 6: return s->ip_hv; case 7: return s->op_lv; case 8: return s->op_hv;
     case 9: return s->volt_cut_delay; case 10: return s->ovl_current; case 11: return s->ovl_cut_delay; case 12: return s->heat_delay; case 13: return s->phase_seq; case 14: return s->scroll;
-    case 15: return s->scroll_time; case 16: return s->password; case 17: return s->restart_auto; case 18: return s->restart_time; default: return 0U;
+    case 15: return s->scroll_time; case 16: return s->password; case 17: return s->restart_auto; case 18: return s->restart_time; case 25: return s->load_src; default: return 0U;
     }
 }
 static void item_set(MSettings_t *s, uint8_t id, uint16_t v)
@@ -141,7 +141,7 @@ static void item_set(MSettings_t *s, uint8_t id, uint16_t v)
     case 1: s->mode = (uint8_t)v; break;   case 3: s->set_v = v; break;  case 4: s->maxcorr_v = v; break; case 5: s->ip_lv = v; break; case 6: s->ip_hv = v; break; case 7: s->op_lv = v; break; case 8: s->op_hv = v; break;
     case 9: s->volt_cut_delay = (uint8_t)v; break; case 10: s->ovl_current = v; break; case 11: s->ovl_cut_delay = (uint8_t)v; break; case 12: s->heat_delay = (uint8_t)v; break;
     case 13: s->phase_seq = (uint8_t)v; break; case 14: s->scroll = (uint8_t)v; break; case 15: s->scroll_time = (uint8_t)v; break; case 16: s->password = v; break;
-    case 17: s->restart_auto = (uint8_t)v; break; case 18: s->restart_time = v; break; default: break;
+    case 17: s->restart_auto = (uint8_t)v; break; case 18: s->restart_time = v; break; case 25: s->load_src = (uint8_t)v; break; default: break;
     }
 }
 static uint8_t item_of_error(MSErr_t e)
@@ -275,7 +275,7 @@ static void set_commit(MUI_t *u, uint32_t now)
             else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
             else if (it->id == 20U) { u->req |= MUI_REQ_CLEAR_LOG; msg_set(u, "Fault Log", "Cleared", now, 0U); }
             else if (it->id == 21U) { leave_set_discard(u, now, "Changes", "Discarded"); return; }
-            else if (it->id == 22U) { MS_Defaults(&u->work); MS_ApplyLim(&u->work, u->lim); }
+            else if (it->id == 22U) { uint16_t kz = u->work.sl_zero_ca, kg = u->work.sl_gain; MS_Defaults(&u->work); u->work.sl_zero_ca = kz; u->work.sl_gain = kg; MS_ApplyLim(&u->work, u->lim); }      /* the load calibrations are not settings: they stay */
         }
         if (is_last_item(u)) { leave_set_saved(u, now); return; }          /* one round is complete: leave Set-Mode (saving), do not start again */
         enter_item(u, next_item(u, u->item));
@@ -323,24 +323,25 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             else open_set(u, now);
         }
         else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U)) u->req |= MUI_REQ_CAL_SAVE;
+        else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 9U)) u->req |= MUI_REQ_SLCAL_SAVE;               /* the Slave Load Cal page: LOG saves the zero (00.0) or the gain */
         else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 5U) || (u->page == 6U))) u->req |= MUI_REQ_VCAL_SAVE;      /* on the calibration page LOG saves */
         else if (ev == MK_LOG_SHORT) { u->screen = (uint8_t)MUI_LOG; u->log_idx = 0U; }
         else if (ev == MK_MENU_SHORT)
         {
             if (u->live->mode == (uint8_t)M_MODE_SINGLE)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
-                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 9U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
+                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 10U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }
-        else if ((ev == MK_START) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
+        else if ((ev == MK_START) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
         {
             static const uint16_t PLACE[4] = { 1000U, 100U, 10U, 1U };
             uint16_t p = PLACE[u->cal_cursor & 3U], d = (uint16_t)((u->cal_val / p) % 10U);
             u->cal_val = (uint16_t)((d == 9U) ? (u->cal_val - 9U * p) : (u->cal_val + p));
         }
         else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 5U) || (u->page == 6U)) && (u->unit_active != 0U)) u->req |= MUI_REQ_STOP;     /* "STOP the unit first": the STOP key does it */
-        else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U))) u->cal_cursor = (uint8_t)((u->cal_cursor + 1U) & 3U);
+        else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U))) u->cal_cursor = (uint8_t)((u->cal_cursor + 1U) & 3U);
         else if (ev == MK_START) u->req |= MUI_REQ_START;
         else if (ev == MK_STOP) u->req |= MUI_REQ_STOP;
         break;
@@ -379,7 +380,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         {
             if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
             else if (it->kind == (uint8_t)K_MODE) { item_set(&u->work, 1U, (uint16_t)((u->work.mode + 1U) % 3U)); }
-            else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
+            else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN) || (it->kind == (uint8_t)K_LOADSRC)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
             else if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME)) clk_digit_inc(u, it->id);
             else digit_inc(u, it);
         }
@@ -398,6 +399,21 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
     if (u->live->mode == (uint8_t)M_MODE_SINGLE)
     {
         uint8_t ok = d->have[0];
+        if (u->page == 9U)
+        {   /* SLAVE LOAD CAL (v0.9.45): the converter current the slave measures, and the meter value being typed. With the unit RUNNING and NO load, type 00.0 and press LOG: the peak now is the zero. With a known load, type the meter's value and press LOG: the gain.
+             * START edits the digit, STOP moves the cursor, LOG saves, MENU goes on. The conversion is: load = (peak - zero) x gain. */
+            char v[8]; uint32_t c; uint16_t pk = (uint16_t)((d->sl_pk_ca + 5U) / 10U), rm = (uint16_t)((d->sl_rms_ca + 5U) / 10U);
+            if (u->cal_init != 0U) { ((MUI_t *)u)->cal_val = (pk > 9999U) ? 9999U : pk; ((MUI_t *)u)->cal_init = 0U; }
+            f_center(f, 0U, "Slave Load Cal");
+            f_put(f, 1U, 0U, "Peak"); tenths_put(f, 1U, 4U, pk, 5U, d->sl_valid); f_put(f, 1U, 9U, "A"); f_put(f, 1U, 11U, "RMS"); tenths_put(f, 1U, 14U, rm, 5U, d->sl_valid); f_put(f, 1U, 19U, "A");
+            f_put(f, 2U, 0U, "Actual");
+            v[0] = (char)('0' + ((u->cal_val / 1000U) % 10U)); v[1] = (char)('0' + ((u->cal_val / 100U) % 10U)); v[2] = (char)('0' + ((u->cal_val / 10U) % 10U)); v[3] = '.'; v[4] = (char)('0' + (u->cal_val % 10U)); v[5] = '\0';
+            c = (u->cal_cursor == 3U) ? 4U : u->cal_cursor;
+            if (blink_on(u, now) == 0U) v[c] = '_';
+            f_put(f, 2U, 11U, v); f_put(f, 2U, 18U, "A");
+            f_put(f, 3U, 0U, (d->sl_valid == 0U) ? "No converter reading" : ((d->sl_run == 0U) ? "Run the unit first" : "LOG=Save  MENU=Next"));
+            return;
+        }
         if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U))
         {   /* LOAD CALIBRATION (page 3) and the two VOLTAGE CALIBRATION pages (5 = input, 6 = output): the reading, and the meter value being typed. START edits the digit, STOP moves the cursor, LOG saves, MENU leaves. */
             char v[8], un[2]; uint32_t c; uint16_t rd = (u->page == 3U) ? d->load_da[0] : ((u->page == 5U) ? d->vin_raw_dv : d->vout_raw_dv);
@@ -505,6 +521,7 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
     if (it->kind == (uint8_t)K_MODE) { f_center(f, 2U, mode_text(u->work.mode)); return; }
     if (it->kind == (uint8_t)K_YN) { f_center(f, 2U, (item_get(&u->work, it->id) != 0U) ? "Yes" : "No"); return; }
     if (it->kind == (uint8_t)K_AUTOMAN) { f_center(f, 2U, (u->work.restart_auto != 0U) ? "Auto" : "Manual"); return; }
+    if (it->kind == (uint8_t)K_LOADSRC) { f_center(f, 2U, (u->work.load_src != 0U) ? "Slave" : "Master CT"); return; }
     if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME))
     {   /* dd/mm/yyyy or HH:MM, centred, the blinking underscore under the digit being edited */
         const MDateTime_t *t = &u->clk_work; char s[12]; uint32_t len, pos, col0;

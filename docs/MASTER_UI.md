@@ -255,3 +255,7 @@ A slave without the autotune answers `Not Supported`; one with `SLAVE_AUTOTUNE 1
 
 ## The Transformer Profile page (v0.9.39)
 LOG, then MENU x8: the numbers of the profile the slave's last autotune stored (cap, gain scale boost / buck, the input and Max Correction it was made with, the points), from optional fields of the slave's `$H` frame. MENU once more returns to the Run screen (nine pages: Run + eight service pages). See docs/AUTOTUNE_BENCH.md for what each number does.
+
+
+## Load Source and the Slave Load Cal page (v0.9.45)
+Set-Mode item **Load Source** (after Overload Current): `Master CT` (default) or `Slave`, toggled with START. The service pages are now ten (Run + nine): LOG, then MENU x9 opens **Slave Load Cal**: the converter PEAK and RMS, the meter value being typed, and LOG saves the zero (type 000.0 at no load) or the gain (type the meter's value at a known load). MENU once more returns to Run. See docs/SLAVE_LOAD_CAL.md.

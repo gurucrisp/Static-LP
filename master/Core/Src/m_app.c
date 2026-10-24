@@ -30,6 +30,15 @@ static uint16_t ct_to_da(const MCal_t *c, uint16_t x16)
     v = ((uint64_t)(uint32_t)d * MAPP_CT_DA_PER_COUNT_X1000 * (uint64_t)c->gain_x1000 + 8000000ULL) / 16000000ULL;
     return (v > 6000ULL) ? 6000U : (uint16_t)v;
 }
+/* the load current in tenths of an amp from the slave's CONVERTER current: load = (peak - zero) x gain. The PEAK is used: the converter's RMS hardly moves with the load (0.9 A RMS at 10 A of load, and as much at no load), the peak does (7.8 A at 10 A).
+ * The zero is the peak at no load WITH THE UNIT RUNNING (the converter's own magnetizing current), the gain is load / (peak - zero) at a known load. */
+static uint16_t sl_to_da(const MSettings_t *s, uint16_t pk_ca)
+{
+    int32_t x = (int32_t)pk_ca - (int32_t)s->sl_zero_ca; uint64_t v;
+    if (x < 0) x = 0;
+    v = (((uint64_t)(uint32_t)x * (uint64_t)s->sl_gain) + 5000ULL) / 10000ULL;                  /* hundredths of an amp x thousandths / 10000 = tenths of an amp */
+    return (v > 6000ULL) ? 6000U : (uint16_t)v;
+}
 static uint32_t ct_nominal_da(const MCal_t *c, uint16_t x16)      /* the same with gain 1: what the span calibration divides by */
 {
     int32_t d = (int32_t)x16 - (int32_t)c->zero_x16; if (d < 0) d = 0;
@@ -154,6 +163,35 @@ static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 #define TR_LOST 7U      /* our own result code: the $T frames stopped coming */
 
 static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; MUI_Notify(&a->ui, l1, l2, now); }
+
+/* The Slave Load Cal page, LOG (v0.9.45). With the unit RUNNING: a typed 00.0 = "no load now": the converter PEAK now is the zero; a typed load = "this is the load now": the gain. Both saved with the settings. */
+static void slcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
+{
+    uint32_t entered = MUI_CalValue(&a->ui);                                           /* tenths of an amp */
+    uint16_t keep_z = a->settings.sl_zero_ca, keep_g = a->settings.sl_gain;
+    if ((d->have == 0U) || (d->iout_valid == 0U)) { MUI_Notify(&a->ui, "No Converter", "Current Reading", now); return; }
+    if (d->state != 2U) { MUI_Notify(&a->ui, "Run The Unit", "First", now); return; }
+    if (d->iout_clip != 0U) { MUI_Notify(&a->ui, "Reading Clipped", "Reduce The Load", now); return; }
+    if (a->sstore.fl == 0) { MUI_Notify(&a->ui, "Calibration", "Not Available", now); return; }
+    if (entered == 0U)
+    {   /* THE ZERO: the peak at no load */
+        if (d->iout_pk_ca > 4000U) { MUI_Notify(&a->ui, "Out Of Range", "Open The Load", now); return; }
+        a->settings.sl_zero_ca = d->iout_pk_ca;
+        if (MS_Save(&a->sstore, &a->settings) == 0) MUI_Notify(&a->ui, "Zero Set", "Now The Gain", now);
+        else { a->settings.sl_zero_ca = keep_z; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
+        return;
+    }
+    {   /* THE GAIN: the typed load against the peak above the zero */
+        uint32_t delta = (d->iout_pk_ca > a->settings.sl_zero_ca) ? (uint32_t)(d->iout_pk_ca - a->settings.sl_zero_ca) : 0U, g;
+        if (delta < MAPP_SL_MIN_DELTA_CA) { MUI_Notify(&a->ui, "Load Too Low", "Min 1 A Above Zero", now); return; }
+        if ((entered < MAPP_CT_MIN_CAL_DA) || (entered > 1800U)) { MUI_Notify(&a->ui, "Enter 2.0-180.0 A", "", now); return; }
+        g = (entered * 10000U + (delta / 2U)) / delta;
+        if ((g < 200U) || (g > 5000U)) { MUI_Notify(&a->ui, "Out Of Range", "Check The Load", now); return; }
+        a->settings.sl_gain = (uint16_t)g;
+        if (MS_Save(&a->sstore, &a->settings) == 0) MUI_Notify(&a->ui, "Calibrated", "Saved", now);
+        else { a->settings.sl_gain = keep_g; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
+    }
+}
 
 static void tune_request(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
@@ -334,6 +372,10 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     r.vout_dv[0] = disp_filter(&a->f_vout, d->vout_dv, d->have, 10, 7, now);
     ld = d->load_da; lok = d->load_ok;
     if (d->ct_raw != 0U) { ld = ct_to_da(&a->cal, d->ct_x16); lok = 1U; }                      /* from the CT count and the calibration */
+    if ((a->settings.load_src != 0U) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
+    {   /* "Load Source = Slave": the slave's converter current, calibrated. NOT calibrated, no reading or a clipped one: the master CT stays in charge (the overload trip must never depend on a reading that is not there). */
+        ld = sl_to_da(&a->settings, d->iout_pk_ca); lok = 1U;
+    }
     r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3, now);   /* tenths of an amp, 0.3 A band */
 
     /* the slave's own limits (its $H frame): Set-Mode checks the I/P cut-offs against its window and O/P HV against its output guard (D7, D26) */
@@ -386,6 +428,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     else if ((d->have != 0U) && (d->fault != 0U)) r.fault[0] = MF_SlaveFaultType(d->fault, d->vin_dv, a->settings.set_v);
     r.fcode[0] = (uint8_t)((d->have != 0U) ? d->fault : 0U);
     if (d->have == 0U) r.fault[0] = (uint8_t)(a->eout.fault[0] != 0U ? a->eout.fault[0] : 0U);
+    r.sl_pk_ca = d->iout_pk_ca; r.sl_rms_ca = d->iout_rms_ca; r.sl_valid = (uint8_t)((d->have != 0U) && (d->iout_valid != 0U)); r.sl_run = (uint8_t)(d->state == 2U);      /* for the Slave Load Cal page */
     r.vin_raw_dv = d->vin_dv; r.vout_raw_dv = d->vout_dv; r.active = (uint8_t)((a->eout.run[0] != 0U) || (d->state != 0U));       /* for the Voltage Calibration pages */
     r.wait_s[0] = (a->eout.fault[0] != 0U) ? MF_RestartLeftS(&a->eng, 0U) : 0U;                                      /* the automatic restart countdown for the status row */
     r.fcode[0] = (a->eout.fault[0] != 0U) ? a->eng.u[0].fcode : (((a->eout.appear[0] == 0U) && (d->have != 0U)) ? d->fault : 0U);      /* the slave code behind the fault shown */
@@ -427,6 +470,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             else { uint16_t keep = a->cal.gain_x1000; a->cal.gain_x1000 = (uint16_t)g; if (cal_save(a) == 0) { a->cal.from_flash = 1U; MUI_Notify(&a->ui, "Calibrated", "Saved", now); } else { a->cal.gain_x1000 = keep; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); } }
         }
     }
+    if (MUI_Take(&a->ui, MUI_REQ_SLCAL_SAVE)) slcal_request(a, d, now);
     if (MUI_Take(&a->ui, MUI_REQ_RETUNE) != 0U) tune_request(a, d, now);
     tune_service(a, d, now);
 }

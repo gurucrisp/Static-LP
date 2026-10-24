@@ -142,7 +142,8 @@ static void t_screens(void)
     key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "a sixth: the O/P Calibration page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsIout(&U) && MUI_ShowsVCal(&U) == 0U, "a seventh: the Converter Current page");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsProfile(&U) && !MUI_ShowsIout(&U) && MUI_ShowsVCal(&U) == 0U, "an eighth: the Transformer Profile page");
-    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U) && MUI_ShowsVCal(&U) == 0U && !MUI_ShowsIout(&U) && !MUI_ShowsProfile(&U), "and a ninth: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
+    key(MK_MENU_SHORT); CHECK(strstr(row(0), "Slave Load Cal") != NULL && U.page == 9U, "a ninth: the Slave Load Cal page (drawn by the UI)");
+    key(MK_MENU_SHORT); CHECK(!MUI_ShowsMonitor(&U) && !MUI_ShowsDiag(&U) && !MUI_ShowsCal(&U) && !MUI_ShowsClock(&U) && MUI_ShowsVCal(&U) == 0U && !MUI_ShowsIout(&U) && !MUI_ShowsProfile(&U) && U.page == 0U, "and a tenth: back to the Run screen"); ROW(0, "O/P Voltage    230 V");
     /* a service page returns to the Run screen by itself after a minute, and at once when a fault appears */
     key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "on the monitor page again");
     tick(59000U); CHECK(MUI_ShowsMonitor(&U), "59 s without a key: still there"); tick(2000U); CHECK(!MUI_ShowsMonitor(&U), "61 s without a key: back on the Run screen");
@@ -375,11 +376,53 @@ static void t_log_viewer(void)
     key(MK_STOP); key(MK_STOP); key(MK_STOP); ROW(0, "Fault Log 00/02");
     key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "MENU in the log opens the service pages (single-phase)");
     { int q; for (q = 0; q < 7; q++) key(MK_MENU_SHORT); } CHECK(MUI_ShowsProfile(&U) && !MUI_ShowsIout(&U), "seven more MENU presses reach the Transformer Profile page (the last service page)");
-    key(MK_MENU_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "and one more cycles back to the Run screen (nine pages in all: Run + eight service pages)");
+    key(MK_MENU_SHORT); CHECK(strstr(row(0), "Slave Load Cal") != NULL, "one more reaches the Slave Load Cal page");
+    key(MK_MENU_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "and one more cycles back to the Run screen (ten pages in all: Run + nine service pages)");
     key(MK_LOG_SHORT); key(MK_LOG_SHORT); CHECK(strstr(row(0), "O/P") != NULL, "LOG leaves the log");
     key(MK_LOG_SHORT); tick(30100U); CHECK(strstr(row(0), "O/P") != NULL, "30 s with no key leaves the log by itself");
     { int i; for (i = 0; i < 130; i++) add_log(MLOG_T_HEAT, 0U, 0U, 2300U, 2300U, 100U, (uint32_t)i); key(MK_LOG_SHORT); ROW(0, "Fault Log 00/99"); CHECK(1, "with a long log the numbers run 00 to 99"); }
     printf("  fault log viewer: newest first, START older, STOP newer, time as hours and minutes, 00 to 99, idle exit\n");
+}
+
+
+/* ---- v0.9.45: the Slave Load Cal page (the ninth service page) and the Load Source item ---- */
+static void t_slave_cal_page(void)
+{
+    ui_reset(M_MODE_SINGLE); to_run();
+    D.sl_pk_ca = 780U; D.sl_rms_ca = 90U; D.sl_valid = 1U; D.sl_run = 1U; tick(100U);
+    key(MK_LOG_SHORT); { int q; for (q = 0; q < 9; q++) key(MK_MENU_SHORT); } tick(100U);
+    CHECK(U.page == 9U && strstr(row(0), "Slave Load Cal") != NULL, "LOG, then nine MENU presses open the Slave Load Cal page ('%s')", row(0));
+    CHECK(strstr(row(1), "Peak") != NULL && strstr(row(1), "7.8") != NULL && strstr(row(1), "RMS") != NULL && strstr(row(1), "0.9") != NULL && strlen(row(1)) <= 20U, "it shows the converter PEAK and RMS ('%s')", row(1));
+    CHECK(MUI_CalValue(&U) == 78U, "and the entry starts from the peak (7.8 A = 78)");
+    CHECK(strstr(row(3), "LOG=Save  MENU=Next") != NULL, "with the unit running the last row says LOG=Save ('%s')", row(3));
+    { uint32_t t; int seen = 0; for (t = 0U; t < 1200U; t += 50U) { tick(50U); if (strstr(row(2), "007.8") != NULL) seen = 1; } CHECK(seen, "the entry reads 007.8 on the Actual row ('%s')", row(2)); }
+    key(MK_START); CHECK(MUI_CalValue(&U) == 88U && !MUI_Take(&U, MUI_REQ_START), "START adds 1 A and does NOT start the unit");
+    key(MK_STOP); key(MK_START); CHECK(MUI_CalValue(&U) == 89U && !MUI_Take(&U, MUI_REQ_STOP), "STOP moves to the tenths, START adds 0.1 A and does NOT stop the unit");
+    key(MK_LOG_SHORT); CHECK(MUI_Take(&U, MUI_REQ_SLCAL_SAVE) && !MUI_Take(&U, MUI_REQ_SLCAL_SAVE) && U.page == 9U && U.screen == (uint8_t)MUI_RUN, "LOG makes ONE save request and stays on the page (it does not open the fault log)");
+    D.sl_run = 0U; tick(100U); CHECK(strstr(row(3), "Run the unit first") != NULL, "unit not running: 'Run the unit first' ('%s')", row(3));
+    D.sl_valid = 0U; tick(100U); CHECK(strstr(row(3), "No converter reading") != NULL && strstr(row(1), "--") != NULL, "no converter reading: dashes and 'No converter reading' ('%s' / '%s')", row(1), row(3));
+    key(MK_MENU_SHORT); CHECK(U.page == 0U && strstr(row(0), "O/P") != NULL, "MENU leaves, back to the Run screen");
+    /* a very large reading never overflows the row */
+    D.sl_pk_ca = 4000U; D.sl_rms_ca = 4000U; D.sl_valid = 1U; D.sl_run = 1U; key(MK_LOG_SHORT); { int q; for (q = 0; q < 9; q++) key(MK_MENU_SHORT); } tick(100U);
+    { int w = 1, r; for (r = 0; r < 4; r++) if (strlen(F[r]) != 20U) w = 0; CHECK(w, "40 A of peak still fits the 20 columns"); }
+    printf("  slave load cal page: LOG + MENU x9, shows peak and RMS, the entry starts from the peak, START/STOP edit and never start or stop the unit, LOG saves once\n");
+}
+
+static void t_load_source_item(void)
+{
+    uint8_t ids[32]; int n, i, p10 = -1, p25 = -1, p11 = -1;
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); n = walk(ids);
+    for (i = 0; i < n; i++) { if (ids[i] == 10U) p10 = i; if (ids[i] == 25U) p25 = i; if (ids[i] == 11U) p11 = i; }
+    CHECK(p10 >= 0 && p25 == p10 + 1 && p11 == p25 + 1, "Load Source (25) sits right after Overload Current (10) and before Overload Cut Delay (11)");
+    ui_reset(M_MODE_SINGLE); to_run(); S.load_src = 0U; enter_set(); goto_item(25U);
+    CROW(1, "Load Source"); CROW(2, "Master CT");
+    key(MK_START); CROW(2, "Slave"); key(MK_START); CROW(2, "Master CT"); key(MK_START); CROW(2, "Slave");
+    { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); } }
+    CHECK(!MUI_SetModeOpen(&U) && S.load_src == 1U && MUI_Take(&U, MUI_REQ_SAVE), "START toggles Master CT / Slave; leaving Set-Mode saves it (load_src = %u)", (unsigned)S.load_src);
+    /* the slave load calibration is not a setting that Factory Reset throws away */
+    ui_reset(M_MODE_SINGLE); to_run(); S.sl_zero_ca = 123U; S.sl_gain = 1280U; S.load_src = 1U; enter_set(); goto_item(22U); CROW(1, "Factory Reset"); key(MK_START); key(MK_MENU_SHORT); tick(100U);
+    CHECK(S.set_v == 230U && S.load_src == 0U && S.sl_zero_ca == 123U && S.sl_gain == 1280U && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset resets the settings (Load Source back to Master CT) but KEEPS the slave load calibration (zero %u, gain %u)", (unsigned)S.sl_zero_ca, (unsigned)S.sl_gain);
+    printf("  load source item: after Overload Current, toggles Master CT / Slave, saved; Factory Reset keeps the slave load calibration\n");
 }
 
 static void t_setmode_nav(void)
@@ -395,7 +438,7 @@ static void t_setmode_nav(void)
     CHECK(ids[0] == 1U && ids[1] == 2U && ids[2] == 3U && ids[3] == 4U && ids[4] == 5U, "the first items are Mode, Calibration, Set Voltage, Max Correction, I/P LV");
     for (m = 0; m < n; m++) if (ids[m] == 13U || ids[m] == 14U || ids[m] == 15U) break;
     CHECK(m == n, "Single mode: Phase Sequence, Display Scroll and Scroll Time are not offered");
-    CHECK(n == 21, "Single mode with Auto restart offers 21 items: the 19 before plus Date and Time (%d)", n);
+    CHECK(n == 22, "Single mode with Auto restart offers 22 items: the 19 before, Load Source, Date and Time (%d)", n);
     CHECK(ids[n - 1] == 22U, "the last is Factory Reset");
     CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SAVE), "one round of the items is complete: the MENU press on the last one LEAVES Set-Mode (saving), it does not start again");
     CHECK(strstr(row(0), "O/P") != NULL, "and Run-Mode is shown");
@@ -404,11 +447,11 @@ static void t_setmode_nav(void)
     ui_reset(M_MODE_INDUSTRIAL); to_run(); enter_set();
     n = walk(ids);
     { int has13 = 0, has14 = 0, has15 = 0; for (m = 0; m < n; m++) { if (ids[m] == 13U) has13 = 1; if (ids[m] == 14U) has14 = 1; if (ids[m] == 15U) has15 = 1; }
-      CHECK(has13 && has14 && has15 && n == 24, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 24 items (%d)", n); }
+      CHECK(has13 && has14 && has15 && n == 25, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 25 items (%d)", n); }
     /* Domestic: no Phase Sequence */
     ui_reset(M_MODE_DOMESTIC); to_run(); enter_set();
     n = walk(ids);
-    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 23, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 23 items (%d)", n); }
+    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 24, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 24 items (%d)", n); }
     /* Manual restart hides Restart Time; Scroll No hides Scroll Time */
     ui_reset(M_MODE_INDUSTRIAL); S.restart_auto = 0U; S.scroll = 0U; to_run(); enter_set();
     n = walk(ids);
@@ -614,6 +657,8 @@ int main(void)
     t_clock_save();
     t_log_stamp();
     t_cal_page();
+    t_slave_cal_page();
+    t_load_source_item();
     t_vcal_pages();
     t_log_viewer();
     t_setmode_nav();

@@ -1,5 +1,6 @@
 /* End-to-end tests of the master application (m_app): raw key levels with real timing, settings that survive a restart, a failed save, a damaged flash, and the slave's data on the screen. */
 #include <stdio.h>
+#include <math.h>
 /* the limits the tests were written for (valid in the new limits model with Max Correction not set); the NEW defaults have their own tests */
 #define LEGACY_LIMITS(s) do { (s).ip_lv = 180U; (s).ip_hv = 280U; (s).op_lv = 200U; (s).op_hv = 250U; } while (0)
 #include <string.h>
@@ -841,8 +842,67 @@ static void t_profile_page(void)
     CHECK(strncmp(fr[1], "Cap 1024 ticks Knee", 19) == 0 && strncmp(fr[2], "Gain B1.198 U0.080", 18) == 0 && strncmp(fr[3], "At 230V Max 060V n07", 20) == 0, "a knee, small scales, 7 points: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
     D.prof_cap = 9999U; D.prof_kib = 65535U; D.prof_kiu = 65535U; D.prof_vref_dv = 65535U; D.prof_maxc_dv = 65535U; D.prof_n = 15U; D.prof_knee = 0U; run(100U); MApp_ProfilePage(&A, T, fr);
     { int w = 1; for (q = 0; q < 4; q++) if (strlen(fr[q]) != 20U) w = 0; CHECK(w, "extreme values never overflow the 20 columns"); }
-    tap(0, 100U); run(100U); CHECK(!MApp_ShowsProfile(&A) && !MApp_ShowsIout(&A) && A.ui.page == 0U, "MENU on the last page goes back to the Run screen (page %u)", (unsigned)A.ui.page);
+    tap(0, 100U); run(100U); CHECK(!MApp_ShowsProfile(&A) && A.ui.page == 9U, "MENU after the profile page goes to the Slave Load Cal page (page %u)", (unsigned)A.ui.page);
+    tap(0, 100U); run(100U); CHECK(!MApp_ShowsProfile(&A) && !MApp_ShowsIout(&A) && A.ui.page == 0U, "and MENU on the last page goes back to the Run screen (page %u)", (unsigned)A.ui.page);
     printf("  transformer profile page: the numbers, no profile, a knee, extreme values\n");
+}
+
+
+/* ---- v0.9.45: the load current from the slave's converter current: the conversion, the source choice with its fallbacks, the overload trip, the Slave Load Cal page (zero, gain, errors, persistence) ---- */
+static void slave_load_setup(uint16_t pk_ca, uint16_t zero_ca, uint16_t gain)
+{
+    D.iout_valid = 1U; D.iout_clip = 0U; D.iout_pk_ca = pk_ca; D.iout_rms_ca = 90U; A.settings.sl_zero_ca = zero_ca; A.settings.sl_gain = gain;
+}
+static float load_shown(void) { float v = -1.0f; if (sscanf(row(2), "Load %f", &v) != 1) v = -1.0f; return v; }      /* the Load number on the Run screen: it has a 0.3 A hysteresis band, so it is compared with a tolerance */
+static void t_slave_load(void)
+{
+    int q;
+    /* the conversion: load = (peak - zero) x gain: (7.80 - 1.00) A x 1.280 = 8.7 A, against the master CT's 5.5 A */
+    fresh(); to_run(); run(9000U); D.load_da = 55U; D.load_ok = 1U; slave_load_setup(780U, 100U, 1280U); A.settings.load_src = 0U; run(4000U);
+    CHECK(fabsf(load_shown() - 5.5f) <= 0.35f, "Load Source = Master CT: the Run screen shows the master CT's 5.5 A ('%s')", row(2));
+    A.settings.load_src = 1U; run(4000U);
+    CHECK(fabsf(load_shown() - 8.7f) <= 0.35f, "Load Source = Slave: (7.80 - 1.00) A x 1.280 = 8.7 A ('%s')", row(2));
+    /* every case in which the slave's reading cannot be trusted falls back to the master CT */
+    A.settings.sl_gain = 0U; run(4000U); CHECK(fabsf(load_shown() - 5.5f) <= 0.35f, "Slave source but NOT calibrated (gain 0): the master CT stays in charge ('%s')", row(2));
+    A.settings.sl_gain = 1280U; D.iout_clip = 1U; run(4000U); CHECK(fabsf(load_shown() - 5.5f) <= 0.35f, "a CLIPPED converter reading (the current is larger than shown): the master CT ('%s')", row(2));
+    D.iout_clip = 0U; D.iout_valid = 0U; run(4000U); CHECK(fabsf(load_shown() - 5.5f) <= 0.35f, "no converter reading (an older slave, SLAVE_IOUT 0): the master CT ('%s')", row(2));
+    D.iout_valid = 1U; D.have = 0U; run(1000U); D.have = 1U; run(4000U); CHECK(fabsf(load_shown() - 8.7f) <= 0.35f, "and the slave source is back when the reading is ('%s')", row(2));
+    A.settings.sl_zero_ca = 900U; run(4000U); CHECK(load_shown() >= 0.0f && load_shown() <= 0.35f, "a peak below the zero never gives a negative load ('%s')", row(2));
+    /* the OVERLOAD trip follows the chosen source: 120 A from the slave's converter (24 A above zero x gain 5.000) against 0 A from the master CT */
+    fresh(); to_run(); run(9000U); D.load_da = 0U; D.load_ok = 1U; slave_load_setup(2500U, 100U, 5000U); A.settings.load_src = 0U; run(15000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "Master CT source: the slave's converter current has no say: no overload after 15 s");
+    A.settings.load_src = 1U; run(9000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "Slave source: 9 s of the slave-derived 120 A is not yet a trip");
+    run(2000U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && strcmp(row(3), "Overload") == 0, "after the 10 s Overload Cut Delay the contactor opens: the trip follows the slave's current (%s)", row(3));
+    /* the Slave Load Cal page: the ZERO, then the GAIN, saved with the settings and still there after a restart */
+    fresh(); to_run(); run(2000U); D.iout_valid = 1U; D.iout_clip = 0U; D.iout_pk_ca = 250U; D.iout_rms_ca = 100U; run(300U);
+    tap(3, 100U); for (q = 0; q < 9; q++) tap(0, 100U); run(100U);
+    CHECK(A.ui.page == 9U && strstr(row(0), "Slave Load Cal") != NULL && strstr(row(1), "2.5") != NULL, "LOG, MENU x9: the page shows the no-load peak, 2.5 A ('%s' / '%s')", row(0), row(1));
+    A.ui.cal_val = 0U; tap(3, 100U);
+    CHECK(A.settings.sl_zero_ca == 250U && strstr(row(1), "Zero Set") != NULL, "00.0 and LOG at no load: the peak (2.50 A) is the zero (%u) ('%s')", (unsigned)A.settings.sl_zero_ca, row(1));
+    run(3000U); D.iout_pk_ca = 1030U; run(300U); A.ui.cal_val = 100U; tap(3, 100U);
+    CHECK(A.settings.sl_gain == 1282U && strstr(row(1), "Calibrated") != NULL, "10.0 A typed with a peak of 10.30 A: gain = 10.0 / (10.30 - 2.50) = 1.282 (%u) ('%s')", (unsigned)A.settings.sl_gain, row(1));
+    boot(); CHECK(A.settings.sl_zero_ca == 250U && A.settings.sl_gain == 1282U && A.settings_from_flash, "after a restart the calibration is still there (zero %u, gain %u)", (unsigned)A.settings.sl_zero_ca, (unsigned)A.settings.sl_gain);
+    /* the refusals, each with its words, and nothing changes */
+    { static const struct { int what; const char *l1; } E[] = { {0, "Run The Unit"}, {1, "No Converter"}, {2, "Reading Clipped"}, {3, "Load Too Low"}, {4, "Enter 2.0-180.0 A"}, {5, "Out Of Range"}, {6, "Save Failed"} };
+      unsigned e; for (e = 0U; e < sizeof E / sizeof E[0]; e++)
+      {
+          uint16_t z0, g0; fresh(); to_run(); run(2000U); D.iout_valid = 1U; D.iout_pk_ca = 1030U; D.iout_rms_ca = 100U; A.settings.sl_zero_ca = 250U; A.settings.sl_gain = 1000U; z0 = 250U; g0 = 1000U; run(300U);
+          if (E[e].what == 0) stop_unit();                                                  /* a unit that is stopped (STOP key, no fault) */
+          tap(3, 100U); for (q = 0; q < 9; q++) tap(0, 100U); run(100U); A.ui.cal_val = 100U;
+          switch (E[e].what)
+          {
+          case 0: break;                                                       /* the unit was stopped above */
+          case 1: D.iout_valid = 0U; break;
+          case 2: D.iout_clip = 1U; break;
+          case 3: D.iout_pk_ca = 280U; break;                                  /* only 0.30 A above the zero */
+          case 4: A.ui.cal_val = 10U; break;                                   /* 1.0 A: below 2.0 A */
+          case 5: D.iout_pk_ca = 400U; A.ui.cal_val = 1800U; break;           /* 180 A against 1.50 A above the zero: gain 120 */
+          default: fail_prog = 1; break;
+          }
+          run(100U); tap(3, 100U);
+          CHECK(strstr(row(1), E[e].l1) != NULL && A.settings.sl_zero_ca == z0 && A.settings.sl_gain == g0, "refused with '%s': nothing changed ('%s', zero %u, gain %u)", E[e].l1, row(1), (unsigned)A.settings.sl_zero_ca, (unsigned)A.settings.sl_gain);
+      } }
+    printf("  slave load: the conversion, the fallbacks to the master CT, the overload trip following the source, the zero and gain on the page, saved and restored, every refusal\n");
 }
 
 static uint32_t rs = 5150U;
@@ -901,6 +961,7 @@ int main(void)
     t_tune_app();
     t_retune_item_keys();
     t_profile_page();
+    t_slave_load();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

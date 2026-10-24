@@ -44,6 +44,9 @@ typedef struct
     uint16_t password;         /* 000..999                                                         */
     uint8_t  restart_auto;     /* 1 = Auto, 0 = Manual                                             */
     uint16_t restart_time;     /* seconds 1..999: also the power-up on-delay and the IN_BAND hold before the contactor closes */
+    uint8_t  load_src;         /* 0 = the load current is the master CT's, 1 = the slave's converter current, converted by the slave load calibration (v0.9.45)  */
+    uint16_t sl_zero_ca;       /* the slave load calibration's zero: the converter-current PEAK at no load with the unit running, hundredths of an ampere 0..4000 */
+    uint16_t sl_gain;          /* its gain, thousandths: load = (peak - zero) x gain / 1000; 0 = not calibrated, else 200..5000 */
 } MSettings_t;
 
 /* what the slave announced in $H (D7, D26) and what the master knows; used to reject cut-offs the slave would never let be reached */
