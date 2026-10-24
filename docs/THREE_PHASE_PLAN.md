@@ -19,7 +19,7 @@
 ## 3. What is missing
 1. The master application feeds the engine from ONE slave. It needs per-phase data (the three `$S`, `$E`, `$H` streams), per-phase `$M` frames out, per-phase link-lost handling, and the per-phase calibration, Re-tune, converter-current and profile pages.
 2. The HAL glue for three links: three receive rings, three transmitters, 500 kbaud on USART3 and USART4 (they are at 115200 now), the receive error recovery of USART1 repeated for each.
-3. **Phase-to-phase voltage and the phase sequence.** Three RMS values are not enough: they need the timing between phases (see section 5).
+3. **Phase-to-phase voltage and the phase sequence.** Three RMS values are not enough: they need the timing between phases, which the slaves will measure (section 5).
 4. Per-phase autotune (three profiles, one per slave).
 5. The mains rules of the three-phase modes that need a second phase: one phase missing, phase imbalance, and what Industrial does with a lost link.
 
@@ -27,15 +27,29 @@
 * **S1. The data model:** per-phase data in the master application, the engine fed for R, Y and B, per-phase `$M` frames. Domestic first (three independent units), then Industrial (one unit, all trip).
 * **S2. The three links in the glue:** the three receive paths and transmitters, link-lost per slave. (HAL code: not compilable here, as for the single-phase glue; reviewed line by line.)
 * **S3. The three-phase screens fed from the three slaves,** and the per-phase service pages.
-* **S4. Phase timing** (section 5): the phase sequence and the phase-to-phase voltage.
+* **S4. Phase sequence and phase-to-phase voltage from the slaves** (section 5): the ARM frame, the SYNC byte, the slave timestamp, the classification.
 * **S5. Industrial rules:** any phase trips all, the sequence check, a lost slave.
 * **S6. Per-phase autotune,** only after the single-phase sweeps are proven safe on the bench.
 
-## 5. Phase timing: how the master learns the angle between R, Y and B
-**Found in the old firmware (v0.9.44): the master board HAS the phase inputs: PA5 (R_Phase), PA6 (Y_Phase) and PA7 (B_Phase), plain digital inputs with no pull.** The old application finds the sequence with them: at each rising edge of one phase it reads the levels of the other two (OK when B rising sees Y high and R low, R rising sees B high and Y low; two equal levels = the same phase twice; anything else = reversed). So option B is available and needs no new hardware, and no timestamp in the slave: the sequence and the angles can be taken from these three inputs. (PA5 is also the pin that `MASTER_HEAT_INPUT` assumed for an overheat input: that input must stay off, or be moved after the schematic is checked.)
-Option A (the alternative, now not needed) (needs no new master hardware): the master sends one SYNC frame on the three links at the same moment; each slave measures the time from receiving it to its next rising zero-cross and reports it in an optional field of `$E`. The master turns the three delays into the angles: the sequence and, with the three RMS values, the phase-to-phase voltages.
-Accuracy: each slave must timestamp the received SYNC in the serial interrupt (the main-loop polling jitter of about 1 ms would be 18 degrees at 50 Hz); with an interrupt timestamp it is about 50 microseconds, about 1 degree.
-Option B (the one to use): the master measures the timing itself, from PA5, PA6 and PA7. What those pins carry electrically (a squared mains signal, an opto output, its polarity) still has to be read from the schematic.
+## 5. Phase sequence and phase angles FROM THE SLAVES (decided: not from the master's PA5, PA6 and PA7)
+**Decision (v0.9.45): the sequence is measured by the slaves, not by the master's three phase inputs.** (The old firmware used PA5, PA6 and PA7; PA5 is also the pin that `MASTER_HEAT_INPUT` assumed: those pins stay unused by the new master code.)
+**Principle.** The three slaves have no common clock, so the master gives them one instant. Each slave measures the time from that instant to its own next RISING zero-cross and reports it. Phase Y lags R by a third of a period and B by two thirds, so the DIFFERENCES of the three delays, as fractions of the period, are 1/3 and 2/3.
+**The exchange (per measurement round):**
+1. The master sends an ARM frame on each of the three links: `$K,id,SEQ` ("the next SYNC byte within 50 ms is real"). The slave answers with the usual `$R`.
+2. The master sends ONE SYNC byte (0x16) on the three links, back to back (about 20 microseconds apart: under 1 degree at 50 Hz).
+3. Each slave timestamps that byte IN THE SERIAL INTERRUPT (the character-match interrupt of its USART, with the 1 microsecond timer it already uses for the zero-cross timestamps) and, at its next rising zero-cross, stores `delay = t_zero_cross - t_sync` (0 up to one period) together with its measured period.
+4. The slave reports `delay` and the round id in OPTIONAL trailing fields of `$E` (the same backward-compatible mechanism as the converter current and the profile fields).
+5. The master takes the three delays of one round id and classifies:
+   * a_Y = ((delay_Y - delay_R) mod T) / T, a_B likewise;
+   * **OK (R-Y-B)**: a_Y near 1/3 and a_B near 2/3, each within 0.10 of a period (36 degrees);
+   * **REVERSE (R-B-Y)**: a_Y near 2/3 and a_B near 1/3;
+   * **SAME PHASE**: any two phases within 0.10 of a period of each other (mod 1);
+   * anything else: not decided, measure again.
+   Three rounds, the median decides; a phase whose slave is silent is "phase missing", not a sequence fault.
+**Why it is robust:** the ARM frame (checksummed) means a noise byte on the line is not taken as a SYNC; the ISR timestamp removes the main-loop jitter (about 1 ms, 18 degrees at 50 Hz); each slave's zero-cross circuit has its own fixed delay (a few degrees at most), far inside the 36 degree margin; the classification needs no absolute angle.
+**Accuracy of the angles** (for the phase-to-phase voltage from the three RMS values and the angles): about 1 to 5 degrees, which moves a 400 V phase-to-phase reading by well under 1 %.
+**What it needs:** the three links alive (steps S1 and S2); a character-match interrupt and a timestamp in the slave's serial interrupt (slave change); two optional fields in `$E` and one new `$K` command (the link library, both copies); the classification and the engine input `seq_state` in the master (the engine already takes it). All of it is testable on the PC with three simulated slaves at chosen angles, with jitter, a lost link and a reversed sequence.
+**What it replaces:** the old firmware's blocking `detect_phase_sequence()` (it waited for edges on the master's pins and delayed the main loop).
 
 ## 6. Before any three-phase power-up
 * The single-phase stage must be proven safe on the bench first: the over-current trip lowered (about 60 A peak with the 22.67 ohm burden), the gate drivers' desaturation checked, a current-limited source for the first run (see AUTOTUNE_BENCH.md, the first section).
@@ -45,4 +59,4 @@ Option B (the one to use): the master measures the timing itself, from PA5, PA6 
 ## 7. Decisions needed
 1. (Done) TX-Y is on PC10.
 2. Domestic first (recommended: three independent units, the simplest) or Industrial first?
-3. Phase timing: option B, from PA5, PA6 and PA7 (found in the old firmware). Needed: what those pins carry electrically (the schematic).
+3. (Decided) Phase timing from the slaves (section 5): no schematic page is needed for it.
