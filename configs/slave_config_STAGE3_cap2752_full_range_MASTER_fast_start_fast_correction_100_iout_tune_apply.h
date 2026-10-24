@@ -1,3 +1,8 @@
+/* ########################################################################################################################
+ * WARNING (v0.9.42): this config switches the transformer AUTOTUNE'S TUNE MODE on: the unit drives its power stage open loop.
+ * v0.9.32 to v0.9.41 wrote the profile to flash with the converter and inverter still running; one unit lost IGBTs at the end of a sweep. Fixed in v0.9.42, but not proven on hardware.
+ * READ docs/AUTOTUNE_BENCH.md (the first section) before ANY sweep: current-limited source, a scope, the hardware over-current trip checked, Max Correction low, no load.
+ * ###################################################################################################################### */
 /**
   ******************************************************************************
   * @file    slave_config.h

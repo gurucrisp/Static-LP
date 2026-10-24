@@ -7,6 +7,7 @@ static uint16_t s_req;
 static LinkT_t  s_q[STL_QUEUE]; static uint8_t s_qh, s_qn;
 static LinkT_t  s_final; static uint8_t s_final_valid, s_rep_left; static uint32_t s_rep_next;
 static uint8_t  s_prep, s_swept; static uint32_t s_prep_t0, s_last_out_ms; static uint16_t s_vin_dv;
+static uint8_t  s_save_pend, s_save_seen_off; static uint32_t s_save_t0, s_save_off_since; static TuneProfile_t s_save_prof; static LinkT_t s_save_frame;     /* the profile waiting for the stage to be OFF */
 
 static void push(const LinkT_t *f)
 {
@@ -17,15 +18,34 @@ static void push(const LinkT_t *f)
 static void hw_end(void) { if ((s_hw != 0) && (s_hw->end != 0)) s_hw->end(); if ((s_hw != 0) && (s_hw->request != 0)) s_hw->request(0U); s_req = 0U; }
 
 /* the end of a run that never reached or left the sweep: one final frame, repeated */
+static void final_push(const LinkT_t *f, uint32_t now_ms) { push(f); s_final = *f; s_final_valid = 1U; s_rep_left = (uint8_t)STL_FINAL_REPEATS; s_rep_next = now_ms + STL_FINAL_GAP_MS; }
 static void final_frame(uint8_t result, uint32_t now_ms)
 {
     LinkT_t f; f.step = 0U; f.ticks = 0U; f.vin_dv = s_vin_dv; f.dv = 0; f.result = result;
-    push(&f); s_final = f; s_final_valid = 1U; s_rep_left = (uint8_t)STL_FINAL_REPEATS; s_rep_next = now_ms + STL_FINAL_GAP_MS;
+    final_push(&f, now_ms);
+}
+/* the profile is written to flash ONLY when the controller has been OFF for STL_SAVE_SETTLE_MS: a flash erase stalls the CPU and the commutation interrupts with it */
+static void save_step(uint32_t now_ms)
+{
+    const uint8_t off = (uint8_t)((s_hw == 0) || (s_hw->stopped == 0) || (s_hw->stopped() != 0U));
+    LinkT_t f = s_save_frame;
+    if (off != 0U)
+    {
+        if (s_save_seen_off == 0U) { s_save_seen_off = 1U; s_save_off_since = now_ms; }
+        if ((uint32_t)(now_ms - s_save_off_since) >= STL_SAVE_SETTLE_MS)
+        {
+            f.result = (SlaveProfile_Save(&s_save_prof) == 0) ? (uint8_t)TUNE_R_FINISHED : (uint8_t)TUNE_R_ABORTED;
+            s_save_pend = 0U; final_push(&f, now_ms);
+            return;
+        }
+    }
+    else s_save_seen_off = 0U;
+    if ((uint32_t)(now_ms - s_save_t0) >= STL_SAVE_TIMEOUT_MS) { f.result = (uint8_t)TUNE_R_ABORTED; s_save_pend = 0U; final_push(&f, now_ms); }     /* it never reached OFF: NOTHING is written */
 }
 
 void SlaveTuneLink_Init(const TuneLinkHw_t *hw)
 {
-    s_hw = hw; s_req = 0U; s_qh = 0U; s_qn = 0U; s_final_valid = 0U; s_rep_left = 0U; s_rep_next = 0U; s_prep = 0U; s_swept = 0U; s_prep_t0 = 0U; s_last_out_ms = 0U; s_vin_dv = 0U;
+    s_hw = hw; s_req = 0U; s_qh = 0U; s_qn = 0U; s_final_valid = 0U; s_rep_left = 0U; s_rep_next = 0U; s_prep = 0U; s_swept = 0U; s_prep_t0 = 0U; s_last_out_ms = 0U; s_vin_dv = 0U; s_save_pend = 0U; s_save_seen_off = 0U;
 }
 
 int SlaveTuneLink_Command(uint8_t cmd, const char *name, int32_t num, uint8_t *status, int32_t *value, uint32_t now_ms)
@@ -35,6 +55,7 @@ int SlaveTuneLink_Command(uint8_t cmd, const char *name, int32_t num, uint8_t *s
     if (cmd == (uint8_t)LINKCMD_TABORT)
     {
         if (s_prep != 0U) { s_prep = 0U; hw_end(); final_frame((uint8_t)TUNE_R_BY_MASTER, now_ms); }       /* still starting up: stop the controller, report the abort */
+        else if (s_save_pend != 0U) { s_save_pend = 0U; hw_end(); final_frame((uint8_t)TUNE_R_BY_MASTER, now_ms); }   /* the sweep is over and the profile is waiting for the stage to be OFF: cancelled, NOTHING is written */
         else Tune_Abort();                                                                                  /* a sweep: its final frame comes from the next service pass */
         *status = (uint8_t)LINKV2_ST_OK; return 1;
     }
@@ -93,13 +114,14 @@ void SlaveTuneLink_Service(uint32_t now_ms, const TuneIn_t *in)
     if ((finished != 0U) && (have_last != 0U))
     {
         if (final_result == TUNE_R_FINISHED)
-        {   /* the profile is stored BEFORE the master is told: if the flash refuses, the result is ABORTED and nothing is stored */
-            TuneProfile_t p;
-            if ((Tune_GetProfile(&p) == 0U) || (SlaveProfile_Save(&p) != 0)) last_lf.result = (uint8_t)TUNE_R_ABORTED;
+        {   /* the profile is stored BEFORE the master is told FINISHED, but NEVER while the stage is energised: the controller is stopped first (below) and the write waits until it is OFF (save_step) */
+            if (Tune_GetProfile(&s_save_prof) == 0U) { last_lf.result = (uint8_t)TUNE_R_ABORTED; final_push(&last_lf, now_ms); }
+            else { s_save_pend = 1U; s_save_seen_off = 0U; s_save_t0 = now_ms; s_save_frame = last_lf; }
         }
-        push(&last_lf); s_final = last_lf; s_final_valid = 1U; s_rep_left = (uint8_t)STL_FINAL_REPEATS; s_rep_next = now_ms + STL_FINAL_GAP_MS;
+        else final_push(&last_lf, now_ms);
     }
-    if ((out.done != 0U) || (finished != 0U)) { s_swept = 0U; hw_end(); }                                    /* the sweep is over, however it ended: the controller stops */
+    if ((out.done != 0U) || (finished != 0U)) { s_swept = 0U; hw_end(); }                                    /* the sweep is over, however it ended: the controller stops FIRST */
+    if (s_save_pend != 0U) save_step(now_ms);
 }
 
 int SlaveTuneLink_NextFrame(LinkT_t *f, uint32_t now_ms)
@@ -114,7 +136,7 @@ int SlaveTuneLink_NextFrame(LinkT_t *f, uint32_t now_ms)
 }
 
 uint16_t SlaveTuneLink_RequestTicks(void) { return s_req; }
-uint8_t  SlaveTuneLink_Active(void) { return (uint8_t)((s_prep != 0U) || (Tune_Running() != 0U)); }
+uint8_t  SlaveTuneLink_Active(void) { return (uint8_t)((s_prep != 0U) || (Tune_Running() != 0U) || (s_save_pend != 0U)); }
 
 uint16_t SlaveTuneLink_Flags2(void)
 {

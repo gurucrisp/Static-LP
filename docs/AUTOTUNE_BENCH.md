@@ -1,3 +1,12 @@
+# READ THIS FIRST: the autotune has damaged a power stage (v0.9.42)
+**v0.9.32 to v0.9.41 wrote the profile to flash at the END of the sweep while the converter and inverter were still running at the last step's duty.** A flash page erase holds the CPU for tens of milliseconds; the commutation interrupts that follow the mains polarity cannot run meanwhile, and a diagonal can stay on across a polarity change. On the bench of the unit that lost 1L and 4H, a high current was seen at the end of every sweep ("exiting the retune") and the stage failed a few seconds into the last step, when the profile was written. The PC test shows the write happened with the controller in RUN in every one of those versions (3 flash operations, 3 of them while energised). v0.9.42 stops the stage FIRST and writes only when it has been OFF for 300 ms.
+That is the most likely cause found; it is NOT proven to be the only one. Before any sweep on any unit:
+1. Use a CURRENT-LIMITED source (a series lamp or a variac with a fast fuse) and a scope with a current probe on the series transformer's primary the first time.
+2. The over-current comparators (U10, U14) trip at a FIXED voltage across the burden: 0.98 V is about 108 A peak with the 22.67 ohm burden. The IKW50N120CS7 is rated 150 A pulsed, so that leaves almost no margin and does not protect against 60 to 100 A peaks lasting seconds. Set the trip to 1.5 to 2 times your largest normal peak primary current and not above about 75 A (reference = I_trip x 22.67 ohm / 2500: 0.54 V for 60 A).
+3. Check that the gate drivers have desaturation / short-circuit shutdown: a shoot-through inside a leg does not pass through the primary's current sensor at all, and the IGBT withstands a short circuit for only 8 microseconds.
+4. Start with `STAGE3_first_run_cap640` or `STAGE3_wider_cap1600`, not `cap2752_full_range`, and keep Max Correction low (30 V) for the first sweep.
+5. Never run a sweep with the output loaded.
+
 # The first transformer autotune on the bench
 
 **Not for a first try on a finished unit.** Variac, no load, a scope, a low Max Correction first. The sweep puts the input voltage PLUS the injection on the output terminals, with the output contactor open.

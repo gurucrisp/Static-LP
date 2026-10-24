@@ -3,6 +3,8 @@
   * @brief   The autotune seen from the master's link: $K TUNE / TABORT, the $T progress frames, the BUSY / NOT_TUNED flags, and the storing of the profile when a sweep finishes. Glue between the link (slave_link2), the autotune
   *          core (slave_tune), the profile store (slave_profile) and the controller, through a few functions that the caller provides, so the PC tests can run the whole chain against a simulated transformer.
   *
+  *          FLASH IS NEVER WRITTEN WHILE THE STAGE IS ENERGISED (v0.9.42): a flash page erase holds the CPU for tens of milliseconds, the commutation interrupts cannot run, and a diagonal can stay on across a polarity change (a short circuit).
+  *          So at the end of a sweep the controller is stopped FIRST; the profile is written only when it has been OFF for STL_SAVE_SETTLE_MS, and only then is FINISHED reported. v0.9.32 to v0.9.41 wrote it BEFORE stopping.
   *          THE SEQUENCE: TUNE -> the controller starts by itself in tune mode (SYNC, RECT, INVERTER, UNSHUNT, RUN: about 6 s; the master sees heartbeat $T frames with step 0) -> when it is in RUN and settled the sweep starts (3 s baseline, then the steps)
   *          -> the duty each step asks for goes to the controller (request) -> at the end, or on TABORT, a fault, the loss of the master or a timeout, the controller is told to stop (end). The controller applies the duty itself, with its own limits.
   *
@@ -24,6 +26,8 @@ extern "C" {
 #define STL_FINAL_GAP_MS    500UL
 #define STL_QUEUE           16U
 #define STL_PREP_TIMEOUT_MS 25000UL   /* the controller has this long to go through its start sequence and reach RUN */
+#define STL_SAVE_SETTLE_MS  300UL     /* the controller must have been OFF (inverter and converter disabled) this long before the profile is written to flash */
+#define STL_SAVE_TIMEOUT_MS 8000UL    /* it has this long to reach OFF after the sweep; otherwise nothing is written and the result is ABORTED */
 #define STL_HEARTBEAT_MS    2000UL    /* while nothing else is sent, a $T with step 0 says "still preparing / measuring the baseline" (the master gives up after 8 s of silence) */
 
 typedef struct

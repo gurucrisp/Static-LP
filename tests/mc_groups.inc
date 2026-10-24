@@ -223,10 +223,10 @@ static void    e2e_bytes(const char *s, uint32_t n) { uint32_t i; for (i = 0U; i
 #include "slave_profile.h"
 #define TPA 0x1000UL
 #define TPB 0x1800UL
-static uint8_t tl_mem[4096]; static int tl_flash_fail; static uint32_t tl_last_ms;
+static uint8_t tl_mem[4096]; static int tl_flash_fail; static uint32_t tl_last_ms; static int tl_flash_ops, tl_flash_viol;   /* every flash operation, and those made while the stage was NOT OFF */
 static int tl_rd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &tl_mem[a - TPA], n); return 0; }
-static int tl_er(uint32_t a) { if (tl_flash_fail) return -1; memset(&tl_mem[a - TPA], 0xFF, 2048U); return 0; }
-static int tl_pr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (tl_flash_fail) return -1; for (i = 0U; i < n; i++) tl_mem[a - TPA + i] &= b[i]; return 0; }
+static int tl_er(uint32_t a) { tl_flash_ops++; if ((g_ctrl.state != CTRL_OFF) || (g_ctrl.inv_active != 0U) || (g_ctrl.run_allowed != 0U)) tl_flash_viol++; if (tl_flash_fail) return -1; memset(&tl_mem[a - TPA], 0xFF, 2048U); return 0; }
+static int tl_pr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; tl_flash_ops++; if ((g_ctrl.state != CTRL_OFF) || (g_ctrl.inv_active != 0U) || (g_ctrl.run_allowed != 0U)) tl_flash_viol++; if (tl_flash_fail) return -1; for (i = 0U; i < n; i++) tl_mem[a - TPA + i] &= b[i]; return 0; }
 static const SFlash_t TL_FL = { tl_rd, tl_pr, tl_er };
 static uint8_t  tl_stopped(void) { return SlaveCtrl_TuneStopped(); }
 static uint8_t  tl_can(void) { return 1U; }
@@ -426,7 +426,7 @@ static void ma_start(uint8_t restart_auto, float vin)
     e2e_cal_have_store = 0; e2e_cal_saves = 0; e2e_cal_fail_save = 0; SlaveCal_Init(&E2E_CAL_HW);
 #endif
 #if (SLAVE_TUNE_MODE != 0)
-    memset(tl_mem, 0xFF, sizeof tl_mem); tl_flash_fail = 0; tl_last_ms = mc_ms(); SlaveProfile_Init(&TL_FL, TPA, TPB); SlaveTuneLink_Init(&TL_HW);
+    memset(tl_mem, 0xFF, sizeof tl_mem); tl_flash_fail = 0; tl_flash_ops = 0; tl_flash_viol = 0; tl_last_ms = mc_ms(); SlaveProfile_Init(&TL_FL, TPA, TPB); SlaveTuneLink_Init(&TL_HW);
 #endif
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
@@ -733,6 +733,7 @@ static void t_mc_tune(void)
     CHECK(tn.saw_run && !tn.master_run, "the controller started ITSELF through the start sequence and reached RUN, while the master never asked it to run (run = 0 in every $M)");
     CHECK(!tn.contactor, "the master's output contactor stayed open the whole time");
     CHECK(SlaveProfile_Tuned() == 1U, "the profile is stored in the slave");
+    CHECK(tl_flash_ops > 0 && tl_flash_viol == 0, "FLASH WAS NEVER TOUCHED WHILE THE STAGE WAS ENERGISED: %d flash operations, %d of them with the controller not OFF (v0.9.32 to v0.9.41: all of them)", tl_flash_ops, tl_flash_viol);
     { TuneProfile_t pf; CHECK(SlaveProfile_Get(&pf) == 1U && pf.cap_ticks == 2752U && pf.kib_m >= 800U && pf.kib_m <= 1250U, "the stored profile: cap %u ticks, gain scale %u (the plant IS the reference curve times 1.0)", (unsigned)pf.cap_ticks, (unsigned)pf.kib_m); }
     CHECK(tn.max_eff <= 2752U && tn.max_eff >= 2500U, "the largest effective duty applied was %u ticks (the cap is 2752; the last step asks for 2752)", (unsigned)tn.max_eff);
     CHECK(tn.max_inj <= 0.8 * 110.0 + 6.0, "the injection never went above 80 %% of the smaller of Max Correction and the headroom, 110 V (+ 6 V of overshoot allowed): %.1f V of 88", tn.max_inj);

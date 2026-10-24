@@ -13,19 +13,21 @@ static int tot = 0, bad = 0;
 /* ---- the flash of the profile store (a RAM model that can refuse) ---- */
 #define PA 0x1000UL
 #define PB 0x1800UL
-static uint8_t mem[4096]; static int flash_fail;
+static uint8_t mem[4096]; static int flash_fail; static int flash_ops, flash_viol; static uint32_t ctrl_stop_at; static uint8_t ctrl_stuck, stuck_now;
 static int frd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &mem[a - PA], n); return 0; }
-static int fer(uint32_t a) { if (flash_fail) return -1; memset(&mem[a - PA], 0xFF, 2048U); return 0; }
-static int fpr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (flash_fail) return -1; for (i = 0U; i < n; i++) mem[a - PA + i] &= b[i]; return 0; }
+static uint8_t hw_stopped(void);
+static int fer(uint32_t a) { flash_ops++; if (hw_stopped() == 0U) flash_viol++; if (flash_fail) return -1; memset(&mem[a - PA], 0xFF, 2048U); return 0; }
+static int fpr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; flash_ops++; if (hw_stopped() == 0U) flash_viol++; if (flash_fail) return -1; for (i = 0U; i < n; i++) mem[a - PA + i] &= b[i]; return 0; }
 static const SFlash_t FL = { frd, fpr, fer };
 
 /* ---- what the controller side would say: a fake controller that takes prep_ms to reach RUN and then applies the requested duty ---- */
 static uint32_t T;
 static uint16_t maxc_dv = 1200U; static uint8_t is_stopped = 1U, can_run = 1U, other_busy = 0U, begin_ok = 1U, ctrl_on = 0U; static uint16_t ctrl_req = 0U, ctrl_fault = 0U, ctrl_max_req = 0U; static uint32_t ctrl_ready_at = 0U, prep_ms = 6000U; static int ctrl_ends = 0, ctrl_begins = 0;
-static uint16_t hw_maxc(void) { return maxc_dv; } static uint8_t hw_stopped(void) { return is_stopped; } static uint8_t hw_can_run(void) { return can_run; } static uint8_t hw_busy(void) { return other_busy; }
+static uint16_t hw_maxc(void) { return maxc_dv; } static uint8_t hw_stopped(void) { return (uint8_t)((is_stopped != 0U) && (ctrl_on == 0U) && (stuck_now == 0U) && (T >= ctrl_stop_at)); } static uint8_t hw_can_run(void) { return can_run; } static uint8_t hw_busy(void) { return other_busy; }
+      /* the fake controller needs 400 ms to be OFF after hw_end(); a stuck one never is; every flash operation is counted and judged */
 static uint8_t hw_begin(void) { if (!begin_ok) return 0U; ctrl_on = 1U; ctrl_ready_at = T + prep_ms; ctrl_begins++; ctrl_req = 0U; return 1U; }
 static void hw_request(uint16_t k) { ctrl_req = k; if (k > ctrl_max_req) ctrl_max_req = k; }
-static void hw_end(void) { ctrl_on = 0U; ctrl_ends++; ctrl_req = 0U; }
+static void hw_end(void) { ctrl_on = 0U; ctrl_ends++; ctrl_req = 0U; ctrl_stop_at = T + 400U; if (ctrl_stuck != 0U) stuck_now = 1U; }      /* a stuck controller never reaches OFF once it has been told to stop */
 static uint8_t hw_ready(void) { return (uint8_t)((ctrl_on != 0U) && (T >= ctrl_ready_at)); }
 static uint8_t hw_alive(void) { return ctrl_on; }
 static uint16_t hw_fault(void) { return ctrl_fault; }
@@ -81,7 +83,7 @@ static int e_flag_seen(uint16_t mask) { int i; LinkV2Frame_t f; for (i = 0; i < 
 static void fresh(void)
 {
     if (Tune_Running()) { Tune_Abort(); }
-    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; begin_ok = 1U; headroom = 3000U; ctrl_on = 0U; ctrl_req = 0U; ctrl_fault = 0U; ctrl_max_req = 0U; ctrl_ends = 0; ctrl_begins = 0; prep_ms = 6000U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
+    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; begin_ok = 1U; headroom = 3000U; ctrl_stuck = 0U; stuck_now = 0U; ctrl_stop_at = 0U; flash_ops = 0; flash_viol = 0; ctrl_on = 0U; ctrl_req = 0U; ctrl_fault = 0U; ctrl_max_req = 0U; ctrl_ends = 0; ctrl_begins = 0; prep_ms = 6000U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
     SlaveProfile_Init(&FL, PA, PB); SlaveTuneLink_Init(&HW); SL2_Init(&HK, T); step_ms(300U); ncap = 0;
 }
 
@@ -166,6 +168,28 @@ int main(void)
     fresh(); headroom = 100U; send_k(1U, LINKCMD_TUNE); CHECK(find_r(1, &st, &val) == 1 && st == (int)LINKV2_ST_NOT_ALLOWED && val == 6 && !SlaveTuneLink_Active() && ctrl_begins == 0, "10 V of headroom: NOT_ALLOWED, reason 6 (input too high), the controller is not even started (%d, %d)", st, (int)val);
     fresh(); headroom = 400U; send_k(1U, LINKCMD_TUNE); step_ms(46000U);
     { TuneProfile_t pf; CHECK(last_t_result() == 1 && SlaveProfile_Get(&pf) == 1U && pf.maxc_dv == 400U && ctrl_max_req < 1300U, "40 V of headroom with Max Correction 120 V: the sweep is limited to the headroom: the profile is made at %u (tenths), the largest duty asked for is %u ticks", (unsigned)pf.maxc_dv, (unsigned)ctrl_max_req); }
+    /* ---- FLASH IS NEVER TOUCHED WHILE THE STAGE IS ENERGISED (v0.9.42; v0.9.32 to v0.9.41 wrote the profile at the end of the sweep with the converter and inverter still running at the last step's duty:
+     *      a flash erase stalls the CPU and the commutation interrupts, and a diagonal can stay on across a polarity change) ---- */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(52000U);
+    CHECK(flash_ops > 0 && flash_viol == 0 && SlaveProfile_Tuned() == 1U && last_t_result() == 1, "the profile is written (%d flash operations) and NOT ONE of them while the controller was running or still stopping (%d violations)", flash_ops, flash_viol);
+    { int saw_final_before_tuned = 0, k; fresh(); send_k(1U, LINKCMD_TUNE);
+      for (k = 0; (k < 6000) && (last_t_result() != 1); k++)
+      {
+          step_ms(10U);
+          if ((last_t_result() == 1) && (SlaveProfile_Tuned() == 0U)) { saw_final_before_tuned = 1; }
+      }
+      CHECK(!saw_final_before_tuned && last_t_result() == 1 && SlaveProfile_Tuned() == 1U, "FINISHED is never reported before the profile is in flash"); }
+    /* a controller that never reaches OFF after the sweep: nothing is written, the master is told ABORTED */
+    fresh(); ctrl_stuck = 1U; send_k(1U, LINKCMD_TUNE); step_ms(60000U);
+    CHECK(flash_ops == 0 && SlaveProfile_Tuned() == 0U && last_t_result() == 4 && !SlaveTuneLink_Active(), "the controller never reaches OFF: NO flash operation at all, result 4 (ABORTED) (%d operations, result %d)", flash_ops, last_t_result());
+    /* STOP pressed after the sweep, while the profile waits for the stage to stop: cancelled, nothing is written */
+    { int k, waiting = 0; fresh(); send_k(1U, LINKCMD_TUNE);
+      for (k = 0; (k < 9000) && !Tune_Running(); k++) { step_ms(10U); }
+      for (k = 0; (k < 9000) && (Tune_Running() || !SlaveTuneLink_Active()); k++) { step_ms(10U); }
+      waiting = (!Tune_Running() && SlaveTuneLink_Active() && (flash_ops == 0));
+      CHECK(waiting, "the sweep is over and the profile is waiting for the controller to stop (no flash operation yet)");
+      send_k(2U, LINKCMD_TABORT); step_ms(2000U);
+      CHECK(flash_ops == 0 && SlaveProfile_Tuned() == 0U && last_t_result() == 6 && !SlaveTuneLink_Active(), "STOP at that moment: nothing is written, result 6 (%d operations, result %d)", flash_ops, last_t_result()); }
     /* ---- NOT_TUNED also says that Max Correction is missing ---- */
     maxc_dv = 0U; ncap = 0; step_ms(500U); CHECK((last_e_flags() & LINKV2_FLAG_NOT_TUNED) != 0U, "a profile is stored but Max Correction is 0 again: NOT_TUNED");
     (void)id;
