@@ -68,7 +68,7 @@ static void co_run(uint32_t ms)
             TuneIn_t in; double eff, target;
             last_slave_ms = T; eff = ((double)((c_ready() != 0U) ? c_req : 0U) > pdead) ? ((double)((c_ready() != 0U) ? c_req : 0U) - pdead) : 0.0;           /* the plant sees the duty the CONTROLLER applies */
             target = psign * pk * (double)Tune_RefG(230.0f) * eff; pinj += (target - pinj) * (1.0 - exp(-0.01 / 0.3));
-            in.vin = (float)(230.0 + 0.05 * pg()); in.vout = (float)(230.2 + pinj + 0.1 * pg()); in.meas_valid = 1U; in.fault = 0U; in.vin_in_window = 1U; in.maxc_v = (float)A.settings.maxcorr_v; in.hw_cap_ticks = 2752U;
+            in.vin = (float)(230.0 + 0.05 * pg()); in.vout = (float)(230.2 + pinj + 0.1 * pg()); in.meas_valid = 1U; in.fault = 0U; in.vin_in_window = 1U; in.maxc_v = (float)A.settings.maxcorr_v; in.hw_cap_ticks = 2752U; in.iout_valid = 1U; in.iout_clip = 0U; in.iout_rms = 1.0f; in.iout_pk = 4.0f;
             SlaveTuneLink_Service(T, &in); SL2_Service(T);
         }
     }

@@ -13,7 +13,7 @@ static int tot = 0, bad = 0;
 /* ---- the flash of the profile store (a RAM model that can refuse) ---- */
 #define PA 0x1000UL
 #define PB 0x1800UL
-static uint8_t mem[4096]; static int flash_fail; static int flash_ops, flash_viol; static uint32_t ctrl_stop_at; static uint8_t ctrl_stuck, stuck_now;
+static uint8_t mem[4096]; static int flash_fail; static int flash_ops, flash_viol; static uint32_t ctrl_stop_at; static uint8_t ctrl_stuck, stuck_now; static float link_iout_rms = 1.0f; static uint8_t link_iout_valid = 1U;
 static int frd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &mem[a - PA], n); return 0; }
 static uint8_t hw_stopped(void);
 static int fer(uint32_t a) { flash_ops++; if (hw_stopped() == 0U) flash_viol++; if (flash_fail) return -1; memset(&mem[a - PA], 0xFF, 2048U); return 0; }
@@ -63,6 +63,7 @@ static void step_ms(uint32_t ms)
         TuneIn_t in; double a = 1.0 - exp(-0.01 / 0.3);
         T += 10U; inj += (true_inj((double)((hw_ready() != 0U) ? ctrl_req : 0U)) - inj) * a;           /* the plant sees the duty the CONTROLLER applies */
         in.vin = (float)(P.vin + 0.05 * gauss()); in.vout = (float)(P.vin + 0.2 + inj + P.noise * gauss()); in.meas_valid = 1U; in.fault = 0U; in.vin_in_window = 1U; in.maxc_v = (float)maxc_dv / 10.0f; in.hw_cap_ticks = 2752U;
+        in.iout_valid = (uint8_t)(link_iout_valid != 0U); in.iout_clip = 0U; in.iout_rms = link_iout_rms; in.iout_pk = link_iout_rms * 4.0f;                     /* the converter current: 1 A RMS, spiky */
         SlaveTuneLink_Service(T, &in); SL2_Service(T);
     }
 }
@@ -76,6 +77,7 @@ static void send_k(uint8_t id, LinkCmd_t cmd) { send_kn(id, cmd, 0, 0); }
 /* what the master has seen */
 static int find_r(uint8_t id, int *status, int32_t *value) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == id) { c++; *status = f.u.r.status; *value = f.u.r.value; } return c; }
 static int count_t(int result, int *steps_in_order) { int i, c = 0, last = 0; LinkV2Frame_t f; *steps_in_order = 1; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) { if (f.u.t.result == (uint8_t)result && (result != 0 || f.u.t.step > 0U)) c++; if (f.u.t.result == 0U && f.u.t.step > 0U) { if (f.u.t.step <= last) *steps_in_order = 0; last = f.u.t.step; } } return c; }
+static int last_t_dv(void) { int i, r = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) r = f.u.t.dv; return r; }
 static int count_heartbeats(void) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T && f.u.t.result == 0U && f.u.t.step == 0U) c++; return c; }
 static int last_t_result(void) { int i, r = -1; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_T) r = f.u.t.result; return r; }
 static uint16_t last_e_flags(void) { int i; uint16_t fl = 0xFFFFU; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (LinkV2_Parse(cap[i], (uint32_t)cap_n[i], &f) == LINK_OK && f.type == LINKV2_E) fl = f.u.e.flags2; return fl; }
@@ -83,7 +85,7 @@ static int e_flag_seen(uint16_t mask) { int i; LinkV2Frame_t f; for (i = 0; i < 
 static void fresh(void)
 {
     if (Tune_Running()) { Tune_Abort(); }
-    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; begin_ok = 1U; headroom = 3000U; ctrl_stuck = 0U; stuck_now = 0U; ctrl_stop_at = 0U; flash_ops = 0; flash_viol = 0; ctrl_on = 0U; ctrl_req = 0U; ctrl_fault = 0U; ctrl_max_req = 0U; ctrl_ends = 0; ctrl_begins = 0; prep_ms = 6000U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
+    memset(mem, 0xFF, sizeof mem); flash_fail = 0; maxc_dv = 1200U; is_stopped = 1U; can_run = 1U; other_busy = 0U; begin_ok = 1U; headroom = 3000U; ctrl_stuck = 0U; stuck_now = 0U; link_iout_rms = 1.0f; link_iout_valid = 1U; ctrl_stop_at = 0U; flash_ops = 0; flash_viol = 0; ctrl_on = 0U; ctrl_req = 0U; ctrl_fault = 0U; ctrl_max_req = 0U; ctrl_ends = 0; ctrl_begins = 0; prep_ms = 6000U; tx_ok = 1; ncap = 0; T = 50000U; plant_reset();
     SlaveProfile_Init(&FL, PA, PB); SlaveTuneLink_Init(&HW); SL2_Init(&HK, T); step_ms(300U); ncap = 0;
 }
 
@@ -190,6 +192,11 @@ int main(void)
       CHECK(waiting, "the sweep is over and the profile is waiting for the controller to stop (no flash operation yet)");
       send_k(2U, LINKCMD_TABORT); step_ms(2000U);
       CHECK(flash_ops == 0 && SlaveProfile_Tuned() == 0U && last_t_result() == 6 && !SlaveTuneLink_Active(), "STOP at that moment: nothing is written, result 6 (%d operations, result %d)", flash_ops, last_t_result()); }
+    /* ---- THE CONVERTER-CURRENT GUARD end to end: the current rises in the middle of the sweep ---- */
+    fresh(); send_k(1U, LINKCMD_TUNE); step_ms(24000U); link_iout_rms = 8.0f; step_ms(2500U);
+    CHECK(!Tune_Running() && last_t_result() == 4 && last_t_dv() >= 70 && ctrl_req == 0U && ctrl_ends >= 1 && flash_ops == 0 && SlaveProfile_Tuned() == 0U, "the converter current rises to 8 A during a step: ABORTED, the duty request is 0, the controller is told to stop, NOTHING is written (result %d, the frame says %.1f A, %d flash operations)", last_t_result(), (double)last_t_dv() / 10.0, flash_ops);
+    fresh(); link_iout_valid = 0U; send_k(1U, LINKCMD_TUNE); step_ms(16000U);
+    CHECK(last_t_result() == 4 && last_t_dv() == -1 && ctrl_max_req == 0U && flash_ops == 0, "no converter-current reading: the sweep never applies any duty, result 4, the frame says -1 (result %d, frame %d, largest duty %u)", last_t_result(), last_t_dv(), (unsigned)ctrl_max_req);
     /* ---- NOT_TUNED also says that Max Correction is missing ---- */
     maxc_dv = 0U; ncap = 0; step_ms(500U); CHECK((last_e_flags() & LINKV2_FLAG_NOT_TUNED) != 0U, "a profile is stored but Max Correction is 0 again: NOT_TUNED");
     (void)id;

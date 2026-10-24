@@ -110,3 +110,16 @@ The measurement is the DIFFERENCE d = output voltage minus input voltage. A wand
 * the spread (standard deviation) of d is at most 1.0 V + 12 % of the injection, and
 * the means of the window's two halves differ by at most 0.6 V + 8 % of the injection (d has settled: a slow plant is measured again until it has).
 A refused window is measured again with the duty unchanged; the sweep gives up only after 30 s on one step, and the result screen tells you which of the three it was.
+
+## The converter-current guard and the shorter hold (v0.9.43)
+The sweep controls VOLTAGE and cannot see a core that starts to saturate; the converter current can. From v0.9.43 the sweep:
+* measures the no-load converter current (RMS) during the 3 s baseline;
+* from 0.4 s into every step, ABORTS (the duty drops to zero at once) when the RMS stays above max(3 x the baseline, baseline + 2 A), or the peak above 20 A, for 3 readings in a row, or the amplifier clips. The master says `Current Too High / Converter 5.2 A` (`Converter at limit` if it clipped);
+* DOES NOT RUN without a converter-current reading (`SLAVE_IOUT 1`): `No Current Reading / Needs SLAVE_IOUT 1`;
+* holds a step whose window is refused for 9 s at most (it was 30 s) before giving up: while the duty is on, a source that will not settle is a reason to stop, not to wait.
+LIMITS: the current is measured over about 100 ms, so this catches a current that rises, not a saturation inside ONE mains cycle. Only the hardware over-current trip protects against that: set it (see the SAFETY section). The thresholds (3 x, 2 A, 20 A) are first values, to be set from the bench.
+## Reading two real profiles (EI core and toroid)
+* **EI core, Max Correction 75, 206 V in: `Cap 2752`, `Gain B1.500 U1.500`, `Max 64V`, `n10`.** The sweep ran all ten steps up to the hardware ceiling without a knee. `Max 64V` is the output headroom (280 - 10 - 206), not your 75 V. **1.500 is the upper limit of the scale (0.1 to 1.5), not a measured value**: the true figure would be higher. The injection per tick falls with duty (about 0.025 V/tick at 1024 ticks, less above), so one scale cannot suit both small and large corrections.
+* **Toroid, Max Correction 50, 240 V in: `Cap 0886`, `Gain B1.186 U1.186`, `Max 30V`, `n07`.** The headroom at 240 V is only 30 V, so the sweep stopped at 80 % of it (24 V) on a shortened seventh step of 886 ticks: that cap is the headroom's, not the transformer's, and it is NOT applied as a cap (it was made with less than your Max Correction). The gain scale 1.186 (the transformer has about 0.84 of the reference gain) is valid for the first 24 V only.
+* **The toroid was run twice**: an earlier run (Max Correction 75) stopped after step 7 (19.2 V at 1024 ticks) with `Input moved 8 V`; the later run above (Max Correction 50, 240 V in) finished. An input that swings 8 V at only 19 V of injection can be a gapless core starting to saturate (sharp, asymmetric magnetizing-current spikes make the source jump), or just a soft source: the converter-current guard of v0.9.43 is there to tell the two apart.
+* To learn the whole range of either core, re-tune at 160 to 200 V in; a gapless toroid deserves a scope on the primary current the first time above 20 V.

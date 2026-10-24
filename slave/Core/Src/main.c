@@ -450,6 +450,11 @@ int main(void)
             TuneIn_t ti; float vin = g_meas.vrms_in;
             ti.vin = vin; ti.vout = g_meas.vrms_out; ti.meas_valid = (uint8_t)(g_meas.valid != 0U); ti.fault = (uint8_t)(g_ctrl.fault != 0U);
             ti.vin_in_window = (uint8_t)((vin >= CTRL_VIN_MIN_V) && (vin <= CTRL_VIN_MAX_V)); ti.maxc_v = (float)SlaveCtrl_MaxCorrDv() / 10.0f; ti.hw_cap_ticks = (uint16_t)CTRL_STAGE3_MAX_EFF_TICKS;
+#if (SLAVE_IOUT != 0)
+            ti.iout_valid = (uint8_t)(g_meas.valid != 0U); ti.iout_rms = g_meas.irms_a; ti.iout_pk = g_meas.ipk_a; ti.iout_clip = (uint8_t)(g_meas.clipped_iout != 0U);     /* the converter-side current: the sweep stops if it rises (a core saturating) */
+#else
+            ti.iout_valid = 0U; ti.iout_rms = 0.0f; ti.iout_pk = 0.0f; ti.iout_clip = 0U;                    /* no reading: the sweep will not run (TUNE_REQUIRE_IOUT) */
+#endif
             SlaveTuneLink_Service(HAL_GetTick(), &ti);
         }
 #endif

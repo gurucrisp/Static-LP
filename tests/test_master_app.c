@@ -781,7 +781,11 @@ static void t_tune_app(void)
     fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); run(3200U); CHECK(!MApp_ShowsTune(&A) && strstr(row(1), "No Answer") != NULL, "no answer in 3 s: 'No Answer' ('%s')", row(1));
     /* every way a sweep can end */
     { static const struct { int r; const char *l1; } FAILS[] = { {2, "Reversed Transformer"}, {3, "No Response"}, {4, "Aborted By Slave"}, {5, "Input Not Steady"}, {6, "By Operator"} };
-      unsigned e; for (e = 0U; e < sizeof FAILS / sizeof FAILS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(4, FAILS[e].r, 128, 2300, -30); run(40U); tune_screen(fr); CHECK(fr_has(fr, FAILS[e].l1), "result %d: '%s' ('%s' / '%s')", FAILS[e].r, FAILS[e].l1, fr[0], fr[1]); } }
+      unsigned e; for (e = 0U; e < sizeof FAILS / sizeof FAILS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(4, FAILS[e].r, 128, 2300, (FAILS[e].r == 4) ? 0 : -30); run(40U); tune_screen(fr); CHECK(fr_has(fr, FAILS[e].l1), "result %d: '%s' ('%s' / '%s')", FAILS[e].r, FAILS[e].l1, fr[0], fr[1]); } }
+    /* why an ABORTED sweep stopped: the slave's final frame carries it */
+    { static const struct { int dv; const char *l1, *l2; } AB[] = { {52, "Current Too High", "Converter 5.2 A"}, {7, "Current Too High", "Converter 0.7 A"}, {152, "Current Too High", "Converter 15.2 A"}, {999, "Current Too High", "Converter at limit"}, {-1, "No Current Reading", "Needs SLAVE_IOUT 1"}, {0, "Aborted By Slave", "Fault Or Flash Error"} };
+      unsigned e; for (e = 0U; e < sizeof AB / sizeof AB[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(7, 4, 1024, 2060, AB[e].dv); run(40U); tune_screen(fr);
+        CHECK(fr_has(fr, AB[e].l1) && fr_has(fr, AB[e].l2) && strlen(fr[2]) <= 20U, "Aborted with a detail of %d: '%s' / '%s' ('%s' / '%s')", AB[e].dv, AB[e].l1, AB[e].l2, fr[1], fr[2]); } }
     /* the reason an Input Not Steady sweep gave up, from the final frame's injection field */
     { static const struct { int dv; const char *txt; } UNS[] = { {123, "Input moved 12 V"}, {85, "Input moved 8.5 V"}, {-13, "Reading spread 1.3 V"}, {-120, "Reading spread 12 V"}, {0, "Input out of window"} };
       unsigned e; for (e = 0U; e < sizeof UNS / sizeof UNS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(6, 5, 512, 2340, UNS[e].dv); run(40U); tune_screen(fr);

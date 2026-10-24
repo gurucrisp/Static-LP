@@ -19,7 +19,7 @@ static TuneProfile_t make_profile(double k)
     {
         double eff = ((double)req > dead) ? ((double)req - dead) : 0.0;
         t += 10U; inj += (k * (double)Tune_RefG((float)vin) * eff - inj) * (1.0 - exp(-0.01 / 0.3));
-        in.vin = (float)(vin + 0.05 * gauss()); in.vout = (float)(vin + 0.2 + inj + 0.1 * gauss()); in.meas_valid = 1U; in.vin_in_window = 1U; in.maxc_v = 120.0f; in.hw_cap_ticks = 2752U;
+        in.vin = (float)(vin + 0.05 * gauss()); in.vout = (float)(vin + 0.2 + inj + 0.1 * gauss()); in.meas_valid = 1U; in.vin_in_window = 1U; in.maxc_v = 120.0f; in.hw_cap_ticks = 2752U; in.iout_valid = 1U; in.iout_clip = 0U; in.iout_rms = 1.0f; in.iout_pk = 4.0f;
         Tune_Service(t, &in, &out); req = out.request_ticks; while (Tune_TakeFrame(&f)) { }
         if (out.done) break;
     }

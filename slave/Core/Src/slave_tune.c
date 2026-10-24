@@ -11,6 +11,7 @@ static struct
     uint32_t t0, wait_t0, t_valid;
     float    maxc, base, vin_ref;
     float    sum, sumsq, sum1, sum2, vin_sum, vin_min, vin_max; uint32_t n, n1, n2;
+    float    i_sum, i_base; uint32_t i_n; uint8_t i_strikes; int16_t abort_detail;     /* the converter-current guard: the baseline RMS, the strikes, and what an ABORTED frame says (tenths of an ampere, -1 = no reading) */
     int16_t  unst;                            /* why the window was refused, tenths of a volt: > 0 the input moved by that much (peak to peak), < 0 the difference was noisy or had not settled (its spread) */
     uint8_t  step_i, last_step;               /* index in S_TICKS; the current step is the last one (shortened to the limit) */
     float    cur_ticks;
@@ -42,7 +43,7 @@ static void push_frame(uint8_t step, uint16_t ticks, float vin, float dv, uint8_
     f->result = result;
 }
 
-static void reset_accum(uint32_t now) { s.t0 = now; s.sum = 0.0f; s.sumsq = 0.0f; s.sum1 = 0.0f; s.sum2 = 0.0f; s.n1 = 0U; s.n2 = 0U; s.vin_sum = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
+static void reset_accum(uint32_t now) { s.t0 = now; s.i_sum = 0.0f; s.i_n = 0U; s.sum = 0.0f; s.sumsq = 0.0f; s.sum1 = 0.0f; s.sum2 = 0.0f; s.n1 = 0U; s.n2 = 0U; s.vin_sum = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
 static float fsqrt(float x) { float g; uint8_t k; if (x <= 0.0f) return 0.0f; g = (x > 1.0f) ? (0.5f * x) : 1.0f; for (k = 0U; k < 12U; k++) g = 0.5f * (g + x / g); return g; }       /* no math library in this module */
 static int16_t tenths(float v) { float t = v * 10.0f + 0.5f; if (t > 999.0f) t = 999.0f; if (t < -999.0f) t = -999.0f; return (int16_t)t; }
 /* one sample into the window; `el` = ms since the window's reference time, `half` = where the window's second half begins */
@@ -98,6 +99,7 @@ static void build_profile(uint8_t knee, uint8_t cap_idx)
 
 static void finish(uint8_t result, uint8_t knee, uint8_t cap_idx)
 {
+    if (result == TUNE_R_ABORTED) { s.last_dv = (float)s.abort_detail * 0.1f; s.abort_detail = 0; }                 /* an ABORTED frame carries WHY in its injection field, 0 = a fault or a timeout */
     if ((result == TUNE_R_FINISHED) && (s.npts >= 3U)) build_profile(knee, cap_idx);
     else if (result == TUNE_R_FINISHED) result = TUNE_R_NO_RESPONSE;               /* fewer than 3 points: nothing to build a curve from */
     push_frame((uint8_t)(s.step_i + 1U), (uint16_t)s.cur_ticks, s.last_vin, s.last_dv, result);
@@ -109,7 +111,7 @@ uint8_t Tune_Start(float maxc_v, uint32_t now_ms)
     if (maxc_v <= 0.0f) return 1U;
     if ((s.st == TS_BASE) || (s.st == TS_STEP)) return 2U;
     s.st = TS_BASE; s.maxc = maxc_v; s.npts = 0U; s.step_i = 0U; s.last_step = 0U; s.cur_ticks = 0.0f; s.prof_ok = 0U; s.done_pending = 0U; s.qh = 0U; s.qn = 0U;
-    s.wait_t0 = now_ms; s.t_valid = now_ms; s.last_vin = 0.0f; s.last_dv = 0.0f; s.hw_cap = 2752U;
+    s.wait_t0 = now_ms; s.t_valid = now_ms; s.last_vin = 0.0f; s.last_dv = 0.0f; s.hw_cap = 2752U; s.i_base = 0.0f; s.i_strikes = 0U; s.abort_detail = 0;
     reset_accum(now_ms);
     return 0U;
 }
@@ -174,6 +176,7 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
         {
             const uint32_t el = (uint32_t)(now - s.t0);
             acc_sample(d, in->vin, el, TUNE_BASE_MS / 2U);
+            if (in->iout_valid != 0U) { s.i_sum += in->iout_rms; s.i_n++; }
             if (window_check(0.0f, 0U) != 0U)
             {   /* the input jumped: start the window again, for at most TUNE_WAIT_STEADY_MS in all */
                 if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
@@ -186,9 +189,13 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
                     if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
                     reset_accum(now);
                 }
+                else if ((TUNE_REQUIRE_IOUT != 0) && (s.i_n < (s.n / 2U)))
+                {   /* no converter-current reading: the sweep cannot see a core saturating, so it does not run (the frame says -1) */
+                    s.abort_detail = -1; finish(TUNE_R_ABORTED, 0U, 0U); goto out;
+                }
                 else
                 {
-                    s.base = s.sum / (float)s.n; s.vin_ref = s.vin_sum / (float)s.n;
+                    s.base = s.sum / (float)s.n; s.vin_ref = s.vin_sum / (float)s.n; s.i_base = (s.i_n > 0U) ? (s.i_sum / (float)s.i_n) : 0.0f; s.i_strikes = 0U;
                     s.step_i = 0U; s.cur_ticks = (float)S_TICKS[0]; s.last_step = 0U; s.st = TS_STEP; reset_accum(now); s.wait_t0 = now;
                 }
             }
@@ -196,12 +203,28 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
         else
         {   /* TS_STEP: the first TUNE_SETTLE_MS are not averaged */
             uint32_t el = (uint32_t)(now - s.t0);
+            if ((el >= TUNE_I_DELAY_MS) && ((in->iout_valid != 0U) || (TUNE_REQUIRE_IOUT != 0)))
+            {   /* THE CONVERTER-CURRENT GUARD: a core that starts to saturate draws sharp magnetizing-current spikes; the duty drops to zero at once */
+                float lim = s.i_base * TUNE_I_RATIO;
+                if (lim < (s.i_base + TUNE_I_ABS_A)) lim = s.i_base + TUNE_I_ABS_A;
+                if (in->iout_valid == 0U) { s.abort_detail = -1; finish(TUNE_R_ABORTED, 0U, 0U); goto out; }
+                if ((in->iout_clip != 0U) || (in->iout_rms > lim) || (in->iout_pk > TUNE_I_PK_MAX_A))
+                {
+                    if (++s.i_strikes >= 3U)
+                    {   /* the frame carries the current: > 0 tenths of an ampere (999 = the amplifier clipped) */
+                        const float shown = (in->iout_rms > lim) ? in->iout_rms : in->iout_pk;
+                        s.abort_detail = (in->iout_clip != 0U) ? (int16_t)999 : tenths(shown); if (s.abort_detail < 1) { s.abort_detail = 1; }
+                        finish(TUNE_R_ABORTED, 0U, 0U); goto out;
+                    }
+                }
+                else s.i_strikes = 0U;
+            }
             if (el >= TUNE_SETTLE_MS)
             {
                 acc_sample(d, in->vin, el, TUNE_SETTLE_MS + ((TUNE_STEP_MS - TUNE_SETTLE_MS) / 2U));
                 if (window_check(s.base, 0U) != 0U)
                 {   /* the input jumped during this step's window: measure again with the duty unchanged; give up only after TUNE_WAIT_STEADY_MS on this one step */
-                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_STEP_WAIT_MS) { give_up_unsteady(); goto out; }
                     reset_accum(now);
                 }
             }
@@ -209,7 +232,7 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
             {
                 if (window_check(s.base, 1U) != 0U)
                 {   /* the difference was noisy or had not settled: measure this step again */
-                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_STEP_WAIT_MS) { give_up_unsteady(); goto out; }
                     reset_accum(now);
                 }
                 else

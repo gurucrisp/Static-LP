@@ -61,6 +61,28 @@ extern "C" {
 #ifndef TUNE_D_TREND_REL
 #define TUNE_D_TREND_REL     0.08f
 #endif
+/* THE CONVERTER-CURRENT GUARD (v0.9.43): the sweep controls VOLTAGE and cannot see a core saturating, but the current shows it: a toroid or an EI core that starts to saturate draws sharp magnetizing-current spikes. The sweep measures the no-load RMS during the
+ * baseline and ABORTS (the duty drops to zero) when, from TUNE_I_DELAY_MS into a step, the RMS stays above max(TUNE_I_RATIO x baseline, baseline + TUNE_I_ABS_A) or the peak above TUNE_I_PK_MAX_A for 3 readings in a row, or the amplifier clips.
+ * With TUNE_REQUIRE_IOUT 1 (the default) a sweep does not run without a valid converter-current reading (SLAVE_IOUT 1). The frame of such an abort carries the current in tenths of an ampere (> 0), or -1 for "no reading". */
+#ifndef TUNE_REQUIRE_IOUT
+#define TUNE_REQUIRE_IOUT    1
+#endif
+#ifndef TUNE_I_RATIO
+#define TUNE_I_RATIO         3.0f
+#endif
+#ifndef TUNE_I_ABS_A
+#define TUNE_I_ABS_A         2.0f
+#endif
+#ifndef TUNE_I_PK_MAX_A
+#define TUNE_I_PK_MAX_A      20.0f
+#endif
+#ifndef TUNE_I_DELAY_MS
+#define TUNE_I_DELAY_MS      400UL
+#endif
+/* A step whose window is refused (the input jumped, the reading is noisy or has not settled) is measured again, but the duty stays on meanwhile: this long at most (the baseline, with no duty, may wait TUNE_WAIT_STEADY_MS). It was 30 s. */
+#ifndef TUNE_STEP_WAIT_MS
+#define TUNE_STEP_WAIT_MS    9000UL
+#endif
 #ifndef TUNE_KNEE_MIN_V
 #define TUNE_KNEE_MIN_V      8.0f        /* ... but only when the injection at the cap point is at least this much. A core saturates near its rated injection (tens of volts); a slope that changes at 2 to 6 V is the noise (plus or minus 0.3 V) and the
                                           * non-linear low-duty region of the converter, not a knee: v0.9.38 and earlier called it one (a "knee" at 64 ticks, about 4 V) and, with SLAVE_TUNE_APPLY on, that cap held the regulator to about 4 V of correction */
@@ -100,6 +122,8 @@ typedef struct
     uint8_t  vin_in_window;              /* the input is inside the slave's window */
     float    maxc_v;                     /* Max Correction, volts (0 = not set) */
     uint16_t hw_cap_ticks;               /* the hardware duty ceiling (CTRL_STAGE3_MAX_EFF_TICKS) */
+    uint8_t  iout_valid, iout_clip;      /* the converter-side current (SLAVE_IOUT) is measured / its amplifier touched a rail (the current is larger than shown) */
+    float    iout_rms, iout_pk;          /* its AC RMS and peak, amperes of CT primary current */
 } TuneIn_t;
 
 typedef struct

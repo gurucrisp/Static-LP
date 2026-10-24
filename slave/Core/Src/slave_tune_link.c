@@ -34,13 +34,13 @@ static void save_step(uint32_t now_ms)
         if (s_save_seen_off == 0U) { s_save_seen_off = 1U; s_save_off_since = now_ms; }
         if ((uint32_t)(now_ms - s_save_off_since) >= STL_SAVE_SETTLE_MS)
         {
-            f.result = (SlaveProfile_Save(&s_save_prof) == 0) ? (uint8_t)TUNE_R_FINISHED : (uint8_t)TUNE_R_ABORTED;
+            f.result = (SlaveProfile_Save(&s_save_prof) == 0) ? (uint8_t)TUNE_R_FINISHED : (uint8_t)TUNE_R_ABORTED; if (f.result == (uint8_t)TUNE_R_ABORTED) { f.dv = 0; }
             s_save_pend = 0U; final_push(&f, now_ms);
             return;
         }
     }
     else s_save_seen_off = 0U;
-    if ((uint32_t)(now_ms - s_save_t0) >= STL_SAVE_TIMEOUT_MS) { f.result = (uint8_t)TUNE_R_ABORTED; s_save_pend = 0U; final_push(&f, now_ms); }     /* it never reached OFF: NOTHING is written */
+    if ((uint32_t)(now_ms - s_save_t0) >= STL_SAVE_TIMEOUT_MS) { f.result = (uint8_t)TUNE_R_ABORTED; f.dv = 0; s_save_pend = 0U; final_push(&f, now_ms); }     /* it never reached OFF: NOTHING is written */
 }
 
 void SlaveTuneLink_Init(const TuneLinkHw_t *hw)
@@ -115,7 +115,7 @@ void SlaveTuneLink_Service(uint32_t now_ms, const TuneIn_t *in)
     {
         if (final_result == TUNE_R_FINISHED)
         {   /* the profile is stored BEFORE the master is told FINISHED, but NEVER while the stage is energised: the controller is stopped first (below) and the write waits until it is OFF (save_step) */
-            if (Tune_GetProfile(&s_save_prof) == 0U) { last_lf.result = (uint8_t)TUNE_R_ABORTED; final_push(&last_lf, now_ms); }
+            if (Tune_GetProfile(&s_save_prof) == 0U) { last_lf.result = (uint8_t)TUNE_R_ABORTED; last_lf.dv = 0; final_push(&last_lf, now_ms); }
             else { s_save_pend = 1U; s_save_seen_off = 0U; s_save_t0 = now_ms; s_save_frame = last_lf; }
         }
         else final_push(&last_lf, now_ms);

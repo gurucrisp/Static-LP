@@ -245,7 +245,27 @@ void MApp_TuneScreen(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COL
         case 1U: l0 = "Tuning Complete"; l1 = "Transformer OK"; l2 = "Profile Stored"; break;
         case 2U: l0 = "Tuning Failed"; l1 = "Reversed Transformer"; l2 = "Check Connections"; break;
         case 3U: l0 = "Tuning Failed"; l1 = "No Response"; l2 = "Transformer Missing?"; break;
-        case 4U: l0 = "Tuning Failed"; l1 = "Aborted By Slave"; l2 = "Fault Or Flash Error"; break;
+        case 4U:
+        {   /* the slave's final frame carries the reason in its injection field: > 0 the converter current rose (tenths of an ampere, 999 = the amplifier clipped), -1 there is no converter-current reading, 0 a fault or a flash error */
+            int32_t v = (int32_t)a->tune_dv_dv; l0 = "Tuning Failed";
+            if (v > 0)
+            {
+                uint32_t av = (uint32_t)v, q = 0U; const char *pre = "Converter ";
+                l1 = "Current Too High";
+                if (v >= 999) { l2 = "Converter at limit"; }
+                else
+                {
+                    while (pre[q] != '\0') { det[q] = pre[q]; q++; }
+                    if ((av / 100U) > 0U) { det[q++] = (char)('0' + ((av / 100U) % 10U)); }
+                    if ((av / 10U) > 0U) { det[q++] = (char)('0' + ((av / 10U) % 10U)); } else { det[q++] = '0'; }
+                    det[q++] = '.'; det[q++] = (char)('0' + (av % 10U)); det[q++] = ' '; det[q++] = 'A'; det[q] = '\0';
+                    l2 = det;
+                }
+            }
+            else if (v < 0) { l1 = "No Current Reading"; l2 = "Needs SLAVE_IOUT 1"; }
+            else { l1 = "Aborted By Slave"; l2 = "Fault Or Flash Error"; }
+            break;
+        }
         case 5U:
         {   /* why: the slave's final frame carries it in the injection field: > 0 the input moved that much (tenths of a volt, peak to peak), < 0 the reading itself was noisy or had not settled (its spread), 0 the input left the slave's window */
             int32_t v = (int32_t)a->tune_dv_dv; uint32_t av = (uint32_t)((v < 0) ? -v : v), q = 0U, whole = av / 10U, frac = av % 10U; const char *pre = (v > 0) ? "Input moved " : "Reading spread ";

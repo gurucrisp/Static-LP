@@ -223,6 +223,7 @@ static void    e2e_bytes(const char *s, uint32_t n) { uint32_t i; for (i = 0U; i
 #include "slave_profile.h"
 #define TPA 0x1000UL
 #define TPB 0x1800UL
+static float tl_iout_rms = 1.0f; static uint8_t tl_iout_valid = 1U;   /* the converter current the tune sees: 1 A RMS at no load; a test raises it */
 static uint8_t tl_mem[4096]; static int tl_flash_fail; static uint32_t tl_last_ms; static int tl_flash_ops, tl_flash_viol;   /* every flash operation, and those made while the stage was NOT OFF */
 static int tl_rd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &tl_mem[a - TPA], n); return 0; }
 static int tl_er(uint32_t a) { tl_flash_ops++; if ((g_ctrl.state != CTRL_OFF) || (g_ctrl.inv_active != 0U) || (g_ctrl.run_allowed != 0U)) tl_flash_viol++; if (tl_flash_fail) return -1; memset(&tl_mem[a - TPA], 0xFF, 2048U); return 0; }
@@ -243,6 +244,7 @@ static void tl_service(void)
     tl_last_ms = now;
     in.vin = W.vin; in.vout = W.vout; in.meas_valid = 1U; in.fault = (uint8_t)(SlaveCtrl_FaultCode() != 0U); in.vin_in_window = (uint8_t)((W.vin >= CTRL_VIN_MIN_V) && (W.vin <= CTRL_VIN_MAX_V));
     in.maxc_v = (float)SlaveCtrl_MaxCorrDv() / 10.0f; in.hw_cap_ticks = (uint16_t)CTRL_STAGE3_MAX_EFF_TICKS;
+    in.iout_valid = tl_iout_valid; in.iout_clip = 0U; in.iout_rms = tl_iout_rms; in.iout_pk = tl_iout_rms * 4.0f;
     SlaveTuneLink_Service(now, &in);
 }
 #define E2E_TUNE_HOOKS e2e_tune_cmd, e2e_tune_frame
@@ -426,7 +428,7 @@ static void ma_start(uint8_t restart_auto, float vin)
     e2e_cal_have_store = 0; e2e_cal_saves = 0; e2e_cal_fail_save = 0; SlaveCal_Init(&E2E_CAL_HW);
 #endif
 #if (SLAVE_TUNE_MODE != 0)
-    memset(tl_mem, 0xFF, sizeof tl_mem); tl_flash_fail = 0; tl_flash_ops = 0; tl_flash_viol = 0; tl_last_ms = mc_ms(); SlaveProfile_Init(&TL_FL, TPA, TPB); SlaveTuneLink_Init(&TL_HW);
+    tl_iout_rms = 1.0f; tl_iout_valid = 1U; memset(tl_mem, 0xFF, sizeof tl_mem); tl_flash_fail = 0; tl_flash_ops = 0; tl_flash_viol = 0; tl_last_ms = mc_ms(); SlaveProfile_Init(&TL_FL, TPA, TPB); SlaveTuneLink_Init(&TL_HW);
 #endif
     memset(ma_fm, 0xFF, sizeof ma_fm); memset(ma_k, 0, sizeof ma_k); memset(&md, 0, sizeof md);
     MApp_Init(&ma, &MAFL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, mc_ms());
@@ -783,6 +785,15 @@ static void t_mc_tune(void)
       CHECK(!SlaveCtrl_TuneRunning(), "the fault ENDED tune mode in the controller");
       SlaveCtrl_ClearLatch(); tn_run(6000U);
       CHECK(g_ctrl.state == CTRL_OFF && !SlaveCtrl_TuneRunning() && g_ctrl.duty_counts == 0U, "after the fault is cleared the unit stays OFF: it does NOT start itself (state %d)", (int)g_ctrl.state); }
+    /* ---- THE CONVERTER-CURRENT GUARD on the real controller: the current rises in the middle of the sweep (a core that saturates) ---- */
+    { uint32_t k;
+      tn_begin_at(1.0, 120U, 160.0f); ma.ui.req |= MUI_REQ_RETUNE; for (k = 0U; k < 6000U && tn.max_eff < 600U; k++) tn_run(10U);
+      CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.duty_counts > 0U, "a sweep is under way at %u ticks", (unsigned)tn.max_eff);
+      tl_iout_rms = 9.0f; tn_run(1500U); MApp_TuneScreen(&ma, mc_ms(), fr);
+      CHECK(g_ctrl.duty_counts == 0U && ma.tune_state == 3U && ma.tune_result == 4U && strstr(fr[1], "Current Too High") != NULL, "the converter current rises to 9 A: the duty is ZERO within 1.5 s, the master says '%s' / '%s'", fr[1], fr[2]);
+      tn_run(12000U);
+      CHECK(g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U && SlaveProfile_Tuned() == 0U && tl_flash_ops == 0 && !SlaveCtrl_TuneRunning(), "and the controller is OFF without a fault, nothing is stored and flash was never touched (%d operations)", tl_flash_ops);
+      tl_iout_rms = 1.0f; }
     /* ---- the hardware cap: whatever duty is asked for, the controller never applies more than 2752 effective ticks ---- */
     { uint32_t k;
       tn_begin_at(1.0, 120U, 160.0f);
