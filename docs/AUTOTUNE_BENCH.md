@@ -69,3 +69,22 @@ To help it:
 
 ## Reading the first steps: your transformer's gain
 The reference transformer gives, per effective tick: 0.0255 V at 180 V in, 0.0297 V at 200 V, 0.0316 V at 230 V. So at 200 V: 16 ticks about 0.5 V, 32 ticks about 1.0 V, 512 ticks about 15 V, 2752 ticks about 82 V. Readings that are consistently 1.5 to 2 times those (for example 0.7 V at 16 ticks and 1.9 V at 32) mean a transformer with about that much more gain: the sweep finds out exactly, shortens the steps so that the injection stays under the limit, and stores a gain scale below 1 (a transformer with twice the gain gets half the regulator's integral gain when `SLAVE_TUNE_APPLY` is on). Single readings below 2 V are noisy (plus or minus 0.3 V): judge by the later steps.
+
+## The Transformer Profile page: what was stored and what it does (v0.9.39)
+LOG, then MENU x8 (the last service page; one more MENU returns to the Run screen):
+```
+Transformer Profile
+Cap 2752 ticks            (+ " Knee" if a saturation knee limited it)
+Gain B0.523 U0.523
+At 160V Max 110V n10
+```
+| Line | Meaning | What it does when `SLAVE_TUNE_APPLY 1` (with it OFF, NOTHING: the profile is only stored and shown) |
+|---|---|---|
+| `Cap` | the largest effective duty the sweep verified (2752 is the hardware ceiling). A smaller number means the sweep stopped earlier: a saturation knee (`Knee`), or the 80 % limit of the Max Correction / headroom it was made with | the regulator is never asked for more than this duty, but only if the cap is a REAL limit: a measured knee, or a sweep that went as far as your own Max Correction. A sweep stopped early by the output headroom (made at a high input) is NOT applied |
+| `Gain B / U` | the regulator gain scale = the reference transformer's gain / yours, between 0.100 and 1.500. Below 1: your transformer has MORE gain than the reference. B and U are always the SAME number: the sweep can only boost, so the buck scale is copied from it | the regulator's integral gain is multiplied by it: a transformer with twice the gain gets half the integral gain, so the correction is as fast and as stable as designed |
+| `At 160V` | the input voltage of the sweep (the baseline) | the injection curve is scaled to the live input with the reference shape |
+| `Max 110V` | the Max Correction the sweep was made with (the smaller of your setting and the headroom) | the cap is applied only while your current Max Correction is not larger than this |
+| `n10` | measured points (steps) | the same-transformer check compares the live injection with this curve |
+**Effect on the limits you set:** none of your Set-Mode limits (I/P LV, I/P HV, O/P LV, O/P HV, delays, overload) is changed by the profile. Max Correction stays YOUR limit; the cap can only make the regulator stop EARLIER than the hardware ceiling, so the lowest input the unit can still bring to the set voltage is the set voltage minus the injection at the cap. A cap that is much lower than the ceiling means that very low inputs will not reach the set voltage: re-tune at a lower input (about 160 V) with Max Correction 110 or more to learn the whole range.
+**A stored profile from a sweep at 230 V** has a low cap (about 1000 ticks, 32 V) only because the output headroom stopped the sweep, not because the transformer cannot do more: it is not applied as a cap. Its gain scale is.
+**Reading your own page:** `No profile stored (or an older slave)` means the slave sent no profile fields: nothing was ever stored, or the slave has an older firmware or `SLAVE_AUTOTUNE 0`.

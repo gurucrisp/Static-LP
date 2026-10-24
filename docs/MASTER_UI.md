@@ -251,3 +251,7 @@ monitor, diagnostics, Load Calibration, Clock, I/P Calibration, O/P Calibration,
 ## Re-tune: the transformer autotune from Set-Mode (v0.9.33)
 Set-Mode (hold MENU and LOG 2 s, the password if one is set), item 19 **Re-tune**, Yes. The unit must be stopped. The screen shows the sweep (`Step n of 10`, the injection of the last step); STOP aborts it; every other key does nothing until it ends. The result screen goes after 6 s or on any key.
 A slave without the autotune answers `Not Supported`; one with `SLAVE_AUTOTUNE 1` but without `SLAVE_TUNE_MODE 1` answers `Tune Refused / No Tune Mode Yet`. With both, the unit starts itself (about 6 s), then the sweep runs (about 40 s in all). Max Correction (item 4) must be set before a sweep, and the input must leave at least 20 V of headroom under the output limit (`Input Too High / Lower The Mains`). See docs/AUTOTUNE_BENCH.md before the first run.
+
+
+## The Transformer Profile page (v0.9.39)
+LOG, then MENU x8: the numbers of the profile the slave's last autotune stored (cap, gain scale boost / buck, the input and Max Correction it was made with, the points), from optional fields of the slave's `$H` frame. MENU once more returns to the Run screen (nine pages: Run + eight service pages). See docs/AUTOTUNE_BENCH.md for what each number does.

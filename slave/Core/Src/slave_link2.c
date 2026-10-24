@@ -141,6 +141,7 @@ void SL2_Service(uint32_t now_ms)
     {
         LinkH_t h;
         h.proto = (uint8_t)LINKV2_PROTO_VERSION; h.fw = 0U; h.vin_min_dv = 0U; h.vin_max_dv = 0U; h.rst = 0U; h.tuned = 0U; h.vout_max_dv = 0U;
+        h.prof_cap = 0U; h.prof_kib = 0U; h.prof_kiu = 0U; h.prof_vref_dv = 0U; h.prof_maxc_dv = 0U; h.prof_n = 0U; h.prof_knee = 0U;      /* EVERY field: an optional one left unset would hold stack garbage and the builder would refuse the whole frame (no hello at all) */
         if (s_hk.fill_h != 0) s_hk.fill_h(&h);
         h.proto = (uint8_t)LINKV2_PROTO_VERSION;
         n = LinkV2_BuildH(b, sizeof b, &h);

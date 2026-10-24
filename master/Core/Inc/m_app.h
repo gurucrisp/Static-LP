@@ -61,6 +61,8 @@ typedef struct
     uint16_t rtc_bdcr, rtc_icsr; /* raw status bits, for the Clock page */
     uint16_t e_setv_dv;          /* $E: the set voltage the slave is actually using, tenths of a volt (0 = not known) */
     uint16_t iout_rms_ca, iout_pk_ca;   /* $E: the slave's converter-side current (CT primary), AC RMS and peak, hundredths of an ampere */
+    uint8_t  prof_tuned, prof_n, prof_knee;                                   /* $H: the slave's stored profile (all 0 = none, or an older slave): tuned flag, points, saturation knee */
+    uint16_t prof_cap, prof_kib, prof_kiu, prof_vref_dv, prof_maxc_dv;         /* its duty cap (ticks), gain scale boost / buck (thousandths), the input it was made at and the Max Correction it was made with (tenths of a volt) */
     uint8_t  tune_n;                    /* $T: counts every progress frame received (the glue's counter, wraps) */
     uint8_t  tune_step, tune_result;    /* the newest $T frame: its step (1..) and result (0 = a step, 1..6 = the end of the sweep) */
     uint16_t tune_ticks, tune_vin_dv;   /* its duty ticks and the input voltage (tenths) */
@@ -168,6 +170,8 @@ void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /*
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */
 uint8_t MApp_ShowsDiag(const MApp_t *a);
+uint8_t MApp_ShowsProfile(const MApp_t *a);                     /* the transformer profile page is shown (LOG, then MENU x8) */
+void    MApp_ProfilePage(const MApp_t *a, uint32_t now, char out[4][21]);   /* draws it */
 uint8_t MApp_ShowsIout(const MApp_t *a);                        /* the converter-side current page is shown (LOG, then MENU x7) */
 void    MApp_IoutPage(const MApp_t *a, uint32_t now, char out[4][21]);   /* draws it */
 uint8_t MApp_ShowsClock(const MApp_t *a);                       /* the Clock service page is shown (LOG, then MENU x4) */

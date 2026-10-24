@@ -73,7 +73,7 @@ static int same_frame(const LinkV2Frame_t *a, const LinkV2Frame_t *b)
     switch (a->type)
     {
     case LINKV2_E: return (a->u.e.seq == b->u.e.seq) && (a->u.e.setv_dv == b->u.e.setv_dv) && (a->u.e.flags2 == b->u.e.flags2) && (a->u.e.clr == b->u.e.clr) && (a->u.e.reach_lo_dv == b->u.e.reach_lo_dv) && (a->u.e.reach_hi_dv == b->u.e.reach_hi_dv);
-    case LINKV2_H: return (a->u.h.proto == b->u.h.proto) && (a->u.h.fw == b->u.h.fw) && (a->u.h.vin_min_dv == b->u.h.vin_min_dv) && (a->u.h.vin_max_dv == b->u.h.vin_max_dv) && (a->u.h.rst == b->u.h.rst) && (a->u.h.tuned == b->u.h.tuned) && (a->u.h.vout_max_dv == b->u.h.vout_max_dv);
+    case LINKV2_H: return (a->u.h.proto == b->u.h.proto) && (a->u.h.fw == b->u.h.fw) && (a->u.h.vin_min_dv == b->u.h.vin_min_dv) && (a->u.h.vin_max_dv == b->u.h.vin_max_dv) && (a->u.h.rst == b->u.h.rst) && (a->u.h.tuned == b->u.h.tuned) && (a->u.h.vout_max_dv == b->u.h.vout_max_dv) && (a->u.h.prof_cap == b->u.h.prof_cap) && (a->u.h.prof_kib == b->u.h.prof_kib) && (a->u.h.prof_kiu == b->u.h.prof_kiu) && (a->u.h.prof_vref_dv == b->u.h.prof_vref_dv) && (a->u.h.prof_maxc_dv == b->u.h.prof_maxc_dv) && (a->u.h.prof_n == b->u.h.prof_n) && (a->u.h.prof_knee == b->u.h.prof_knee);
     case LINKV2_R: return (a->u.r.id == b->u.r.id) && (a->u.r.status == b->u.r.status) && (a->u.r.value == b->u.r.value);
     case LINKV2_T: return (a->u.t.step == b->u.t.step) && (a->u.t.ticks == b->u.t.ticks) && (a->u.t.vin_dv == b->u.t.vin_dv) && (a->u.t.dv == b->u.t.dv) && (a->u.t.result == b->u.t.result);
     case LINKV2_M: return (a->u.m.seq == b->u.m.seq) && (a->u.m.run == b->u.m.run) && (a->u.m.setv_dv == b->u.m.setv_dv) && (a->u.m.clr == b->u.m.clr) && (a->u.m.maxc_dv == b->u.m.maxc_dv);
@@ -202,6 +202,29 @@ static void t_ranges(void)
             if (k == 5) CHECK(m == LINK_ERR_RANGE, "an optional field that IS present must be valid: 4001 is rejected");
             if (k == 6) CHECK(m != LINK_OK, "a negative optional field is rejected");
             if (k == 7) CHECK(m != LINK_OK, "a non-number in an optional field is rejected"); } } }
+    {   /* the 7 OPTIONAL trailing fields of H (the stored autotune profile): a slave without a profile sends the 7-field frame of the first protocol */
+        LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkH_t h = {2, 937, 800, 3000, 0, 0, 2800, 0, 0, 0, 0, 0, 0, 0}; int commas, j;
+        n = LinkV2_BuildH(b, sizeof b, &h); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
+        CHECK(n > 0 && commas == 7, "no profile (all 7 fields 0): the frame is the 7-field frame of the first protocol (%d commas)", commas);
+        h.tuned = 1U; h.prof_cap = 2752U; h.prof_kib = 523U; h.prof_kiu = 1000U; h.prof_vref_dv = 1600U; h.prof_maxc_dv = 1100U; h.prof_n = 10U; h.prof_knee = 0U;
+        n = LinkV2_BuildH(b, sizeof b, &h); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
+        CHECK(n > 0 && commas == 14 && strstr(b, ",2752,523,1000,1600,1100,10,0*") != NULL, "a profile: 14 fields, ending ',2752,523,1000,1600,1100,10,0' (%d commas)", commas);
+        CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.type == LINKV2_H && f.u.h.prof_cap == 2752U && f.u.h.prof_kib == 523U && f.u.h.prof_kiu == 1000U && f.u.h.prof_vref_dv == 1600U && f.u.h.prof_maxc_dv == 1100U && f.u.h.prof_n == 10U && f.u.h.prof_knee == 0U && f.u.h.vout_max_dv == 2800U, "and it parses back with every value");
+        h.prof_cap = 0U; h.prof_kib = 0U; h.prof_kiu = 0U; h.prof_vref_dv = 0U; h.prof_maxc_dv = 0U; h.prof_n = 0U; h.prof_knee = 1U; n = LinkV2_BuildH(b, sizeof b, &h);
+        CHECK(n > 0 && LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.h.prof_knee == 1U && f.u.h.prof_cap == 0U, "a lone knee flag is still sent (all 14 fields) and read back");
+        h.prof_knee = 0U; h.prof_cap = 4096U; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "a cap above 4095 is refused by the builder"); h.prof_cap = 100U; h.prof_n = 16U; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "so are 16 points"); h.prof_n = 15U; h.prof_knee = 2U; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "and a knee flag of 2");
+        { static const char *g7 = "H,2,937,800,3000,0,1,2800", *g10 = "H,2,937,800,3000,0,1,2800,2752,523,1000", *g14 = "H,2,937,800,3000,0,1,2800,2752,523,1000,1600,1100,10,0", *g15 = "H,2,937,800,3000,0,1,2800,2752,523,1000,1600,1100,10,0,77", *g6 = "H,2,937,800,3000,0,1", *bad = "H,2,937,800,3000,0,1,2800,4096,523,1000,1600,1100,10,0", *neg = "H,2,937,800,3000,0,1,2800,-1,523", *txt = "H,2,937,800,3000,0,1,2800,27.5,523", *badn = "H,2,937,800,3000,0,1,2800,2752,523,1000,1600,1100,16,0";
+          char fr[LINKV2_MAX_LEN + 8]; const char *all[8]; int k; int32_t m; all[0] = g7; all[1] = g10; all[2] = g14; all[3] = g15; all[4] = g6; all[5] = bad; all[6] = neg; all[7] = txt;
+          for (k = 0; k < 9; k++) { uint8_t cs = 0U; const char *s = (k < 8) ? all[k] : badn; int q = 0; fr[q++] = '$'; while (*s) { cs ^= (uint8_t)*s; fr[q++] = *s++; } fr[q++] = '*'; fr[q++] = "0123456789ABCDEF"[cs >> 4]; fr[q++] = "0123456789ABCDEF"[cs & 15U]; fr[q++] = '\r'; fr[q++] = '\n'; fr[q] = '\0'; m = LinkV2_Parse(fr, (uint32_t)q, &f);
+            if (k == 0) CHECK(m == LINK_OK && f.u.h.prof_cap == 0U && f.u.h.prof_n == 0U && f.u.h.tuned == 1U, "7 fields (an older slave): accepted, the profile fields read as 0");
+            if (k == 1) CHECK(m == LINK_OK && f.u.h.prof_cap == 2752U && f.u.h.prof_kiu == 1000U && f.u.h.prof_vref_dv == 0U, "10 fields: the first three are read, the rest read as 0");
+            if (k == 2) CHECK(m == LINK_OK && f.u.h.prof_n == 10U, "14 fields: all read");
+            if (k == 3) CHECK(m == LINK_OK && f.u.h.prof_n == 10U, "15 fields (a later version): the extra one is ignored");
+            if (k == 4) CHECK(m != LINK_OK, "6 fields: still rejected (the first seven are required)");
+            if (k == 5) CHECK(m == LINK_ERR_RANGE, "an optional field that IS present must be valid: a cap of 4096 is rejected");
+            if (k == 6) CHECK(m != LINK_OK, "a negative optional field is rejected");
+            if (k == 7) CHECK(m != LINK_OK, "a non-number in an optional field is rejected");
+            if (k == 8) CHECK(m == LINK_ERR_RANGE, "16 points are rejected"); } } }
     {   /* the builders refuse too */
         LinkM_t m = {1, 1, 2300, 0, 0}; char b[96];
         CHECK(LinkV2_BuildM(b, sizeof b, &m) > 0, "a good M builds");
@@ -212,7 +235,7 @@ static void t_ranges(void)
         m.maxc_dv = 1990U; CHECK(LinkV2_BuildM(b, sizeof b, &m) > 0, "Max Correction 199.0 V builds");
         {   LinkE_t e = {0, 999, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with setv 99.9 V is refused"); e.setv_dv = 0U; CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "E with setv 0 (none yet) builds");
                     e.reach_lo_dv = 499U; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with reach 49.9 V is refused"); }
-        {   LinkH_t h = {2, 10000000UL, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "H with fw 10000000 is refused"); }
+        {   LinkH_t h = {2, 10000000UL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "H with fw 10000000 is refused"); }
     }
     printf("  every field of E H R T M: minimum, maximum (and 0 where allowed) round-trip; one step outside refused by the parser and the builder\n");
 }
@@ -393,7 +416,7 @@ static void t_fuzz(void)
 /* Structure-aware tests: the builders and the parser must AGREE on what is valid, over random values in and out of range,
  * and valid-checksum frames with randomly EDITED content must be rejected or stable (this exercises the accept path that random bytes never reach). */
 static const FldT PE[] = { {"seq",0,255,0}, {"setv",1000,3000,1}, {"flags2",0,65535,0}, {"clr",0,255,0}, {"reach_lo",500,6553,1}, {"reach_hi",500,6553,1}, {"iout_rms",0,4000,0}, {"iout_pk",0,4000,0} };
-static const FldT PH[] = { {"proto",0,255,0}, {"fw",0,9999999,0}, {"vin_min",0,65535,0}, {"vin_max",0,65535,0}, {"rst",0,2,0}, {"tuned",0,1,0}, {"vout_max",0,65535,0} };
+static const FldT PH[] = { {"proto",0,255,0}, {"fw",0,9999999,0}, {"vin_min",0,65535,0}, {"vin_max",0,65535,0}, {"rst",0,2,0}, {"tuned",0,1,0}, {"vout_max",0,65535,0}, {"p_cap",0,4095,0}, {"p_kib",0,65535,0}, {"p_kiu",0,65535,0}, {"p_vref",0,65535,0}, {"p_maxc",0,65535,0}, {"p_n",0,15,0}, {"p_knee",0,1,0} };
 static const FldT PR[] = { {"id",1,255,0}, {"status",0,7,0}, {"value",-2147483647,2147483647,0} };
 static const FldT PT[] = { {"step",0,255,0}, {"ticks",0,4095,0}, {"vin",0,65535,0}, {"dv",-999,999,0}, {"result",0,6,0} };
 static const FldT PM[] = { {"seq",0,255,0}, {"run",0,1,0}, {"setv",1000,3000,0}, {"clr",0,255,0}, {"maxc",0,1990,0} };
@@ -422,15 +445,15 @@ static void t_property(void)
     {
         const int which = (int)(rnd() % 5U);
         const FldT *fl = (which == 0) ? PE : (which == 1) ? PH : (which == 2) ? PR : (which == 3) ? PT : PM;
-        const int nf = (which == 0) ? 8 : (which == 1) ? 7 : (which == 2) ? 3 : 5;
+        const int nf = (which == 0) ? 8 : (which == 1) ? 14 : (which == 2) ? 3 : 5;
         const char type = "EHRTM"[which];
-        int32_t v[8]; int j, all_ok = 1; char b[LINKV2_MAX_LEN + 8], body[120]; int32_t n; int bn; LinkV2Frame_t f, g;
+        int32_t v[14]; int j, all_ok = 1; char b[LINKV2_MAX_LEN + 8], body[120]; int32_t n; int bn; LinkV2Frame_t f, g;
         for (j = 0; j < nf; j++) { v[j] = ((rnd() % 4U) == 0U) ? rnd_any(&fl[j]) : rnd_in(&fl[j]); if (!in_range(&fl[j], v[j])) all_ok = 0; }
         if ((fl[nf - 1].lo < -1000) && (v[nf - 1] == -2147483647 - 1)) continue;
         switch (which)
         {
         case 0: { LinkE_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4], (uint16_t)v[5], (uint16_t)v[6], (uint16_t)v[7] }; n = (all_ok) ? LinkV2_BuildE(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
-        case 1: { LinkH_t x = { (uint8_t)v[0], (uint32_t)v[1], (uint16_t)v[2], (uint16_t)v[3], (uint8_t)v[4], (uint8_t)v[5], (uint16_t)v[6] }; n = (all_ok) ? LinkV2_BuildH(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
+        case 1: { LinkH_t x = { (uint8_t)v[0], (uint32_t)v[1], (uint16_t)v[2], (uint16_t)v[3], (uint8_t)v[4], (uint8_t)v[5], (uint16_t)v[6], (uint16_t)v[7], (uint16_t)v[8], (uint16_t)v[9], (uint16_t)v[10], (uint16_t)v[11], (uint8_t)v[12], (uint8_t)v[13] }; n = (all_ok) ? LinkV2_BuildH(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 2: { LinkR_t x = { (uint8_t)v[0], (uint8_t)v[1], v[2] }; n = (all_ok) ? LinkV2_BuildR(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 3: { LinkT_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (int16_t)v[3], (uint8_t)v[4] }; n = (all_ok) ? LinkV2_BuildT(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         default:{ LinkM_t x = { (uint8_t)v[0], (uint8_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4] }; n = (all_ok) ? LinkV2_BuildM(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
@@ -511,7 +534,7 @@ static void t_mutation(void)
 static void t_lengths(void)
 {
     char b[LINKV2_MAX_LEN + 8]; int32_t n, maxlen = 0;
-    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535}; LinkR_t r = {255, 7, -2147483647};
+    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535, 4095, 65535, 65535, 65535, 65535, 15, 1}; LinkR_t r = {255, 7, -2147483647};
     LinkT_t t = {255, 4095, 65535, -999, 6}; LinkM_t m = {255, 1, 3000, 255, 1990}; LinkK_t k;
     n = LinkV2_BuildE(b, sizeof b, &e); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN && b[n - 1] == '\n' && b[n - 2] == '\r', "E at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
     n = LinkV2_BuildH(b, sizeof b, &h); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN, "H at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
@@ -525,7 +548,7 @@ static void t_lengths(void)
     /* field counts against the Frames sheet: E 6, H 7, R 3, T 5, M 5 numeric fields (commas = fields) */
     {   struct { const char *name; int32_t n; int want; } c[5];
         char bb[LINKV2_MAX_LEN + 8]; int i, commas, j;
-        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300};
+        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200, 0, 0, 0, 0, 0, 0, 0}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300};
         c[0].name = "E"; c[0].n = LinkV2_BuildE(bb, sizeof bb, &e2); c[0].want = 6; for (i = 0; i < 1; i++) { commas = 0; for (j = 0; j < c[0].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 6, "E has 6 fields (%d)", commas); }
         c[1].name = "H"; c[1].n = LinkV2_BuildH(bb, sizeof bb, &h2); commas = 0; for (j = 0; j < c[1].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 7, "H has 7 fields (%d)", commas);
         c[2].name = "R"; c[2].n = LinkV2_BuildR(bb, sizeof bb, &r2); commas = 0; for (j = 0; j < c[2].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 3, "R has 3 fields (%d)", commas);

@@ -17,7 +17,7 @@ typedef struct
 } Fld_t;
 
 static const Fld_t F_E[8] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 255, 0}, {500, 6553, 1}, {500, 6553, 1}, {0, 4000, 0}, {0, 4000, 0} };
-static const Fld_t F_H[7] = { {0, 255, 0}, {0, 9999999, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 2, 0}, {0, 1, 0}, {0, 65535, 0} };
+static const Fld_t F_H[14] = { {0, 255, 0}, {0, 9999999, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 2, 0}, {0, 1, 0}, {0, 65535, 0}, {0, 4095, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 15, 0}, {0, 1, 0} };
 static const Fld_t F_R[3] = { {1, 255, 0}, {0, 7, 0}, {-INT32_LIM, INT32_LIM, 0} };
 static const Fld_t F_T[5] = { {0, 255, 0}, {0, 4095, 0}, {0, 65535, 0}, {-999, 999, 0}, {0, 6, 0} };
 static const Fld_t F_M[5] = { {0, 255, 0}, {0, 1, 0}, {1000, 3000, 0}, {0, 255, 0}, {0, 1990, 0} };
@@ -163,9 +163,11 @@ int32_t LinkV2_BuildE(char *out, uint32_t cap, const LinkE_t *f)
 
 int32_t LinkV2_BuildH(char *out, uint32_t cap, const LinkH_t *f)
 {
-    const int32_t v[7] = { f->proto, (int32_t)f->fw, f->vin_min_dv, f->vin_max_dv, f->rst, f->tuned, f->vout_max_dv };
+    const int32_t v[14] = { f->proto, (int32_t)f->fw, f->vin_min_dv, f->vin_max_dv, f->rst, f->tuned, f->vout_max_dv, f->prof_cap, f->prof_kib, f->prof_kiu, f->prof_vref_dv, f->prof_maxc_dv, f->prof_n, f->prof_knee };
+    const uint8_t has_prof = (uint8_t)((f->prof_cap != 0U) || (f->prof_kib != 0U) || (f->prof_kiu != 0U) || (f->prof_vref_dv != 0U) || (f->prof_maxc_dv != 0U) || (f->prof_n != 0U) || (f->prof_knee != 0U));
     if (f->fw > 9999999UL) return LINK_ERR_RANGE;
-    return build_nums('H', F_H, v, 7U, out, cap);
+    /* CANONICAL: the 7 profile fields are left out when all are 0 (no profile stored): the frame is then exactly the 7-field frame of the first protocol */
+    return build_nums('H', F_H, v, (has_prof != 0U) ? 14U : 7U, out, cap);
 }
 
 int32_t LinkV2_BuildR(char *out, uint32_t cap, const LinkR_t *f)
@@ -381,7 +383,7 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
     const char *body, *p, *end;
     uint32_t    blen;
     int32_t     hi, lo, rc;
-    int32_t     v[8];
+    int32_t     v[14];                       /* the longest frame: H with its 7 optional profile fields */
     LinkV2Frame_t f;
 
     zero_frame(&f);
@@ -420,11 +422,12 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
         f.u.e.clr = (uint8_t)v[3]; f.u.e.reach_lo_dv = (uint16_t)v[4]; f.u.e.reach_hi_dv = (uint16_t)v[5]; f.u.e.iout_rms_ca = (uint16_t)v[6]; f.u.e.iout_pk_ca = (uint16_t)v[7];
         break;
     case 'H':
-        rc = parse_nums(p, end, F_H, 7U, v);
+        rc = parse_nums_opt(p, end, F_H, 7U, 14U, v);
         if (rc != LINK_OK) return rc;
         f.type = LINKV2_H;
         f.u.h.proto = (uint8_t)v[0]; f.u.h.fw = (uint32_t)v[1]; f.u.h.vin_min_dv = (uint16_t)v[2]; f.u.h.vin_max_dv = (uint16_t)v[3];
         f.u.h.rst = (uint8_t)v[4]; f.u.h.tuned = (uint8_t)v[5]; f.u.h.vout_max_dv = (uint16_t)v[6];
+        f.u.h.prof_cap = (uint16_t)v[7]; f.u.h.prof_kib = (uint16_t)v[8]; f.u.h.prof_kiu = (uint16_t)v[9]; f.u.h.prof_vref_dv = (uint16_t)v[10]; f.u.h.prof_maxc_dv = (uint16_t)v[11]; f.u.h.prof_n = (uint8_t)v[12]; f.u.h.prof_knee = (uint8_t)v[13];
         break;
     case 'R':
         rc = parse_nums(p, end, F_R, 3U, v);

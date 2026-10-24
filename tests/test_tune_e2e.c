@@ -32,13 +32,19 @@ static const TuneLinkHw_t SHW = { s_maxc, s_stopped, s_can, s_busy, c_begin, c_r
 static uint8_t s_tx(const char *f, uint32_t n)
 {
     LinkV2Frame_t fr; if (LinkV2_Parse(f, n, &fr) != LINK_OK) return 1U;
-    if (fr.type == LINKV2_R) MApp_OnKResult(&A, fr.u.r.id, fr.u.r.status, fr.u.r.value);
+    if (fr.type == LINKV2_H) { D.prof_tuned = fr.u.h.tuned; D.prof_cap = fr.u.h.prof_cap; D.prof_kib = fr.u.h.prof_kib; D.prof_kiu = fr.u.h.prof_kiu; D.prof_vref_dv = fr.u.h.prof_vref_dv; D.prof_maxc_dv = fr.u.h.prof_maxc_dv; D.prof_n = fr.u.h.prof_n; D.prof_knee = fr.u.h.prof_knee; }
+    else if (fr.type == LINKV2_R) MApp_OnKResult(&A, fr.u.r.id, fr.u.r.status, fr.u.r.value);
     else if (fr.type == LINKV2_T) { D.tune_step = fr.u.t.step; D.tune_result = fr.u.t.result; D.tune_ticks = fr.u.t.ticks; D.tune_vin_dv = fr.u.t.vin_dv; D.tune_dv_dv = fr.u.t.dv; D.tune_n++; }
     return 1U;
 }
 static void s_on_control(const LinkM_t *m, uint32_t now) { (void)m; (void)now; }
 static void s_fill_e(LinkE_t *e) { e->setv_dv = 2300U; e->flags2 = SlaveTuneLink_Flags2(); }
-static void s_fill_h(LinkH_t *h) { h->fw = 932UL; h->vin_min_dv = 800U; h->vin_max_dv = 3000U; h->tuned = SlaveProfile_Tuned(); h->vout_max_dv = 2800U; }
+static void s_fill_h(LinkH_t *h)
+{
+    TuneProfile_t p;
+    h->fw = 932UL; h->vin_min_dv = 800U; h->vin_max_dv = 3000U; h->tuned = SlaveProfile_Tuned(); h->vout_max_dv = 2800U;
+    if (SlaveProfile_Get(&p) == 1U) { h->prof_cap = p.cap_ticks; h->prof_kib = p.kib_m; h->prof_kiu = p.kiu_m; h->prof_vref_dv = p.vin_ref_dv; h->prof_maxc_dv = p.maxc_dv; h->prof_n = p.n; h->prof_knee = p.knee; }     /* as the slave's glue does */
+}
 static int  s_tcmd(uint8_t c, const char *n, int32_t v, uint8_t *s, int32_t *val, uint32_t now) { return SlaveTuneLink_Command(c, n, v, s, val, now); }
 static int  s_tfr(LinkT_t *f, uint32_t now) { return SlaveTuneLink_NextFrame(f, now); }
 static const SL2_Hooks_t SHK = { s_on_control, s_fill_e, s_fill_h, s_tx, 0, 0, s_tcmd, s_tfr };
@@ -98,6 +104,13 @@ int main(void)
     CHECK(SlaveProfile_Tuned() == 1U && !Tune_Running(), "and the slave has stored the profile"); CHECK(!ever_on, "the master never started the unit during the sweep");
     { TuneProfile_t p; CHECK(SlaveProfile_Get(&p) == 1U && p.cap_ticks == 2752U && p.kib_m >= 940U && p.kib_m <= 1060U, "the stored profile: cap %u, gain scale %u", (unsigned)p.cap_ticks, (unsigned)p.kib_m); }
     co_run(7000U); CHECK(!MApp_ShowsTune(&A), "the result goes away by itself");
+    /* the Transformer Profile page (LOG, then MENU x8) shows what the slave stored, as it came over the link in $H */
+    SL2_Init(&SHK, T); co_run(1500U);                                                       /* the slave says hello again: $H now carries the profile */
+    tap(3, 100U); for (q = 0; q < 8; q++) tap(0, 100U); run(100U); MApp_ProfilePage(&A, T, fr);
+    { TuneProfile_t pf; (void)SlaveProfile_Get(&pf);
+      CHECK(MApp_ShowsProfile(&A) && strstr(fr[0], "Transformer Profile") != NULL && strncmp(fr[1], "Cap 2752 ticks", 14) == 0, "the page shows the stored cap ('%s')", fr[1]);
+      CHECK(fr[2][6] == (char)('0' + ((pf.kib_m / 1000U) % 10U)) && fr[2][8] == (char)('0' + ((pf.kib_m / 100U) % 10U)) && fr[2][9] == (char)('0' + ((pf.kib_m / 10U) % 10U)) && fr[2][10] == (char)('0' + (pf.kib_m % 10U)), "the boost gain scale on the page is the stored %u thousandths ('%s')", (unsigned)pf.kib_m, fr[2]);
+      CHECK(strncmp(fr[3], "At 230V Max 120V n10", 20) == 0, "the input it was made at, the Max Correction used and the 10 points: 'At 230V Max 120V n10' ('%s')", fr[3]); }
     /* STOP on the master aborts the slave's sweep */
     e2e_fresh(); A.ui.req |= MUI_REQ_RETUNE; co_run(17000U); CHECK(Tune_Running() && MApp_ShowsTune(&A), "a sweep is running");
     tap(2, 100U); co_run(1500U); MApp_TuneScreen(&A, T, fr);

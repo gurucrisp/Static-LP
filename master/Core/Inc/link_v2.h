@@ -91,6 +91,14 @@ typedef struct
     uint8_t  rst;          /* LINKV2_RST_*                                             */
     uint8_t  tuned;        /* 1 = a valid autotune profile is stored                   */
     uint16_t vout_max_dv;  /* the slave's own output guard, tenths of a volt           */
+    /* the stored autotune profile: 7 OPTIONAL trailing fields, sent only when a profile exists (prof_cap != 0), so a slave without one sends exactly the 7-field frame of the first protocol */
+    uint16_t prof_cap;     /* the profile's duty cap, effective ticks, 0 (none) .. 4095 */
+    uint16_t prof_kib;     /* the regulator gain scale for boost, thousandths (1000 = 1.000) */
+    uint16_t prof_kiu;     /* and for buck */
+    uint16_t prof_vref_dv; /* the input voltage the sweep was made at, tenths of a volt */
+    uint16_t prof_maxc_dv; /* the Max Correction it was made with, tenths of a volt    */
+    uint8_t  prof_n;       /* measured points, 0..15                                   */
+    uint8_t  prof_knee;    /* 1 = a saturation knee limited the cap                    */
 } LinkH_t;
 
 /* ---- $R response to a $K: id,status,value ---------------------------------------------- */

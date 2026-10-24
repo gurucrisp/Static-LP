@@ -23,6 +23,10 @@ static uint8_t h_tx(const char *f, uint32_t n)
     return 1U;
 }
 static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, 0, 0 };
+/* what the slave's real glue does when NO profile is stored: it sets the 7 original fields and leaves the optional profile fields alone */
+static void h_fill_h_partial(LinkH_t *h) { h->fw = 939UL; h->vin_min_dv = 800U; h->vin_max_dv = 3000U; h->rst = 0U; h->tuned = 0U; h->vout_max_dv = 2800U; }
+static const SL2_Hooks_t HOOKS_PARTIAL = { h_on_control, h_fill_e, h_fill_h_partial, h_tx, 0, 0, 0, 0 };
+static void dirty_stack(void) { volatile uint8_t junk[3072]; unsigned i; for (i = 0U; i < sizeof junk; i++) junk[i] = 0xA5U; }
 
 static void reset_world(uint32_t t0)
 {
@@ -274,6 +278,15 @@ static void t_calibration(void)
 int main(void)
 {
     t_hello_boot();
+    {   /* v0.9.39: a hook that does not set the optional profile fields must not make the hello disappear (they were stack garbage, the builder refused the frame) */
+        LinkV2Frame_t f; int k, ok = 0;
+        reset_world(5000U); SL2_Init(&HOOKS_PARTIAL, 5000U); dirty_stack(); SL2_Service(5000U);
+        for (k = 0; k < ncap; k++) if (parse_cap(k, &f) == LINK_OK && f.type == LINKV2_H) ok = 1;
+        CHECK(ok && count_type(LINKV2_H) == 1, "a hook that leaves the profile fields alone (no profile stored), on a dirty stack: the hello is still sent (%d)", count_type(LINKV2_H));
+        CHECK(ok && f.u.h.prof_cap == 0U && f.u.h.prof_kib == 0U && f.u.h.prof_kiu == 0U && f.u.h.prof_vref_dv == 0U && f.u.h.prof_maxc_dv == 0U && f.u.h.prof_n == 0U && f.u.h.prof_knee == 0U && f.u.h.fw == 939UL, "and its profile fields read as 0");
+        CHECK(ok && strchr(cap[0], 'H') != NULL && ((int)strlen(cap[0]) < 60), "and it is the short 7-field frame of the first protocol (%d bytes)", (int)strlen(cap[0]));
+        SL2_Init(&HOOKS, 6000U);
+    }
     t_extended();
     t_control();
     t_commands();

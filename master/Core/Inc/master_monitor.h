@@ -116,6 +116,7 @@ typedef struct
     uint16_t     e_iout_rms_ca, e_iout_pk_ca;   /* the slave's converter-side current ($E, optional fields), hundredths of an ampere */
     uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
     uint8_t      t_n, t_step, t_result;           /* the last $T (the autotune's progress): a counter, its step and result */
+    uint16_t     h_prof_cap, h_prof_kib, h_prof_kiu, h_prof_vref_dv, h_prof_maxc_dv; uint8_t h_prof_n, h_prof_knee, h_tuned;   /* the slave's stored profile, from the optional fields of $H */
     uint16_t     t_ticks, t_vin_dv; int16_t t_dv_dv;
     uint8_t      rst_wdg;            /* this master was restarted by its watchdog (RCC reset flags, read at start) */
     uint8_t      h_rst;              /* the slave's reset cause from its last $H: 1 = its watchdog */

@@ -91,6 +91,7 @@ static void hk_on_control(const LinkM_t *m, uint32_t now_ms)
 }
 #if (SLAVE_AUTOTUNE != 0)
 #include "slave_tune_link.h"
+#include "slave_profile.h"
 /* the autotune over the link: $K TUNE / TABORT and the $T progress frames (slave_tune_link.h) */
 static int hk_tune_cmd(uint8_t cmd, const char *name, int32_t num, uint8_t *status, int32_t *value, uint32_t now_ms) { return SlaveTuneLink_Command(cmd, name, num, status, value, now_ms); }
 static int hk_tune_frame(LinkT_t *f, uint32_t now_ms) { return SlaveTuneLink_NextFrame(f, now_ms); }
@@ -128,6 +129,12 @@ static void hk_fill_h(LinkH_t *h)
     h->rst         = s_reset_cause;
 #if (SLAVE_AUTOTUNE != 0)
     h->tuned       = SlaveProfile_Tuned();   /* a valid autotune profile is stored in flash */
+#if (SLAVE_AUTOTUNE != 0)
+    {   /* the profile's numbers, for the master's "Transformer Profile" page (optional trailing fields of $H) */
+        TuneProfile_t p;
+        if (SlaveProfile_Get(&p) == 1U) { h->prof_cap = p.cap_ticks; h->prof_kib = p.kib_m; h->prof_kiu = p.kiu_m; h->prof_vref_dv = p.vin_ref_dv; h->prof_maxc_dv = p.maxc_dv; h->prof_n = p.n; h->prof_knee = p.knee; }
+    }
+#endif
 #else
     h->tuned       = 1U;                   /* the built-in profile is in force (SLAVE_AUTOTUNE 0) */
 #endif

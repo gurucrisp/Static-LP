@@ -555,6 +555,39 @@ void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
     vcal_message(a, status, value);
 }
 
+uint8_t MApp_ShowsProfile(const MApp_t *a) { return MUI_ShowsProfile(&a->ui); }
+
+/* The transformer profile page (LOG, then MENU x8): what the slave's last autotune stored (from the optional fields of its $H frame). Three numbers decide what it does: the duty CAP (with SLAVE_TUNE_APPLY the regulator never asks for more),
+ * the GAIN SCALE for boost and buck (the regulator's integral gain is multiplied by it: below 1 for a transformer with more gain than the reference), and the input voltage and Max Correction it was MADE at (a cap made with a low Max Correction is not applied). */
+void MApp_ProfilePage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
+{
+    const MAppData_t *d = &a->last; uint32_t r, c, n; char t[24]; (void)now;
+    for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
+    copy(t, "Transformer Profile"); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
+    if (d->prof_cap != 0U)
+    {
+        uint32_t cap = (d->prof_cap > 9999U) ? 9999U : d->prof_cap, kb = (d->prof_kib > 9999U) ? 9999U : d->prof_kib, ku = (d->prof_kiu > 9999U) ? 9999U : d->prof_kiu;
+        uint32_t vr = (uint32_t)(d->prof_vref_dv + 5U) / 10U, mc = (uint32_t)(d->prof_maxc_dv + 5U) / 10U, pn = (d->prof_n > 99U) ? 99U : d->prof_n;
+        if (vr > 999U) { vr = 999U; }
+        if (mc > 999U) { mc = 999U; }
+        copy(t, "Cap 0000 ticks"); t[4] = (char)('0' + ((cap / 1000U) % 10U)); t[5] = (char)('0' + ((cap / 100U) % 10U)); t[6] = (char)('0' + ((cap / 10U) % 10U)); t[7] = (char)('0' + (cap % 10U));
+        if (d->prof_knee != 0U) { t[14] = ' '; t[15] = 'K'; t[16] = 'n'; t[17] = 'e'; t[18] = 'e'; t[19] = '\0'; }
+        for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
+        copy(t, "Gain B0.000 U0.000"); t[6] = (char)('0' + ((kb / 1000U) % 10U)); t[8] = (char)('0' + ((kb / 100U) % 10U)); t[9] = (char)('0' + ((kb / 10U) % 10U)); t[10] = (char)('0' + (kb % 10U));
+        t[13] = (char)('0' + ((ku / 1000U) % 10U)); t[15] = (char)('0' + ((ku / 100U) % 10U)); t[16] = (char)('0' + ((ku / 10U) % 10U)); t[17] = (char)('0' + (ku % 10U));
+        for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
+        copy(t, "At 000V Max 000V n00"); t[3] = (char)('0' + ((vr / 100U) % 10U)); t[4] = (char)('0' + ((vr / 10U) % 10U)); t[5] = (char)('0' + (vr % 10U));
+        t[12] = (char)('0' + ((mc / 100U) % 10U)); t[13] = (char)('0' + ((mc / 10U) % 10U)); t[14] = (char)('0' + (mc % 10U)); t[18] = (char)('0' + ((pn / 10U) % 10U)); t[19] = (char)('0' + (pn % 10U));
+        for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
+    }
+    else
+    {
+        copy(t, "No profile stored"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
+        copy(t, "(or an older slave)"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
+        copy(t, "Set-Mode: Re-tune"); for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
+    }
+}
+
 uint8_t MApp_ShowsIout(const MApp_t *a) { return MUI_ShowsIout(&a->ui); }
 
 /* The converter-side current page (LOG, then MENU x7): what the slave's CT2500 chain (net I-OUT) measures, to check the scaling against a clamp meter on the same conductor. It is the CT PRIMARY current. */

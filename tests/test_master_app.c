@@ -818,6 +818,25 @@ static void t_retune_item_keys(void)
     printf("  Re-tune item with the real keys after the real start-up order: reachable, Yes + MENU starts a sweep, no 'Not Available', Calibration unchanged\n");
 }
 
+
+/* the Transformer Profile page (LOG, then MENU x8): the numbers of the slave's stored profile */
+static void t_profile_page(void)
+{
+    char fr[MUI_ROWS][MUI_COLS + 1U]; int q;
+    fresh(); to_run(); run(1000U); tap(3, 100U); for (q = 0; q < 8; q++) tap(0, 100U); run(100U);
+    CHECK(MApp_ShowsProfile(&A) && !MApp_ShowsIout(&A), "LOG, then MENU x8 opens the Transformer Profile page");
+    D.prof_tuned = 0U; D.prof_cap = 0U; run(100U); MApp_ProfilePage(&A, T, fr);
+    CHECK(strstr(fr[0], "Transformer Profile") != NULL && strstr(fr[1], "No profile stored") != NULL && strstr(fr[3], "Re-tune") != NULL, "no profile: 'No profile stored' ('%s' / '%s')", fr[1], fr[3]);
+    D.prof_tuned = 1U; D.prof_cap = 2752U; D.prof_kib = 523U; D.prof_kiu = 1000U; D.prof_vref_dv = 1600U; D.prof_maxc_dv = 1100U; D.prof_n = 10U; D.prof_knee = 0U; run(100U); MApp_ProfilePage(&A, T, fr);
+    CHECK(strncmp(fr[1], "Cap 2752 ticks", 14) == 0 && fr[1][14] == ' ' && strncmp(fr[2], "Gain B0.523 U1.000", 18) == 0 && strncmp(fr[3], "At 160V Max 110V n10", 20) == 0, "a profile: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
+    D.prof_knee = 1U; D.prof_cap = 1024U; D.prof_kib = 1198U; D.prof_kiu = 80U; D.prof_vref_dv = 2304U; D.prof_maxc_dv = 600U; D.prof_n = 7U; run(100U); MApp_ProfilePage(&A, T, fr);
+    CHECK(strncmp(fr[1], "Cap 1024 ticks Knee", 19) == 0 && strncmp(fr[2], "Gain B1.198 U0.080", 18) == 0 && strncmp(fr[3], "At 230V Max 060V n07", 20) == 0, "a knee, small scales, 7 points: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
+    D.prof_cap = 9999U; D.prof_kib = 65535U; D.prof_kiu = 65535U; D.prof_vref_dv = 65535U; D.prof_maxc_dv = 65535U; D.prof_n = 15U; D.prof_knee = 0U; run(100U); MApp_ProfilePage(&A, T, fr);
+    { int w = 1; for (q = 0; q < 4; q++) if (strlen(fr[q]) != 20U) w = 0; CHECK(w, "extreme values never overflow the 20 columns"); }
+    tap(0, 100U); run(100U); CHECK(!MApp_ShowsProfile(&A) && !MApp_ShowsIout(&A) && A.ui.page == 0U, "MENU on the last page goes back to the Run screen (page %u)", (unsigned)A.ui.page);
+    printf("  transformer profile page: the numbers, no profile, a knee, extreme values\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -873,6 +892,7 @@ int main(void)
     t_iout_page();
     t_tune_app();
     t_retune_item_keys();
+    t_profile_page();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

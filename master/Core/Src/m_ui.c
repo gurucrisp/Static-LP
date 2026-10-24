@@ -224,6 +224,7 @@ const MDateTime_t *MUI_ClockToSet(const MUI_t *u) { return &u->clk_set; }
 uint16_t MUI_CalValue(const MUI_t *u) { return u->cal_val; }
 uint8_t MUI_ShowsCal(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsVCal(const MUI_t *u) { return (uint8_t)(((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->msg_on == 0U) && ((u->page == 5U) || (u->page == 6U))) ? (u->page - 4U) : 0U); }
+uint8_t MUI_ShowsProfile(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 8U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsIout(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 7U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsClock(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 4U) && (u->msg_on == 0U)); }
 uint8_t MUI_ShowsDiag(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 2U) && (u->msg_on == 0U)); }
@@ -328,7 +329,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         {
             if (u->live->mode == (uint8_t)M_MODE_SINGLE)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
-                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 8U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
+                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 9U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }
