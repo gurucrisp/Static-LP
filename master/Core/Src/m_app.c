@@ -160,7 +160,8 @@ static void tune_request(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
     if (a->tune_state != TS_IDLE) return;
     if (d->have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
-    if ((a->eout.run[0] != 0U) || (d->state != 0U)) { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }
+    if ((a->eout.run[0] != 0U) || ((d->state != 0U) && !((d->state == 3U) && ((d->fault == 18U) || (d->fault == 19U)))))      /* the slave latched "Re-tune Required" (18, 19): that is exactly what a tune is for */
+    { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }
     a->tune_state = TS_ASK; a->tune_id = MApp_NextKId(a); a->tune_cmd = (uint8_t)MAPP_KCMD_TUNE; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t0 = now; a->tune_t_tx = now;
     a->tune_seen = d->tune_n; a->tune_step = 0U; a->tune_dv_dv = 0; a->tune_ticks = 0U; a->tune_result = 0U; a->tune_abort_sent = 0U;           /* frames already counted belong to an older sweep */
 }

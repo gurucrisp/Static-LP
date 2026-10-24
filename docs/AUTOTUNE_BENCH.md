@@ -40,3 +40,9 @@ Below 20 V of headroom (input above 250 V) a `TUNE` is refused: `Input Too High 
 * A fault ends tune mode for good: after it is cleared the unit stays OFF until the master starts it.
 * If the master stops sending `$M` for 1 s, the slave stops the sweep by itself.
 * The sweep never applies more than the cap (2752 ticks) and never ramps faster than 1500 ticks/s.
+
+## Using the stored profile (`SLAVE_TUNE_APPLY 1`, v0.9.35)
+Off by default. With it on, the profile loaded at every start (a) scales the regulator's integral gain (always), (b) caps the regulator at the profile's cap ONLY if that cap is a real limit (a measured saturation knee, or a sweep that reached your Max Correction), and (c) checks at every boost start that the injection matches the profile: a different transformer latches fault 19, "Re-tune Required".
+A sweep made at a high input is stopped early by the output headroom and does not cap the regulator, but it still sets the gain scale. For a complete profile tune at about 160 V (see the table above). If you change Max Correction afterwards, tune again.
+`SLAVE_TUNE_ENFORCE 1` (needs APPLY and TUNE_MODE) makes a start without a profile latch fault 18, "Re-tune Required"; Re-tune works from that state. Leave it OFF until the sweep has been run on a real unit and the check's tolerance (a first value: 30 % or 1 V) has been confirmed.
+Config: `..._fast_correction_100_iout_tune_apply.h` (tune mode and APPLY; ENFORCE left off).

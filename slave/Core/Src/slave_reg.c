@@ -11,6 +11,10 @@
   */
 #include "slave_reg.h"
 
+static float s_gain_boost = 1.0f, s_gain_buck = 1.0f;     /* the transformer profile's gain scale, per direction (1.0 = none) */
+void Reg_SetGainScale(float boost, float buck) { s_gain_boost = (boost > 0.0f) ? boost : 1.0f; s_gain_buck = (buck > 0.0f) ? buck : 1.0f; }
+void Reg_GetGainScale(float *boost, float *buck) { *boost = s_gain_boost; *buck = s_gain_buck; }
+
 /* Gain scheduling constants, as in the old firmware (computed the same way). */
 static const float s_ratio_buck  = REG_RATIO_BUCK;
 static const float s_ratio_boost = REG_RATIO_BOOST;
@@ -113,7 +117,7 @@ void Reg_Step(Reg_t *r, uint32_t now, float vin, float vout)
 
     Ki_boost = s_ratio_boost * (1.5f * 2600.0f);
     Ki_buck  = s_ratio_buck  * (1.5f * 2000.0f);
-    r->ki = ((1.0f - t) * Ki_boost + t * Ki_buck) * REG_KI_SCALE;
+    r->ki = ((1.0f - t) * Ki_boost * s_gain_boost + t * Ki_buck * s_gain_buck) * REG_KI_SCALE;
 
     boostErr = r->sp_v - vout;
     buckErr  = vout - r->sp_v;

@@ -65,7 +65,7 @@
 #if (SLAVE_AUTOTUNE != 0) && (SLAVE_POWER_STAGE >= 1)
 /* What the autotune glue asks of the controller. The controller's TUNE MODE (applying the sweep's open-loop duty) does not exist yet, so can_run is 0 and a TUNE command is answered NOT_ALLOWED (reason 1). */
 static uint16_t s_tune_maxc(void) { return SlaveCtrl_MaxCorrDv(); }
-static uint8_t  s_tune_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
+static uint8_t  s_tune_stopped(void) { return SlaveCtrl_TuneStopped(); }
 static uint8_t  s_tune_can_run(void) { return (uint8_t)(SLAVE_TUNE_MODE != 0); }                  /* the controller's tune mode is built into this firmware */
 #if (SLAVE_VOLTAGE_CAL != 0)
 static uint8_t  s_tune_busy(void) { return (uint8_t)(SlaveCal_Busy() != 0U); }

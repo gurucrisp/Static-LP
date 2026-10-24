@@ -736,6 +736,10 @@ static void t_tune_app(void)
     /* the unit is running: refused, nothing is sent, no screen */
     fresh(); to_run(); run(12000U); A.ui.req |= MUI_REQ_RETUNE; run(60U);
     CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && !MApp_ShowsTune(&A) && strstr(row(1), "Stop The Unit") != NULL, "the unit is running: 'Stop The Unit First', nothing sent ('%s')", row(1));
+    /* the slave has latched "Re-tune Required" (fault 18 or 19): Re-tune is allowed; any other fault still blocks it */
+    { int fc; for (fc = 0; fc < 3; fc++) { static const uint8_t RTF[3] = { 18U, 19U, 6U }; fresh(); to_run(); run(2000U); stop_unit(); D.state = 3U; D.fault = RTF[fc]; run(100U); A.ui.req |= MUI_REQ_RETUNE; run(60U);
+        if (fc < 2) CHECK(MApp_TakeKCommand(&A, &k, T) == 1U && k.cmd == MAPP_KCMD_TUNE && MApp_ShowsTune(&A), "slave fault %u (re-tune required): Re-tune is accepted and TUNE is sent", (unsigned)RTF[fc]);
+        else        CHECK(MApp_TakeKCommand(&A, &k, T) == 0U && !MApp_ShowsTune(&A), "slave fault %u (not a re-tune fault): refused, nothing sent", (unsigned)RTF[fc]); } }
     /* no link */
     fresh(); to_run(); run(2000U); stop_unit(); D.have = 0U; A.ui.req |= MUI_REQ_RETUNE; run(60U); CHECK(!MApp_ShowsTune(&A) && MApp_TakeKCommand(&A, &k, T) == 0U, "no slave link: refused");
     /* a whole sweep */

@@ -118,6 +118,9 @@ void  Reg_Service(Reg_t *r, uint32_t now_ms, float vin, float vout, uint8_t arme
 
 /* Duty request in timer counts, 0 .. REG_PWM_PERIOD (before any limiter). */
 float Reg_Duty(const Reg_t *r);
+/* The transformer profile's gain scale (reference gain / measured gain), for boost and for buck: multiplies the integral gain of that direction. 1.0 = unchanged (the default, and what every host test uses). Survives Reg_Init. */
+void  Reg_SetGainScale(float boost, float buck);
+void  Reg_GetGainScale(float *boost, float *buck);
 
 /* Boost when the INPUT is below the ramped setpoint (old: vrms_in < voltage_setpoint_pid). */
 uint8_t Reg_IsBoost(const Reg_t *r, float vin);

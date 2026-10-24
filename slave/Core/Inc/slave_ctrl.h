@@ -303,6 +303,8 @@ typedef enum
     CF_ZC_LOST         = 8,    /* WATCHDOG COMPARE: next zero-cross event overdue    - condition */
     CF_VIN_RANGE       = 9,    /* input outside the permitted window                - condition */
     CF_MEAS_STALE      = 10,   /* measurement stopped updating                      - condition */
+    CF_NOT_TUNED       = 18,   /* no valid transformer profile (SLAVE_TUNE_ENFORCE): the master shows "Re-tune Required"; Re-tune clears it */
+    CF_RETUNE_MISMATCH = 19,   /* the injection measured at start does not match the stored profile: a different transformer (SLAVE_TUNE_APPLY); "Re-tune Required" */
     CF_TRANSFORMER_FLIP = 17   /* the series transformer is connected backwards (SLAVE_TF_RUN_CHECK) - latches at once, in every mode */
 } CtrlFault_t;
 
@@ -423,6 +425,7 @@ uint8_t SlaveCtrl_TuneBegin(void);                    /* 1 = accepted (the unit 
 void    SlaveCtrl_TuneRequest(uint16_t eff_ticks);    /* the open-loop BOOST duty wanted now (effective ticks); applied in RUN, slew-limited and capped */
 void    SlaveCtrl_TuneEnd(void);                      /* stop: duty to zero at once, the shunts close, OFF */
 uint8_t SlaveCtrl_TuneRunning(void);                  /* tune mode is on (any phase of the start sequence or RUN) */
+uint8_t SlaveCtrl_TuneStopped(void);                  /* 1 = the unit is stopped for a tune: OFF, or latched with "Re-tune Required" (fault 18 or 19), which a tune is exactly the cure for */
 uint8_t SlaveCtrl_TuneReady(void);                    /* in RUN for at least 1 s: the sweep may start */     /* the Max Correction last sent in $M, tenths of a volt (0 = not set)   */
 
 uint8_t  SlaveCtrl_LinkState(void);     /* link_proto state: 0 stopped 1 starting 2 running 3 fault */

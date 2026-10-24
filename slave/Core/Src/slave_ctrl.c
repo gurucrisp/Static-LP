@@ -490,6 +490,19 @@ static uint32_t s_tune_last_ms;
 #else
 #define TUNE_ENABLED 0
 #endif
+#if (SLAVE_TUNE_APPLY != 0) && (SLAVE_POWER_STAGE >= 3) && (SLAVE_MASTER_CONTROL != 0)
+#include "slave_profile.h"
+#include "slave_tunechk.h"
+#define APPLY_ENABLED 1
+static TuneProfile_t s_prof;                      /* the stored transformer profile, loaded at every start */
+static uint8_t       s_prof_ok;
+static float         s_cap_ticks = (float)CTRL_STAGE3_MAX_EFF_TICKS;     /* the regulator's cap: the smaller of the hardware cap and the profile's */
+static TuneChk_t     s_chk; static uint32_t s_chk_seq;
+#define REG_CAP()    (s_cap_ticks)
+#else
+#define APPLY_ENABLED 0
+#define REG_CAP()    ((float)CTRL_STAGE3_MAX_EFF_TICKS)
+#endif
 static uint32_t s_rect_base_comm;
 
 #if (SLAVE_TF_CHECK != 0) || (SLAVE_POWER_STAGE == 2)
@@ -990,7 +1003,7 @@ uint16_t SlaveCtrl_Flags2(void)
         if (d <= CTRL_IN_BAND_V) f |= LINKV2_FLAG_IN_BAND;
     }
 #if (SLAVE_POWER_STAGE >= 3)
-    if ((g_ctrl.state == CTRL_RUN) && (s_reg_eff >= (uint16_t)(CTRL_STAGE3_MAX_EFF_TICKS - 1U))) f |= LINKV2_FLAG_AT_CAP;
+    if ((g_ctrl.state == CTRL_RUN) && ((float)s_reg_eff >= (REG_CAP() - 1.0f))) f |= LINKV2_FLAG_AT_CAP;
 #endif
     if (g_ctrl.state == CTRL_LATCHED) f |= LINKV2_FLAG_FAULT_LATCHED;
     return f;
@@ -1011,6 +1024,7 @@ uint16_t SlaveCtrl_MaxCorrDv(void)  { return s_mc_maxc_dv; }
 #if (TUNE_ENABLED != 0)
 uint8_t SlaveCtrl_TuneBegin(void)
 {
+    if ((g_ctrl.state == CTRL_LATCHED) && ((g_ctrl.fault == CF_NOT_TUNED) || (g_ctrl.fault == CF_RETUNE_MISMATCH))) SlaveCtrl_ClearLatch();     /* "Re-tune Required" is exactly what a tune is for: it must not block it */
     if ((g_ctrl.state != CTRL_OFF) || (g_ctrl.run_request != 0U) || (s_mc_link_lost != 0U) || (s_mc_maxc_dv == 0U) || (g_ctrl.isr_fault != 0U)) return 0U;
     s_tune_req = 0.0f; s_tune_cur = 0.0f; s_tune_last_ms = 0U; s_tune_on = 1U; g_ctrl.run_request = 1U;
     return 1U;
@@ -1018,12 +1032,14 @@ uint8_t SlaveCtrl_TuneBegin(void)
 void    SlaveCtrl_TuneRequest(uint16_t eff_ticks) { s_tune_req = (float)eff_ticks; }
 void    SlaveCtrl_TuneEnd(void) { s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f; g_ctrl.run_request = 0U; }      /* the next pass: BeginReshunt with zero duty */
 uint8_t SlaveCtrl_TuneRunning(void) { return s_tune_on; }
+uint8_t SlaveCtrl_TuneStopped(void) { return (uint8_t)((g_ctrl.state == CTRL_OFF) || ((g_ctrl.state == CTRL_LATCHED) && ((g_ctrl.fault == CF_NOT_TUNED) || (g_ctrl.fault == CF_RETUNE_MISMATCH)))); }
 uint8_t SlaveCtrl_TuneReady(void) { return (uint8_t)((s_tune_on != 0U) && (g_ctrl.state == CTRL_RUN) && ((uint32_t)(CtrlHw_NowMs() - s_state_since_ms) >= 1000UL)); }
 #else
 uint8_t SlaveCtrl_TuneBegin(void) { return 0U; }
 void    SlaveCtrl_TuneRequest(uint16_t eff_ticks) { (void)eff_ticks; }
 void    SlaveCtrl_TuneEnd(void) { }
 uint8_t SlaveCtrl_TuneRunning(void) { return 0U; }
+uint8_t SlaveCtrl_TuneStopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
 uint8_t SlaveCtrl_TuneReady(void) { return 0U; }
 #endif
 
@@ -1120,6 +1136,25 @@ void SlaveCtrl_Service(void)
 #endif
         if (g_ctrl.run_request != 0U)
         {
+#if (APPLY_ENABLED != 0)
+            s_prof_ok = (uint8_t)(SlaveProfile_Get(&s_prof) == 1U);                                            /* the stored profile, validated, at EVERY start */
+            s_cap_ticks = (float)CTRL_STAGE3_MAX_EFF_TICKS;
+            if (s_prof_ok != 0U)
+            {   /* the profile's cap limits the regulator only if it is a REAL limit: a saturation knee that was measured, or a sweep that went as far as the installer's own Max Correction. A sweep that was stopped EARLY by the output
+                 * headroom (tuned at a high input, see slave_tune_link.h) says nothing about what the transformer can do: its cap is NOT applied, or a profile made at 230 V would hold the regulator to about 32 V of boost. */
+                if (((s_prof.knee != 0U) || (s_prof.maxc_dv >= s_mc_maxc_dv)) && ((float)s_prof.cap_ticks < s_cap_ticks)) s_cap_ticks = (float)s_prof.cap_ticks;
+                Reg_SetGainScale((float)s_prof.kib_m * 0.001f, (float)s_prof.kiu_m * 0.001f);
+            }
+            else Reg_SetGainScale(1.0f, 1.0f);
+#if (SLAVE_TUNE_ENFORCE != 0)
+#if (TUNE_ENABLED != 0)
+            if ((s_prof_ok == 0U) && (s_tune_on == 0U))
+#else
+            if (s_prof_ok == 0U)
+#endif
+            { EnterFault(CF_NOT_TUNED, now_ms); break; }                                                       /* no valid profile: do not run; the Re-tune item clears this */
+#endif
+#endif
             Resync();                              /* every start begins with a fresh sync */
             g_ctrl.state     = CTRL_SYNC;
             s_state_since_ms = now_ms;
@@ -1249,8 +1284,11 @@ void SlaveCtrl_Service(void)
 #if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
             TfRunReset(now_ms);                                      /* a new start: the flip check begins again */
 #endif
+#if (APPLY_ENABLED != 0)
+            TuneChk_Init(&s_chk, (s_prof_ok != 0U) ? &s_prof : (const TuneProfile_t *)0, now_ms); s_chk_seq = m.update_count;      /* a new start: the same-transformer check begins */
+#endif
 #if (SLAVE_POWER_STAGE >= 3)
-            s_reg.out_max = (float)CTRL_STAGE3_MAX_EFF_TICKS;              /* the cap: the integrator IS the output, so this is also the anti-wind-up */
+            s_reg.out_max = REG_CAP();                                      /* the cap: the integrator IS the output, so this is also the anti-wind-up (with a profile: the smaller of the hardware cap and the profile's) */
 #endif
             s_reg.ss_slow_slope_vps  = CTRL_SOFTSTART_SLOW_SLOPE_VPS;       /* the soft-start ramp: the old firmware's values unless the config says otherwise */
             s_reg.ss_fast_slope_vps  = CTRL_SOFTSTART_FAST_SLOPE_VPS;
@@ -1296,7 +1334,7 @@ void SlaveCtrl_Service(void)
             float d;
             Reg_Service(&s_reg, now_ms, m.vin, m.vout, 1U);
             d = Reg_Duty(&s_reg);                                   /* the EFFECTIVE high-side on-time in ticks (the integral controller's output) */
-            if (d > (float)CTRL_STAGE3_MAX_EFF_TICKS) d = (float)CTRL_STAGE3_MAX_EFF_TICKS;
+            if (d > REG_CAP()) d = REG_CAP();
             if (d < 0.0f) d = 0.0f;
 #if (SLAVE_INJ_GUARD != 0)
             {   /* the guard: see slave_features.h. A step of the input, or a wish to reverse the direction at a large correction, takes the correction to ZERO; it stays zero until the input has been steady,
@@ -1325,7 +1363,7 @@ void SlaveCtrl_Service(void)
                         s_guard_on = 0U;
                         Reg_Init(&s_reg, s_target_v, m.vin, m.vout, now_ms);
 #if (SLAVE_POWER_STAGE >= 3)
-                        s_reg.out_max = (float)CTRL_STAGE3_MAX_EFF_TICKS;              /* the SAME cap as at the start: Reg_Init resets it to a full period, and the integrator IS the output */
+                        s_reg.out_max = REG_CAP();                                     /* the SAME cap as at the start: Reg_Init resets it to a full period, and the integrator IS the output */
 #endif
                         s_reg.ss_slow_slope_vps  = CTRL_GUARD_RESTART_SLOPE_VPS;       /* a fast ramp, no slow first phase: the output is already live */
                         s_reg.ss_fast_slope_vps  = CTRL_GUARD_RESTART_SLOPE_VPS;
@@ -1342,6 +1380,15 @@ void SlaveCtrl_Service(void)
 #endif
 #if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_POWER_STAGE >= 3)
             if (TfRunCheck(&m, d, g_ctrl.boost, now_ms) != 0U) { EnterFault(CF_TRANSFORMER_FLIP, now_ms); break; }     /* connected backwards: stop, latch */
+#endif
+#if (APPLY_ENABLED != 0)
+            if ((m.valid != 0U) && (m.update_count != s_chk_seq))
+            {   /* the same-transformer check, on every FRESH measurement: the injection really measured against the profile's prediction (boost only) */
+                uint8_t cv; s_chk_seq = m.update_count;
+                cv = TuneChk_Update(&s_chk, now_ms, d, g_ctrl.boost, m.vin, m.vout);
+                if (cv == TUNECHK_MISMATCH) { EnterFault(CF_RETUNE_MISMATCH, now_ms); break; }       /* a different transformer: stay off, latch, "Re-tune Required" */
+                if (cv == TUNECHK_FLIP)     { EnterFault(CF_TRANSFORMER_FLIP, now_ms); break; }
+            }
 #endif
             g_ctrl.duty_counts = CTRL_EFF_TO_CCR((uint32_t)d);      /* + the dead time: a pulse at or below it outputs nothing */
 #if (SLAVE_POWER_STAGE >= 3)

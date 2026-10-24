@@ -52,11 +52,31 @@
 #define SLAVE_TUNE_MODE        0
 #endif
 
+/* 1 = USE the stored transformer profile (the autotune's result): the regulator is capped at the profile's cap, its integral gain is scaled by the profile's gain scale (boost and buck), and at every start in BOOST the injection that is really
+ * measured is compared with the one the profile predicts (slave_tunechk.h): a different transformer gives fault 19 (latched, the master shows "Re-tune Required"). 0 = the profile is stored but ignored (the regulator is exactly as before).
+ * Needs SLAVE_AUTOTUNE 1, SLAVE_MASTER_CONTROL 1, SLAVE_POWER_STAGE >= 3. OFF until the sweep has been run on a real unit and the tolerances have been checked. */
+#ifndef SLAVE_TUNE_APPLY
+#define SLAVE_TUNE_APPLY       0
+#endif
+/* 1 = REFUSE TO RUN without a valid profile: a start raises fault 18 (latched, "Re-tune Required"). The Re-tune item still works from that state. Needs SLAVE_TUNE_APPLY 1. */
+#ifndef SLAVE_TUNE_ENFORCE
+#define SLAVE_TUNE_ENFORCE     0
+#endif
+
 #ifndef SLAVE_AUTOTUNE
 #define SLAVE_AUTOTUNE         0
 #endif
 #if (SLAVE_TUNE_MODE != 0) && (SLAVE_AUTOTUNE == 0)
 #error "SLAVE_TUNE_MODE 1 needs SLAVE_AUTOTUNE 1: the link commands that start a sweep are part of the autotune"
+#endif
+#if (SLAVE_TUNE_APPLY != 0) && ((SLAVE_AUTOTUNE == 0) || (SLAVE_MASTER_CONTROL == 0) || (SLAVE_POWER_STAGE < 3))
+#error "SLAVE_TUNE_APPLY 1 needs SLAVE_AUTOTUNE 1, SLAVE_MASTER_CONTROL 1 and SLAVE_POWER_STAGE >= 3"
+#endif
+#if (SLAVE_TUNE_ENFORCE != 0) && (SLAVE_TUNE_APPLY == 0)
+#error "SLAVE_TUNE_ENFORCE 1 needs SLAVE_TUNE_APPLY 1"
+#endif
+#if (SLAVE_TUNE_ENFORCE != 0) && (SLAVE_TUNE_MODE == 0)
+#error "SLAVE_TUNE_ENFORCE 1 needs SLAVE_TUNE_MODE 1: a unit that refuses to run until it is tuned must be able to tune itself"
 #endif
 
 /* 1 = the converter-side CURRENT (net I-OUT, connector pin 32, PA2 = ADC1_IN2) is sampled as a 4th ADC channel together with AC_IN, AC_OUT and the NTC, its AC RMS and peak are computed (slave_iout.h) and sent to the master in $E.
@@ -93,7 +113,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       934UL
+#define SLAVE_FW_VERSION       935UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

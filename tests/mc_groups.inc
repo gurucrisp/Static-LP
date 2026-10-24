@@ -228,7 +228,7 @@ static int tl_rd(uint32_t a, uint8_t *b, uint32_t n) { memcpy(b, &tl_mem[a - TPA
 static int tl_er(uint32_t a) { if (tl_flash_fail) return -1; memset(&tl_mem[a - TPA], 0xFF, 2048U); return 0; }
 static int tl_pr(uint32_t a, const uint8_t *b, uint32_t n) { uint32_t i; if (tl_flash_fail) return -1; for (i = 0U; i < n; i++) tl_mem[a - TPA + i] &= b[i]; return 0; }
 static const SFlash_t TL_FL = { tl_rd, tl_pr, tl_er };
-static uint8_t  tl_stopped(void) { return (uint8_t)(g_ctrl.state == CTRL_OFF); }
+static uint8_t  tl_stopped(void) { return SlaveCtrl_TuneStopped(); }
 static uint8_t  tl_can(void) { return 1U; }
 static uint8_t  tl_busy(void) { return 0U; }
 static uint16_t tl_fault(void) { return SlaveCtrl_FaultCode(); }
@@ -798,6 +798,66 @@ static void t_mc_tune(void)
     ma.ui.req |= MUI_REQ_RETUNE; tn_run(800U); CHECK(ma.tune_state == 0U && strstr(ma_f[2], "Set Max Correction") != NULL, "and the master says 'Set Max Correction' ('%s' / '%s'; engine run %u, slave state %u, unit state %d)", ma_f[1], ma_f[2], (unsigned)ma.eout.run[0], (unsigned)md.state, (int)g_ctrl.state);
     printf("  tune mode on the real controller: a whole sweep (the controller starts itself, the duty slew-limited and capped, the profile stored), STOP, a reversed transformer, Max Correction 30 V, the master lost, the controller's own limit, the refusals\n");
 }
+#if (SLAVE_TUNE_APPLY != 0)
+/* ---- THE PROFILE IN USE: the cap and gain scale, the same-transformer check, refusing to run untuned, Re-tune out of "Re-tune Required" ---- */
+static int tn_wait_contactor(uint32_t max_ms) { (void)ma_until(ma_c_contactor, max_ms); return ma_c_contactor() ? 1 : 0; }
+static void tn_start_at(float vin) { W.vin = vin; W.vout = vin; ma_run(2000U); tn_prev_eff = 0.0; ma_tap(1, 100U); }
+static void tn_stop_unit(void) { uint32_t k; ma_tap(2, 100U); for (k = 0U; k < 3000U && g_ctrl.state != CTRL_OFF; k++) tn_run(10U); ma_run(500U); }
+static int tn_master_retune_latched(void) { return (ma.eng.u[0].st == (uint8_t)U_LATCHED) && (ma.eng.u[0].fclass == (uint8_t)FC_RETUNE); }
+static void tn_do_retune(double gain_k, float vin, uint16_t maxc)
+{   /* change the world to a tuning input and the given transformer, run the sweep from the master, end with the unit stopped */
+    W.vin = vin; W.vout = vin; W.plant_gain = (double)Tune_RefG(vin) * gain_k; ma.settings.maxcorr_v = maxc; ma_run(1500U); ma.ui.req |= MUI_REQ_RETUNE; (void)tn_until_result(120000U); tn_run(15000U);
+}
+static void t_mc_tune_apply(void)
+{
+    int got; TuneProfile_t pf; float gb, gu;
+    /* ---- ENFORCE: no profile, no run ---- */
+    tn_begin_at(1.0, 120U, 215.0f);
+    tn_start_at(215.0f); tn_run(8000U);
+    CHECK(g_ctrl.fault == CF_NOT_TUNED && g_ctrl.state == CTRL_LATCHED && !ma_c_contactor() && g_ctrl.duty_counts == 0U, "a START without a profile: the slave latches fault 18 and does not run (state %d, fault %d)", (int)g_ctrl.state, (int)g_ctrl.fault);
+    CHECK(tn_master_retune_latched(), "the master latches 'Re-tune Required' (class RETUNE)");
+    CHECK(tn.max_inj < 2.0, "nothing was injected: %.2f V", tn.max_inj);
+    /* ---- Re-tune works out of that state: the latch does not block its own cure ---- */
+    W.vin = 160.0f; W.vout = 160.0f; ma_run(1500U); ma.ui.req |= MUI_REQ_RETUNE; tn_run(1500U);
+    CHECK(ma.tune_state != 0U && SlaveCtrl_TuneRunning(), "Re-tune is accepted although fault 18 is latched: the master asks, the controller clears the latch and starts");
+    got = tn_until_result(120000U); MApp_TuneScreen(&ma, mc_ms(), (char (*)[MUI_COLS + 1U])ma_f);
+    CHECK(got && ma.tune_result == 1U && SlaveProfile_Tuned() == 1U, "the sweep finishes and the profile is stored (result %u)", (unsigned)ma.tune_result);
+    tn_run(15000U);
+    CHECK(!tn_master_retune_latched() && g_ctrl.state == CTRL_OFF && g_ctrl.fault == 0U, "the master's 'Re-tune Required' is cleared by the successful tune, the slave is OFF without a fault");
+    /* ---- the profile in use: START regulates, the cap and the gain scale are the profile's ---- */
+    (void)SlaveProfile_Get(&pf);
+    tn_start_at(215.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
+    CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0, "START with the profile: the regulator takes over, 215 V in gives %.1f V out, no fault, the contactor is closed", (double)W.vout);
+    Reg_GetGainScale(&gb, &gu); CHECK(fabsf(gb - (float)pf.kib_m * 0.001f) < 0.002f && fabsf(gu - (float)pf.kiu_m * 0.001f) < 0.002f, "the regulator's gain scale is the profile's (boost %.3f, buck %.3f)", (double)gb, (double)gu);
+    /* ---- no false alarm: the same transformer at several inputs (boost starts) ---- */
+    { static const float VIN[4] = { 185.0f, 195.0f, 208.0f, 222.0f }; int i, bad_runs = 0;
+      for (i = 0; i < 4; i++) { tn_stop_unit(); tn_start_at(VIN[i]); got = tn_wait_contactor(90000U); tn_run(4000U); if (!(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.5)) { bad_runs++; printf("      (input %.0f V: contactor %d, fault %d, out %.1f V)\n", (double)VIN[i], got, (int)g_ctrl.fault, (double)W.vout); } }
+      CHECK(bad_runs == 0, "the SAME transformer started at 185, 195, 208 and 222 V (the master's input window starts at 180 V): no false 'different transformer' alarm, regulates to 230 V every time"); }
+    /* ---- a DIFFERENT transformer: the check stops the start, latches, and the master says Re-tune Required ---- */
+    tn_stop_unit(); W.plant_gain = (double)Tune_RefG(190.0f) * 1.6; memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0;
+    tn_start_at(190.0f); tn_run(12000U);
+    CHECK(g_ctrl.fault == CF_RETUNE_MISMATCH && g_ctrl.state == CTRL_LATCHED && !ma_c_contactor(), "a transformer with 1.6 times the gain: fault 19 is latched and the unit does not run (state %d, fault %d)", (int)g_ctrl.state, (int)g_ctrl.fault);
+    CHECK(tn_master_retune_latched(), "the master latches 'Re-tune Required'");
+    CHECK(tn.max_inj < 55.0, "the output was never taken far above the input before the check stopped it: %.1f V of injection", tn.max_inj);
+    /* ---- the installer accepts the new transformer: Re-tune, then it runs ---- */
+    tn_do_retune(1.6, 160.0f, 120U);
+    (void)SlaveProfile_Get(&pf); Reg_GetGainScale(&gb, &gu);
+    CHECK(SlaveProfile_Tuned() == 1U && !tn_master_retune_latched() && g_ctrl.fault == 0U && pf.kib_m >= 540U && pf.kib_m <= 720U, "Re-tune with the new transformer: finished, the latch is cleared, the new gain scale is %u (about 1/1.6)", (unsigned)pf.kib_m);
+    tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(5000U);
+    CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0, "and the unit now runs on the new transformer: %.1f V out, no fault", (double)W.vout);
+    /* ---- the cap of a profile made with a low Max Correction limits the regulator ---- */
+    tn_stop_unit(); tn_do_retune(1.0, 230.0f, 30U); (void)SlaveProfile_Get(&pf);
+    CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U, "a profile made at 230 V with Max Correction 30 V has the cap %u (< 1200)", (unsigned)pf.cap_ticks);
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); tn_run(25000U);
+    CHECK(tn.max_eff <= (uint32_t)pf.cap_ticks && g_ctrl.fault == 0U && W.vout < 228.0, "a start from 190 V needs about 1300 ticks but the regulator is capped at the profile's %u: it applied at most %u, the output stays at %.1f V, no fault", (unsigned)pf.cap_ticks, (unsigned)tn.max_eff, (double)W.vout);
+    /* ---- a profile limited only by the OUTPUT HEADROOM (tuned at a high input) is not a limit of the transformer: its cap is NOT applied ---- */
+    tn_stop_unit(); tn_do_retune(1.0, 230.0f, 120U); (void)SlaveProfile_Get(&pf);
+    CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U && pf.maxc_dv < 1200U && pf.knee == 0U, "a profile made at 230 V with Max Correction 120 V is limited by the headroom: cap %u, made with %u (tenths of a volt), no knee", (unsigned)pf.cap_ticks, (unsigned)pf.maxc_dv);
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
+    CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0 && tn.max_eff > (uint32_t)pf.cap_ticks, "a start from 190 V needs about 1300 ticks: the regulator is NOT held to that profile's %u: it applied %u, the output is %.1f V, no fault", (unsigned)pf.cap_ticks, (unsigned)tn.max_eff, (double)W.vout);
+    printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it\n");
+}
+#endif
 #endif
 
 static void t_mc_iout(void)

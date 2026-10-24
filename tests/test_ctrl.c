@@ -2669,6 +2669,9 @@ int main(void)
 #if (SLAVE_TUNE_MODE != 0)
     run_isolated(t_mc_tune,                   "tune mode: the real controller, the real sweep, the real master");
 #endif
+#if (SLAVE_TUNE_APPLY != 0)
+    run_isolated(t_mc_tune_apply,             "tune apply: the stored profile in use on the real controller");
+#endif
 #ifdef FAST_CORRECTION_TEST
     run_isolated(t_mc_fast_correction,        "master control: the fast correction profile");
 #endif
