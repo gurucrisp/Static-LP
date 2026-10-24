@@ -782,6 +782,10 @@ static void t_tune_app(void)
     /* every way a sweep can end */
     { static const struct { int r; const char *l1; } FAILS[] = { {2, "Reversed Transformer"}, {3, "No Response"}, {4, "Aborted By Slave"}, {5, "Input Not Steady"}, {6, "By Operator"} };
       unsigned e; for (e = 0U; e < sizeof FAILS / sizeof FAILS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(4, FAILS[e].r, 128, 2300, -30); run(40U); tune_screen(fr); CHECK(fr_has(fr, FAILS[e].l1), "result %d: '%s' ('%s' / '%s')", FAILS[e].r, FAILS[e].l1, fr[0], fr[1]); } }
+    /* the reason an Input Not Steady sweep gave up, from the final frame's injection field */
+    { static const struct { int dv; const char *txt; } UNS[] = { {123, "Input moved 12 V"}, {85, "Input moved 8.5 V"}, {-13, "Reading spread 1.3 V"}, {-120, "Reading spread 12 V"}, {0, "Input out of window"} };
+      unsigned e; for (e = 0U; e < sizeof UNS / sizeof UNS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(6, 5, 512, 2340, UNS[e].dv); run(40U); tune_screen(fr);
+        CHECK(fr_has(fr, "Input Not Steady") && fr_has(fr, UNS[e].txt) && strlen(fr[2]) <= 20U, "Input Not Steady with a detail of %d tenths: '%s' ('%s' / '%s')", UNS[e].dv, UNS[e].txt, fr[1], fr[2]); } }
     /* STOP aborts: TABORT with a new id, repeated; the final frame (6) ends it */
     fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(2, 0, 32, 2300, 4); run(30U);
     tap(2, 100U); run(30U); CHECK(MApp_TakeKCommand(&A, &k2, T) == 1U && k2.cmd == MAPP_KCMD_TABORT && k2.id != k.id, "STOP sends TABORT with a new id");

@@ -10,7 +10,8 @@ static struct
     TuneSt_t st;
     uint32_t t0, wait_t0, t_valid;
     float    maxc, base, vin_ref;
-    float    sum, vin_sum, vin_min, vin_max; uint32_t n;
+    float    sum, sumsq, sum1, sum2, vin_sum, vin_min, vin_max; uint32_t n, n1, n2;
+    int16_t  unst;                            /* why the window was refused, tenths of a volt: > 0 the input moved by that much (peak to peak), < 0 the difference was noisy or had not settled (its spread) */
     uint8_t  step_i, last_step;               /* index in S_TICKS; the current step is the last one (shortened to the limit) */
     float    cur_ticks;
     uint16_t pt_t[TUNE_MAX_POINTS]; float pt_dv[TUNE_MAX_POINTS]; uint8_t npts;
@@ -41,7 +42,33 @@ static void push_frame(uint8_t step, uint16_t ticks, float vin, float dv, uint8_
     f->result = result;
 }
 
-static void reset_accum(uint32_t now) { s.t0 = now; s.sum = 0.0f; s.vin_sum = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
+static void reset_accum(uint32_t now) { s.t0 = now; s.sum = 0.0f; s.sumsq = 0.0f; s.sum1 = 0.0f; s.sum2 = 0.0f; s.n1 = 0U; s.n2 = 0U; s.vin_sum = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
+static float fsqrt(float x) { float g; uint8_t k; if (x <= 0.0f) return 0.0f; g = (x > 1.0f) ? (0.5f * x) : 1.0f; for (k = 0U; k < 12U; k++) g = 0.5f * (g + x / g); return g; }       /* no math library in this module */
+static int16_t tenths(float v) { float t = v * 10.0f + 0.5f; if (t > 999.0f) t = 999.0f; if (t < -999.0f) t = -999.0f; return (int16_t)t; }
+/* one sample into the window; `el` = ms since the window's reference time, `half` = where the window's second half begins */
+static void acc_sample(float d, float vin, uint32_t el, uint32_t half)
+{
+    s.sum += d; s.sumsq += d * d; if (el < half) { s.sum1 += d; s.n1++; } else { s.sum2 += d; s.n2++; }
+    s.vin_sum += vin; s.n++; if (vin < s.vin_min) s.vin_min = vin; if (vin > s.vin_max) s.vin_max = vin;
+}
+/* 0 = the window is good, 1 = the input moved (a real jump), 2 = the difference is noisy or has not settled. `ref` is the baseline the injection is measured from. Sets s.unst. */
+static uint8_t window_check(float ref, uint8_t at_end)
+{
+    float n = (float)s.n, mean, var, m1, m2, inj, d;
+    if (s.n < 3U) return 0U;
+    if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V) { s.unst = tenths(s.vin_max - s.vin_min); return 1U; }
+    if ((at_end == 0U) || (s.n < 20U)) return 0U;
+    mean = s.sum / n; var = (s.sumsq / n) - (mean * mean); if (var < 0.0f) var = 0.0f;
+    m1 = (s.n1 > 0U) ? (s.sum1 / (float)s.n1) : mean; m2 = (s.n2 > 0U) ? (s.sum2 / (float)s.n2) : mean;
+    inj = mean - ref; if (inj < 0.0f) inj = -inj;
+    { float lim = TUNE_D_SD_V + (TUNE_D_SD_REL * inj); if (var > (lim * lim)) { s.unst = (int16_t)(-tenths(fsqrt(var))); return 2U; } }
+    d = m1 - m2; if (d < 0.0f) d = -d;
+    if (d > (TUNE_D_TREND_V + (TUNE_D_TREND_REL * inj))) { s.unst = (int16_t)(-tenths(d)); return 2U; }
+    return 0U;
+}
+/* the sweep gives up on an unsteady window: the frame carries WHY in its injection field */
+static void finish(uint8_t result, uint8_t knee, uint8_t cap_idx);
+static void give_up_unsteady(void) { s.last_dv = (float)s.unst * 0.1f; finish(TUNE_R_UNSTEADY, 0U, 0U); }
 
 static void build_profile(uint8_t knee, uint8_t cap_idx)
 {
@@ -141,20 +168,29 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
         if (in->meas_valid == 0U) goto out;
         if ((in->fault != 0U) || (in->maxc_v <= 0.0f)) { finish(TUNE_R_ABORTED, 0U, 0U); goto out; }
         if (in->vout > in->vin + s.maxc + TUNE_OVERSHOOT_V) { finish(TUNE_R_ABORTED, 0U, 0U); goto out; }     /* more injection than the installer's rating: stop at once */
-        if (in->vin_in_window == 0U) { finish(TUNE_R_UNSTEADY, 0U, 0U); goto out; }
+        if (in->vin_in_window == 0U) { s.unst = 0; give_up_unsteady(); goto out; }                   /* the input left the slave's window: the frame says 0 */
         d = in->vout - in->vin;
         if (s.st == TS_BASE)
         {
-            s.sum += d; s.vin_sum += in->vin; s.n++; if (in->vin < s.vin_min) s.vin_min = in->vin; if (in->vin > s.vin_max) s.vin_max = in->vin;
-            if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V)
-            {   /* the input moved: start the window again, for at most TUNE_WAIT_STEADY_MS in all */
-                if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { finish(TUNE_R_UNSTEADY, 0U, 0U); goto out; }
+            const uint32_t el = (uint32_t)(now - s.t0);
+            acc_sample(d, in->vin, el, TUNE_BASE_MS / 2U);
+            if (window_check(0.0f, 0U) != 0U)
+            {   /* the input jumped: start the window again, for at most TUNE_WAIT_STEADY_MS in all */
+                if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
                 reset_accum(now);
             }
-            else if (((uint32_t)(now - s.t0) >= TUNE_BASE_MS) && (s.n > 0U))
+            else if ((el >= TUNE_BASE_MS) && (s.n > 0U))
             {
-                s.base = s.sum / (float)s.n; s.vin_ref = s.vin_sum / (float)s.n;
-                s.step_i = 0U; s.cur_ticks = (float)S_TICKS[0]; s.last_step = 0U; s.st = TS_STEP; reset_accum(now); s.wait_t0 = now;
+                if (window_check(0.0f, 1U) != 0U)
+                {   /* a noisy or unsettled baseline: measure it again */
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
+                    reset_accum(now);
+                }
+                else
+                {
+                    s.base = s.sum / (float)s.n; s.vin_ref = s.vin_sum / (float)s.n;
+                    s.step_i = 0U; s.cur_ticks = (float)S_TICKS[0]; s.last_step = 0U; s.st = TS_STEP; reset_accum(now); s.wait_t0 = now;
+                }
             }
         }
         else
@@ -162,18 +198,26 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
             uint32_t el = (uint32_t)(now - s.t0);
             if (el >= TUNE_SETTLE_MS)
             {
-                s.sum += d; s.vin_sum += in->vin; s.n++; if (in->vin < s.vin_min) s.vin_min = in->vin; if (in->vin > s.vin_max) s.vin_max = in->vin;
-                if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V)
-                {   /* the input moved during this step's window (a variac, a wandering mains): measure again with the duty unchanged; give up only after TUNE_WAIT_STEADY_MS on this one step */
-                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { finish(TUNE_R_UNSTEADY, 0U, 0U); goto out; }
+                acc_sample(d, in->vin, el, TUNE_SETTLE_MS + ((TUNE_STEP_MS - TUNE_SETTLE_MS) / 2U));
+                if (window_check(s.base, 0U) != 0U)
+                {   /* the input jumped during this step's window: measure again with the duty unchanged; give up only after TUNE_WAIT_STEADY_MS on this one step */
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
                     reset_accum(now);
                 }
             }
             if ((el >= TUNE_STEP_MS) && (s.n > 0U))
             {
-                float dv = (s.sum / (float)s.n) - s.base, vin = s.vin_sum / (float)s.n;
-                step_done(dv, vin);
-                if (s.st == TS_STEP) { reset_accum(now); s.wait_t0 = now; }
+                if (window_check(s.base, 1U) != 0U)
+                {   /* the difference was noisy or had not settled: measure this step again */
+                    if ((uint32_t)(now - s.wait_t0) >= TUNE_WAIT_STEADY_MS) { give_up_unsteady(); goto out; }
+                    reset_accum(now);
+                }
+                else
+                {
+                    float dv = (s.sum / (float)s.n) - s.base, vin = s.vin_sum / (float)s.n;
+                    step_done(dv, vin);
+                    if (s.st == TS_STEP) { reset_accum(now); s.wait_t0 = now; }
+                }
             }
         }
     }

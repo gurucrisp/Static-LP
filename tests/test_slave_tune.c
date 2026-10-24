@@ -115,8 +115,8 @@ int main(void)
     /* ---- unsteady input ---- */
     p = nominal(); p.jump_t = 20000.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "the mains jumps 4 V in the middle of a step: that step's window is measured AGAIN and the tune finishes (result %u)", r.result);
-    p = nominal(); p.drift = 40.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
-    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "a mains that never settles: UNSTEADY after waiting, nothing stored (result %u, %u ms)", r.result, (unsigned)r.ms);
+    p = nominal(); p.drift = 200.0; r = sim(p, 60.0, 2752U, 0U, 0U, 200000U);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv >= 80, "a mains that really never settles (a random walk of 200 V/s): UNSTEADY after waiting, nothing stored, the frame says the input moved %.1f V (result %u, %u ms)", (double)r.last.dv_dv / 10.0, r.result, (unsigned)r.ms);
     /* ---- YOUR PROFILE (v0.9.38 and earlier): "Cap 64 ticks, Knee, n04" at 234 V in with 36 V of headroom: readings of about 0.7, 1.9, 4.4 V and then only 1.5 V more at 128 ticks (twice the reference gain, then a slope of a third).
      *      A slope that changes at 4 V of injection is noise and the converter's low-duty region, not a saturation knee: it must not become the cap (with SLAVE_TUNE_APPLY on it held the regulator to 4 V of correction) ---- */
     { Plant_t q = nominal(); TuneProfile_t pf; q.vin = 234.0; q.dead = 0.0; q.k = 2.2; q.knee = 64.0; q.knee_slope = 0.3; q.noise = 0.25;
@@ -139,8 +139,20 @@ int main(void)
       CHECK(pf.kib_m >= 940U && pf.kib_m <= 1060U && pf.cap_ticks >= 1500U, "and its profile is as good as with a steady mains (gain scale %u, cap %u)", (unsigned)pf.kib_m, (unsigned)pf.cap_ticks); }
     p = nominal(); p.wob = 0.9; p.k = 1.9; r = sim(p, 80.0, 2752U, 0U, 0U, 200000U);
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "a transformer with 1.9 times the gain on a wandering mains (your bench): finishes (result %u)", r.result);
-    p = nominal(); p.wob = 3.0; r = sim(p, 60.0, 2752U, 0U, 0U, 400000U);
-    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok, "a mains that wanders 9 V peak to peak never gives a quiet window: UNSTEADY, nothing stored (result %u)", r.result);
+    p = nominal(); p.wob = 10.0; r = sim(p, 60.0, 2752U, 0U, 0U, 400000U);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv >= 80, "a mains that swings 25 V peak to peak (the dial being turned) never gives a window: UNSTEADY, nothing stored, the frame says %.1f V (result %u)", (double)r.last.dv_dv / 10.0, r.result);
+    /* ---- YOUR bench (v0.9.40): "Input Not Stable" at step 5 or 6, 4.4 V or 9 V. The input wanders together with the output (a variac with the converter's current on it): the DIFFERENCE is what is measured, and it is clean ---- */
+    { TuneProfile_t pf; p = nominal(); p.wob = 2.5; p.k = 1.0; r = sim(p, 60.0, 2752U, 0U, 0U, 300000U); (void)Tune_GetProfile(&pf);
+      CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && pf.kib_m >= 940U && pf.kib_m <= 1060U, "an input that swings 7 V peak to peak together with the output: the tune finishes with a good gain scale (result %u, %u thousandths)", r.result, (unsigned)pf.kib_m);
+      p = nominal(); p.wob = 3.0; p.k = 2.0; p.vin = 234.0; r = sim(p, 36.0, 2752U, 0U, 0U, 300000U); (void)Tune_GetProfile(&pf);
+      CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && pf.n >= 5U, "twice the gain, 9 V peak to peak of common swing, 36 V of headroom (your sweep): finishes with %u points", (unsigned)pf.n); }
+    /* the difference itself: noise, and a plant that has not settled */
+    p = nominal(); p.noise = 0.6; r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
+    CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "0.6 V of noise on the difference: accepted (result %u)", r.result);
+    p = nominal(); p.noise = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
+    CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv <= -10, "4 V of noise on the difference: UNSTEADY and the frame says the reading is noisy (%.1f V of spread), nothing stored", (double)r.last.dv_dv / 10.0);
+    { TuneProfile_t pf; p = nominal(); p.tau = 1.3; r = sim(p, 60.0, 2752U, 0U, 0U, 400000U); (void)Tune_GetProfile(&pf);
+      CHECK(r.result == TUNE_R_FINISHED && pf.kib_m >= 940U && pf.kib_m <= 1060U, "a slow plant (time constant 1.3 s): the windows are measured again until the difference has settled, and the gain scale is right (%u thousandths, %u ms)", (unsigned)pf.kib_m, (unsigned)r.ms); }
     { Plant_t q = nominal(); q.vin = 230.0; q.wob = 0.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U); CHECK(r.result == TUNE_R_FINISHED, "a steady mains: unchanged, finishes"); }
     p = nominal(); p.jump_t = 1500.0; p.jump_v = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 120000U);
     CHECK(r.result == TUNE_R_FINISHED, "a jump during the first baseline window only restarts the window: the tune still finishes (result %u)", r.result);

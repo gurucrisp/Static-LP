@@ -36,13 +36,31 @@ extern "C" {
 #define TUNE_SETTLE_MS       1500UL      /* the first part of a step is not averaged */
 #define TUNE_WAIT_STEADY_MS  30000UL     /* how long to wait for a steady input before giving up */
 #ifndef TUNE_STEADY_PP_V
-#define TUNE_STEADY_PP_V     3.0f        /* the input may move this much (peak to peak) during a measuring window. It was 1.5 V and a step then ENDED the sweep: a variac with a converter on it wanders more than that, and the measurement is the DIFFERENCE output - input, which moves with the input, so
+#define TUNE_STEADY_PP_V     8.0f        /* the input may move this much (peak to peak) during a measuring window. It was 1.5 V and a step then ENDED the sweep: a variac with a converter on it wanders more than that, and the measurement is the DIFFERENCE output - input, which moves with the input, so
                                           * a few volts cost almost no accuracy (3 V is 1.3 % of the gain). A window in which the input moved more is measured AGAIN (for at most TUNE_WAIT_STEADY_MS on one step), it does not end the sweep. */
 #endif
 #define TUNE_STALE_MS        300UL       /* no valid measurement for this long: abort */
 #define TUNE_LIMIT_FRAC      0.80f       /* no step is predicted to inject more than this fraction of Max Correction */
 #define TUNE_OVERSHOOT_V     5.0f        /* the output more than this above input + Max Correction: abort */
 #define TUNE_KNEE_FRAC       0.40f       /* a slope below this fraction of the previous one is a saturation knee */
+/* What is judged in a measuring window is the DIFFERENCE d = output - input (the injection), not how still the input is: a wandering input, or one distorted by the converter's own current, moves input and output together and cancels in d.
+ * (v0.9.40 and earlier judged the input to 1.5 V, then 3 V peak to peak: at the bigger steps, 4 to 9 V, a variac with the converter on it jitters more than that and the sweep ended with "Input Not Steady".) A window is measured AGAIN when:
+ *  - the input moved more than TUNE_STEADY_PP_V in it (a real jump: the dial turned), or
+ *  - the difference is noisy: its standard deviation is above TUNE_D_SD_V + TUNE_D_SD_REL x the injection, or
+ *  - the difference has not settled: the means of the window's two halves differ by more than TUNE_D_TREND_V + TUNE_D_TREND_REL x the injection.
+ * The sweep gives up (Input Not Steady) only after TUNE_WAIT_STEADY_MS on one step, and says which of the two it was (see the frame). */
+#ifndef TUNE_D_SD_V
+#define TUNE_D_SD_V          1.0f
+#endif
+#ifndef TUNE_D_SD_REL
+#define TUNE_D_SD_REL        0.12f
+#endif
+#ifndef TUNE_D_TREND_V
+#define TUNE_D_TREND_V       0.6f
+#endif
+#ifndef TUNE_D_TREND_REL
+#define TUNE_D_TREND_REL     0.08f
+#endif
 #ifndef TUNE_KNEE_MIN_V
 #define TUNE_KNEE_MIN_V      8.0f        /* ... but only when the injection at the cap point is at least this much. A core saturates near its rated injection (tens of volts); a slope that changes at 2 to 6 V is the noise (plus or minus 0.3 V) and the
                                           * non-linear low-duty region of the converter, not a knee: v0.9.38 and earlier called it one (a "knee" at 64 ticks, about 4 V) and, with SLAVE_TUNE_APPLY on, that cap held the regulator to about 4 V of correction */

@@ -31,7 +31,7 @@ Below 20 V of headroom (input above 250 V) a `TUNE` is refused: `Input Too High 
 * `Tuning Complete`: the profile is stored. The unit still runs on its built-in profile (the stored one is not used yet).
 * `Reversed Transformer`: the injection went the wrong way after 128 ticks. Check the transformer connections. Nothing is stored.
 * `No Response`: nothing appeared on the output at 256 ticks. No transformer, an open winding, or the stage is not switching.
-* `Input Not Steady`: the input never settled. Each measuring window (1.5 s) must have the input within 3 V peak to peak; a window in which it moved more is measured AGAIN with the duty unchanged, and only after 30 s on ONE step does the sweep give up. (Until v0.9.37 the limit was 1.5 V and the first bad window ended the sweep.) See the variac notes below.
+* `Input Not Steady`: no good measuring window in 30 s on one step. Since v0.9.41 the screen says WHY on its third line: `Input moved 12 V` (the input itself swung more than 8 V peak to peak inside a window: the dial was turned, or the source is very soft), `Reading spread 1.3 V` (the difference output minus input was noisy, or had not settled: its spread; more than about 1 V plus 12 % of the injection is refused), or `Input out of window` (the input left the slave's input window). A refused window is measured AGAIN with the duty unchanged. See the variac notes below.
 * `Aborted By Slave`: a fault in the unit (the master log shows which), the flash refused the profile, or the controller never reached RUN in 25 s.
 * `Slave Not Answering`: no progress frame for 8 s. The link or the slave stopped.
 * The controller has its OWN limit: if the output rises more than Max Correction + 8 V above the input, it stops and latches the over-voltage fault (code 6), whatever the sweep thinks. That is a bug or a wrong transformer, not a normal result.
@@ -94,3 +94,10 @@ At 160V Max 110V n10
 **Profiles stored by v0.9.39 and earlier can show a false knee** (for example `Cap 0064 ticks Knee`, `n04`: a "knee" at 64 ticks, about 4 V). With `SLAVE_TUNE_APPLY 1` such a profile held the regulator to about 4 V of correction (a 190 V input gave 193.5 V out). From v0.9.40 the controller no longer treats a knee below 8 V as a limit, so an old profile like that is harmless; it is still a poor profile (it has only 4 points and a gain scale fitted on 2 of them), so **re-tune** to get a good one.
 How the gain scale is found now: the least-squares slope through the points from the first one with at least 3 V of injection up to the cap point (it was the slope between two points, the first with 1 V). A sweep that stops early with few points gives a rough scale: look at `n` on the page; 6 or more points is a good sweep.
 A good profile at 160 to 200 V in with Max Correction 60 or more shows no `Knee`, a cap in the hundreds or thousands of ticks, and n of 6 or more.
+
+## What the sweep judges in a window (v0.9.41)
+The measurement is the DIFFERENCE d = output voltage minus input voltage. A wandering input, or one that the converter's own current distorts, moves input and output together and cancels in d, so the sweep no longer asks the input to be still (v0.9.40 and earlier wanted 3 V peak to peak, v0.9.37 and earlier 1.5 V, and stopped at the bigger steps of a variac: 4 to 9 V of injection). A 1.5 s window is accepted when:
+* the input moved no more than 8 V peak to peak in it (a real jump is refused: the dial was turned),
+* the spread (standard deviation) of d is at most 1.0 V + 12 % of the injection, and
+* the means of the window's two halves differ by at most 0.6 V + 8 % of the injection (d has settled: a slow plant is measured again until it has).
+A refused window is measured again with the duty unchanged; the sweep gives up only after 30 s on one step, and the result screen tells you which of the three it was.
