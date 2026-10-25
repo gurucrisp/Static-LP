@@ -2,7 +2,13 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.45 — the load current from the slave's converter current: a calibration page and a source setting (current)
+## v0.9.46 — FIX: the Transformer Profile page now updates when a Re-tune finishes (current)
+* **Found while answering "is the profile loaded, how do I verify it on the master?":** the profile numbers reach the master in the slave's HELLO (`$H`), and the slave sends it only at its own power-up (three times) and when asked; the master asked only if it had NOT heard one. So after a new Re-tune the Transformer Profile page kept showing the OLD numbers, or "No profile stored", until both boards were restarted (since v0.9.39).
+* **Fixed (master):** when the master sees "Tuning Complete" it asks the slave for its hello once more (`$K HELLO`); the profile was written to flash BEFORE that result was reported (v0.9.42), so the hello carries the new profile. Test: the end-to-end test now feeds the master as the real unit has it (hello heard at power-up) and the page shows `Cap 2752`, `At 230V Max 120V n10` after the sweep; it FAILS on v0.9.45's master ("No profile stored").
+* docs/AUTOTUNE_BENCH.md: how to check that a profile is stored (the page; the pages in flash; a mass erase wipes it and the slave's voltage calibration) and whether it is IN USE (only with `SLAVE_TUNE_APPLY 1`, which the master cannot show).
+* Master only (`m_app.c`, `m_app.h`); the slave is unchanged apart from its version number.
+
+## v0.9.45 — the load current from the slave's converter current: a calibration page and a source setting
 * Your plan: the load current (and, in the three-phase work, the phase sequence) from the slave itself. NEW Set-Mode item **Load Source** = `Master CT` (default) / `Slave`, right after Overload Current, and a NEW service page **Slave Load Cal** (LOG, then MENU x9) that converts the converter current to the load.
 * **The conversion uses the converter PEAK**: `load = (peak - zero) x gain`. Your reading at 10 A of load was 0.9 A RMS (no different from no load) and 7.8 A peak: the RMS does not follow the load, the peak does. The page shows both. The ZERO is the peak at no load with the unit running (type 000.0, LOG); the GAIN is taken at a known load (type the meter's value, LOG). Refusals are explained (`Run The Unit`, `Load Too Low`, `Enter 2.0-180.0 A`, `Out Of Range`, `No Converter`, `Reading Clipped`, `Save Failed`) and change nothing.
 * The Run screen's Load, the **Overload trip**, the fault log and the pages all follow the chosen source. **If the slave's reading cannot be trusted the master CT stays in charge**: not calibrated, no converter reading (an older slave), link lost, or a clipped amplifier.

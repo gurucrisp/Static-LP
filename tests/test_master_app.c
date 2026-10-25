@@ -769,7 +769,7 @@ static void t_tune_app(void)
     { int ok = 1; for (q = 0; q < 30; q++) { D.state = 0U; run(1000U); send_t(6, 0, 512, 2300, 124); if (A.eout.run[0] != 0U || A.eout.contactor[0] != 0U) ok = 0; } CHECK(ok, "30 s of a sweep in Auto mode: the engine never starts the unit"); }
     { uint8_t scr0 = A.ui.screen; tap(0, 100U); tap(3, 100U); CHECK(A.ui.screen == scr0, "one LOG press while tuning does not open the log viewer"); tap(1, 100U); tap(0, 100U);
       CHECK(MApp_ShowsTune(&A) && !MApp_ShowsDiag(&A) && !MApp_ShowsMonitor(&A) && A.eout.run[0] == 0U && A.ui.screen == scr0 && A.ui.page == 0U, "MENU, LOG and START do nothing while tuning: the UI is exactly where it was (screen %u, page %u)", (unsigned)A.ui.screen, (unsigned)A.ui.page); }
-    send_t(10, 1, 2752, 2300, 856); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Complete") && fr_has(fr, "Profile Stored"), "the final FINISHED frame: 'Tuning Complete' ('%s')", fr[0]);
+    send_t(10, 1, 2752, 2300, 856); run(30U); tune_screen(fr); CHECK(MApp_HelloDue(&A, T) == 1U && MApp_HelloDue(&A, T) == 0U, "a finished tune makes the master ask for the slave's hello ONCE (the profile numbers travel in it)"); CHECK(fr_has(fr, "Tuning Complete") && fr_has(fr, "Profile Stored"), "the final FINISHED frame: 'Tuning Complete' ('%s')", fr[0]);
     send_t(10, 1, 2752, 2300, 856); run(30U); tune_screen(fr); CHECK(fr_has(fr, "Tuning Complete"), "the repeats of the final frame change nothing");
     run(7000U); CHECK(!MApp_ShowsTune(&A), "the result goes after 6 s");
     run(9000U); CHECK(A.eout.run[0] == 1U || A.eout.contactor[0] == 1U || (A.eng.u[0].st != 0U), "afterwards the engine may start the unit again");

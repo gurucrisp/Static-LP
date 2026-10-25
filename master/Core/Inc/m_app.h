@@ -108,7 +108,7 @@ typedef struct
     int32_t      vcal_num; char vcal_letter; uint32_t vcal_t0, vcal_t_tx, t_now;
     uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */
     MDateTime_t  clk_set;
-    uint8_t      hello_n;
+    uint8_t      hello_n, hello_force;   /* hello_force: ask the slave for a fresh hello once (a new profile was stored: its numbers travel in the hello) */
     uint32_t     t_hello;
     uint8_t      ctl_valid;            /* $M may be sent: the slave was heard ($E), or its $S frames have been arriving for 3 s */
     uint8_t      have_seen;

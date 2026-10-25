@@ -63,6 +63,11 @@ static void co_run(uint32_t ms)
             char b[LINKV2_MAX_LEN + 8]; LinkK_t k; int32_t n, i; memset(&k, 0, sizeof k); k.id = kk.id; k.cmd = (kk.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : LINKCMD_TABORT;
             n = LinkV2_BuildK(b, sizeof b, &k); for (i = 0; i < n; i++) SL2_Rx((uint8_t)b[i], T);
         }
+        if (MApp_HelloDue(&A, T) != 0U)
+        {   /* the master asks the slave for its hello again (a tune has stored a profile): as the glue does, a $K HELLO frame */
+            char b[LINKV2_MAX_LEN + 8]; LinkK_t k; int32_t n, i; memset(&k, 0, sizeof k); k.id = MApp_NextKId(&A); k.cmd = LINKCMD_HELLO;
+            n = LinkV2_BuildK(b, sizeof b, &k); for (i = 0; i < n; i++) SL2_Rx((uint8_t)b[i], T);
+        }
         if ((uint32_t)(T - last_slave_ms) >= 10U)
         {
             TuneIn_t in; double eff, target;
@@ -87,6 +92,7 @@ static void e2e_fresh(void)
     c_on = 0U; c_req = 0U; SlaveProfile_Init(&SFL, PA, PB); SlaveTuneLink_Init(&SHW); SL2_Init(&SHK, T); last_slave_ms = T;
     to_run(); run(2000U); stop_unit();                                   /* the master unit is stopped (the slave reports state 0) */
     A.settings.maxcorr_v = 120U;
+    D.e_valid = 1U; D.h_valid = 1U;                                      /* as in the real unit: the master has heard the slave's hello at power-up, so it does NOT ask again on its own */
 }
 int main(void)
 {
@@ -105,7 +111,8 @@ int main(void)
     { TuneProfile_t p; CHECK(SlaveProfile_Get(&p) == 1U && p.cap_ticks == 2752U && p.kib_m >= 940U && p.kib_m <= 1060U, "the stored profile: cap %u, gain scale %u", (unsigned)p.cap_ticks, (unsigned)p.kib_m); }
     co_run(7000U); CHECK(!MApp_ShowsTune(&A), "the result goes away by itself");
     /* the Transformer Profile page (LOG, then MENU x8) shows what the slave stored, as it came over the link in $H */
-    SL2_Init(&SHK, T); co_run(1500U);                                                       /* the slave says hello again: $H now carries the profile */
+    CHECK(strstr(row(1), "Cap") == NULL, "(before: the master has no profile numbers yet)");
+    co_run(1500U);                                                                          /* the master asked for the slave's hello when the tune finished: $H now carries the profile */
     tap(3, 100U); for (q = 0; q < 8; q++) tap(0, 100U); run(100U); MApp_ProfilePage(&A, T, fr);
     { TuneProfile_t pf; (void)SlaveProfile_Get(&pf);
       CHECK(MApp_ShowsProfile(&A) && strstr(fr[0], "Transformer Profile") != NULL && strncmp(fr[1], "Cap 2752 ticks", 14) == 0, "the page shows the stored cap ('%s')", fr[1]);

@@ -232,7 +232,7 @@ static void tune_service(MApp_t *a, const MAppData_t *d, uint32_t now)
             {   /* a step frame. Step 0 is the slave's HEARTBEAT ("still here"): it only keeps the timeout away, it must NOT send a sweep that is under way back to "Measuring baseline" */
                 if (d->tune_step != 0U) { a->tune_step = d->tune_step; a->tune_ticks = d->tune_ticks; a->tune_dv_dv = d->tune_dv_dv; }
             }
-            else { a->tune_result = d->tune_result; a->tune_step = d->tune_step; a->tune_dv_dv = d->tune_dv_dv; a->tune_state = TS_DONE; a->tune_t_done = now; if (d->tune_result == 1U) MF_RetuneDone(&a->eng); return; }
+            else { a->tune_result = d->tune_result; a->tune_step = d->tune_step; a->tune_dv_dv = d->tune_dv_dv; a->tune_state = TS_DONE; a->tune_t_done = now; if (d->tune_result == 1U) { MF_RetuneDone(&a->eng); a->hello_force = 1U; } return; }
         }
         if ((a->tune_abort_sent != 0U) && ((uint32_t)(now - a->tune_t0) >= 5000UL)) { a->tune_result = 6U; a->tune_state = TS_DONE; a->tune_t_done = now; return; }       /* the abort was never confirmed: say so */
         if ((uint32_t)(now - a->tune_t_frame) >= MAPP_TUNE_FRAME_TIMEOUT_MS) { tune_abort(a, now); a->tune_result = TR_LOST; a->tune_state = TS_DONE; a->tune_t_done = now; }
@@ -482,7 +482,9 @@ void MApp_NoteFrameSent(MApp_t *a) { a->m_sent++; }
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out) { if (a->clk_set_pending == 0U) return 0U; *out = a->clk_set; a->clk_set_pending = 0U; return 1U; }
 uint8_t MApp_HelloDue(MApp_t *a, uint32_t now)
 {
-    if ((a->last.e_valid == 0U) || (a->last.h_valid != 0U)) { a->hello_n = 0U; return 0U; }
+    if (a->last.e_valid == 0U) { a->hello_n = 0U; return 0U; }
+    if (a->hello_force != 0U) { a->hello_force = 0U; a->t_hello = now; a->hello_n = 1U; return 1U; }      /* a tune has just stored a profile: ask for the slave's hello AGAIN, its limits and the profile numbers (the Transformer Profile page) */
+    if (a->last.h_valid != 0U) { a->hello_n = 0U; return 0U; }
     if ((a->hello_n != 0U) && ((uint32_t)(now - a->t_hello) < 2000UL)) return 0U;
     a->t_hello = now; a->hello_n = 1U; return 1U;
 }
