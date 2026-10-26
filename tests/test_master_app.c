@@ -947,7 +947,7 @@ static void t_three_phase_app(void)
     const MFOut_t *o;
     /* DOMESTIC: three independent units */
     three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U); o = MApp_Engine(&A);
-    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U, "Domestic with the three slaves heard and running: the three contactors close (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U, "Domestic with the three slaves heard and running: the three contactors close: PA10 for R, PA11 for Y, PA12 for B (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
     CHECK(MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 1U && MApp_ControlPh(&A, 2)->run == 1U && MApp_ControlValidPh(&A, 1) == 1U && MApp_ControlValidPh(&A, 2) == 1U, "each phase gets its own $M content: run = 1 for R, Y and B, and Y and B are ready to be sent");
     CHECK(MApp_ControlPh(&A, 1)->setv_dv == 2300U && MApp_ControlPh(&A, 2)->maxc_dv == MApp_Control(&A)->maxc_dv, "with the same set voltage (230 V) and Max Correction");
     D.yb[0].link_ok = 0U; D.yb[0].have = 0U; D.yb[0].state = 0U; run3(3000U); o = MApp_Engine(&A);
@@ -968,6 +968,7 @@ static void t_three_phase_app(void)
     /* INDUSTRIAL: one unit, one contactor, all three phases must be there, any trip trips all */
     three_fresh((uint8_t)M_MODE_INDUSTRIAL); run3(12000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 1U && MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 1U && MApp_ControlPh(&A, 2)->run == 1U, "Industrial with the three slaves: the one contactor closes and all three get run = 1");
+    CHECK(o->contactor[1] == 0U && o->contactor[2] == 0U, "and ONLY the first contactor output (PA10) is ever closed in Industrial: the second and third (PA11, PA12) stay open (%u %u)", (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
     D.yb[1].link_ok = 0U; D.yb[1].have = 0U; D.yb[1].state = 0U; run3(3000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 0U && MApp_ControlPh(&A, 0)->run == 0U && MApp_ControlPh(&A, 1)->run == 0U && MApp_ControlPh(&A, 2)->run == 0U, "the B link is lost: ALL THREE are stopped and the contactor opens");
     three_fresh((uint8_t)M_MODE_INDUSTRIAL); yb_gone(1); run3(12000U); o = MApp_Engine(&A);
