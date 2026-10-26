@@ -451,6 +451,44 @@ static void t_overheat_temp_item(void)
     printf("  overheat temperature item: after the trip delay, shows 075 C, 50 to 120 accepted, the rest refused, Factory Reset gives 75\n");
 }
 
+/* ---- v0.9.50: the heat-sink temperature on the RUN screens ---- */
+static void t_run_temperature(void)
+{
+    int m;
+    /* Single phase: at the right of the status row */
+    ui_reset(M_MODE_SINGLE); to_run(); D.have[0] = 1U; D.temp_dc[0] = 473; D.temp_st[0] = 1U; tick(100U);
+    CHECK(strstr(row(3), "Temp 47C") != NULL && strlen(row(3)) <= 20U, "Single mode: the status row ends with 'Temp 47C' ('%s')", row(3));
+    CHECK(strncmp(row(3), "Output", 6) == 0, "and still starts with the status ('%s')", row(3));
+    D.temp_dc[0] = 824; D.temp_st[0] = 0x11U; tick(100U); CHECK(strstr(row(3), "Temp 82C!") != NULL, "while the overheat signal is asserted: 'Temp 82C!' ('%s')", row(3));
+    D.temp_dc[0] = 1054; D.temp_st[0] = 0x11U; tick(100U); CHECK(strstr(row(3), "Temp 105C") != NULL && strlen(row(3)) <= 20U, "a three digit temperature fits ('%s')", row(3));
+    D.temp_dc[0] = 0; D.temp_st[0] = 2U; tick(100U); CHECK(strstr(row(3), "Temp ---") != NULL, "no NTC fitted: 'Temp ---' ('%s')", row(3));
+    D.temp_st[0] = 3U; tick(100U); CHECK(strstr(row(3), "Temp SHT") != NULL, "a shorted NTC: 'Temp SHT' ('%s')", row(3));
+    D.temp_st[0] = 0U; tick(100U); CHECK(strstr(row(3), "Temp") == NULL, "no reading: nothing is shown ('%s')", row(3));
+    /* a long status text keeps the whole row; a text that just leaves room (11 characters + a gap + 'Temp 47C' = 20) shares it */
+    D.temp_dc[0] = 473; D.temp_st[0] = 1U; D.out_on = 0U; D.status = "Waiting Mains 12s"; tick(100U);
+    CHECK(strncmp(row(3), "Waiting Mains 12s", 17) == 0 && strstr(row(3), "Temp") == NULL, "a long status ('Waiting Mains 12s') keeps the row to itself ('%s')", row(3));
+    D.status = "Mains Check"; tick(100U);
+    CHECK(strncmp(row(3), "Mains Check", 11) == 0 && strstr(row(3), "Temp 47C") != NULL && strlen(row(3)) == 20U, "an 11 character status and the temperature share the row exactly ('%s')", row(3));
+    D.status = "Mains Checks"; tick(100U);
+    CHECK(strncmp(row(3), "Mains Checks", 12) == 0 && strstr(row(3), "Temp") == NULL, "one character more and the temperature steps aside ('%s')", row(3));
+    D.status = 0; D.out_on = 0U; tick(100U);
+    D.temp_dc[0] = 473; D.temp_st[0] = 1U; D.fault[0] = (uint8_t)MLOG_T_OVERLOAD; tick(100U); CHECK(strstr(row(3), "Temp") == NULL, "a fault text owns the row: no temperature ('%s')", row(3));
+    D.fault[0] = 0U; D.have[0] = 0U; tick(100U); CHECK(strstr(row(3), "Temp") == NULL && strstr(row(3), "Link Lost") != NULL, "'Slave Link Lost' owns the row too ('%s')", row(3));
+    D.have[0] = 1U; D.wait_s[0] = 20U; D.fault[0] = (uint8_t)MLOG_T_HEAT; tick(100U); CHECK(strstr(row(3), "Rst") != NULL && strstr(row(3), "Temp") == NULL, "the restart countdown owns the row: 'Heat   Rst 0:20' ('%s')", row(3));
+    D.wait_s[0] = 0U; D.fault[0] = 0U;
+    /* three phases: per phase, in the gap between the voltage and the load */
+    for (m = 0; m < 2; m++)
+    {
+        ui_reset(m == 0 ? M_MODE_DOMESTIC : M_MODE_INDUSTRIAL); to_run(); { int p; for (p = 0; p < 3; p++) { D.have[p] = 1U; D.vout_dv[p] = 2300U; D.load_da[p] = 123U; D.load_ok[p] = 1U; } }
+        D.temp_dc[0] = 473; D.temp_st[0] = 1U; D.temp_dc[1] = 824; D.temp_st[1] = 0x11U; D.temp_dc[2] = 0; D.temp_st[2] = 2U; tick(100U);
+        CHECK(strstr(row(0), "R:") != NULL && strstr(row(0), "47C") != NULL && strstr(row(1), "82C!") != NULL && strstr(row(2), "---") != NULL, "%s: the page shows R 47C, Y 82C!, B --- ('%s' / '%s' / '%s')", m == 0 ? "Domestic" : "Industrial", row(0), row(1), row(2));
+        CHECK(strstr(row(0), "230V") != NULL && strstr(row(0), "12.3A") != NULL && strlen(row(0)) <= 20U && strlen(row(1)) <= 20U, "and the voltage and load are still there, nothing overlaps ('%s')", row(0));
+        D.temp_dc[0] = 1054; D.temp_st[0] = 0x11U; tick(100U); CHECK(strstr(row(0), "105C") != NULL && strstr(row(0), "12.3A") != NULL, "a three digit temperature does not touch the load ('%s')", row(0));
+        D.temp_st[0] = 0U; D.temp_st[1] = 0U; D.temp_st[2] = 0U; tick(100U); CHECK(strstr(row(0), "C") == NULL && strstr(row(1), "C") == NULL, "with no readings the page is as it was ('%s')", row(0));
+    }
+    printf("  run screens: Single status row 'Temp 47C' (not over a fault text or a countdown), Domestic and Industrial per phase\n");
+}
+
 static void t_setmode_nav(void)
 {
     uint8_t ids[32]; int n, m; MSettings_t *w;
@@ -686,6 +724,7 @@ int main(void)
     t_slave_cal_page();
     t_load_source_item();
     t_overheat_temp_item();
+    t_run_temperature();
     t_vcal_pages();
     t_log_viewer();
     t_setmode_nav();

@@ -990,6 +990,7 @@ static void t_overheat(void)
     fresh(); to_run(); run(9000U); hot(60.0); run(20000U);
     st = MApp_TempDeci(&A, 0U, &dc);
     CHECK(MApp_Engine(&A)->contactor[0] == 1U && st == MNTC_OK && dc >= 595 && dc <= 605, "60 degC: the unit keeps running and the temperature reads %d tenths", (int)dc);
+    CHECK(strstr(F[3], "Temp 60C") != NULL && strstr(F[3], "Output") != NULL, "the RUN screen shows it: the status row ends with 'Temp 60C' ('%s')", F[3]);
     { char fr[MUI_ROWS][MUI_COLS + 1U]; float v = -1.0f; MApp_IoutPage(&A, T, fr); (void)sscanf(fr[3], "Heat Sink %f", &v);
       CHECK(v > 59.4f && v < 60.6f, "the Converter Current page shows 'Heat Sink 060.0 C' ('%s')", fr[3]); }
     /* above the Overheat Temp (75): after the Overheat Trip Delay (10 s) the contactor opens */
@@ -1016,7 +1017,9 @@ static void t_overheat(void)
     fresh(); to_run(); run(9000U); { int k; for (k = 0; k < 20; k++) { hot(80.0); run(4000U); hot(60.0); run(4000U); } }
     CHECK(MApp_Engine(&A)->contactor[0] == 1U, "80 degC for 4 s, then 60 for 4 s, again and again: never trips (the delay restarts each time)");
     /* THREE PHASES: only the hot phase's unit trips */
-    three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U); D.yb[0].ntc_valid = 1U; D.yb[0].ntc_raw = raw_of(85.0); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(50.0); run3(12500U);
+    three_fresh((uint8_t)M_MODE_DOMESTIC); A.settings.scroll = 0U; run3(12000U); D.yb[0].ntc_valid = 1U; D.yb[0].ntc_raw = raw_of(85.0); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(50.0); run3(12500U);
+    run3(300U);                                                                          /* (Display Scroll is off here: the page with the per-phase readings stays up) */
+    CHECK(strstr(F[1], "Y:") != NULL && strstr(F[1], "85C!") != NULL && strstr(F[2], "B:") != NULL && strstr(F[2], "50C") != NULL && strstr(F[0], "C") == NULL, "Domestic Run screen: Y shows '85C!', B '50C', R (no reading) nothing ('%s' / '%s' / '%s')", F[0], F[1], F[2]);
     { const MFOut_t *o = MApp_Engine(&A); int16_t dy, db; uint8_t sy = MApp_TempDeci(&A, 1U, &dy), sb = MApp_TempDeci(&A, 2U, &db);
       CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_HEAT && sy == MNTC_OK && sb == MNTC_OK && dy > 840 && db > 490 && db < 510, "Domestic: the Y heat sink is at 85 degC: ONLY the Y unit trips (contactors %u %u %u, Y %d, B %d)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (int)dy, (int)db); }
     three_fresh((uint8_t)M_MODE_INDUSTRIAL); run3(12000U); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(88.0); run3(12500U);

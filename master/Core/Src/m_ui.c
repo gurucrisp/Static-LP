@@ -393,6 +393,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
 
 /* ---------------------------------------------------------------------------------------------------- the frame */
 static uint8_t blink_on(const MUI_t *u, uint32_t now);
+static uint32_t temp_text(const MUIRun_t *d, uint32_t p, char *o);          /* the heat-sink temperature as short text (below) */
 static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t now)
 {
     uint8_t p; (void)now;
@@ -435,6 +436,16 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
         f_put(f, 2U, 0U, "Load"); tenths_put(f, 2U, 5U, d->load_da[0], 5U, (uint8_t)(ok && d->load_ok[0])); f_put(f, 2U, 10U, "A");
         tenths_put(f, 2U, 12U, d->freq_chz / 10U, 6U, (uint8_t)(ok && d->freq_chz != 0U)); f_put(f, 2U, 18U, "Hz");
         f_put(f, 3U, 0U, (d->fault[0] != 0U) ? full_text(d->fault[0]) : ((ok == 0U) ? "Slave Link Lost" : (d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"))));
+        if ((d->fault[0] == 0U) && (ok != 0U) && (d->wait_s[0] == 0U))
+        {   /* the heat-sink temperature at the right of the status row, if it fits: "Output ON        Temp 47C" */
+            char tt[8], rt[16]; uint32_t n = temp_text(d, 0U, tt), used = MUI_COLS, k;
+            while ((used > 0U) && (f[3][used - 1U] == ' ')) used--;
+            if (n != 0U)
+            {
+                rt[0] = 'T'; rt[1] = 'e'; rt[2] = 'm'; rt[3] = 'p'; rt[4] = ' '; for (k = 0U; k <= n; k++) rt[5U + k] = tt[k];
+                if ((used + 1U + 5U + n) <= MUI_COLS) f_put_right(f, 3U, rt);
+            }
+        }
         if ((d->wait_s[0] != 0U) && ((d->fault[0] == (uint8_t)MLOG_T_INRUSH) || (d->fault[0] == (uint8_t)MLOG_T_POWER_STAGE) || (d->fault[0] == (uint8_t)MLOG_T_HEAT)))
         {   /* an automatic restart is counting down: the short name at the left, "Rst m:ss" at the right (the fault code is in the log) */
             char w[10]; uint32_t m = d->wait_s[0] / 60U, sec = d->wait_s[0] % 60U, k = 0U, i;
@@ -459,6 +470,7 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
             char c[3] = { N[p], ':', '\0' }; f_put(f, p, 0U, c);
             int_put(f, p, 3U, d->vout_dv[p], 4U, d->have[p]); f_put(f, p, 7U, "V");
             tenths_put(f, p, 12U, d->load_da[p], 5U, (uint8_t)(d->have[p] && d->load_ok[p])); f_put(f, p, 17U, "A");
+            { char tt[8]; if (temp_text(d, p, tt) != 0U) f_put(f, p, 8U, tt); }                                    /* the heat sink, in the gap between the voltage and the load: "R:  230V 47C  12.3A" */
         }
         f_put(f, 3U, 0U, d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"));
     }
@@ -479,6 +491,23 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
         }
         f_put(f, 3U, 0U, mode_text(u->live->mode)); f_put_right(f, 3U, d->out_on ? "ON" : "OFF");
     }
+}
+
+/* The heat-sink temperature of phase p as short text for the Run screens (v0.9.50): "47C", "82C!" while the overheat signal is asserted, "---" no NTC fitted, "SHT" shorted.
+ * Returns the length; 0 = no reading, show nothing. At most 4 characters. */
+static uint32_t temp_text(const MUIRun_t *d, uint32_t p, char *o)
+{
+    uint8_t st = (uint8_t)(d->temp_st[p] & 0x0FU), hot = (uint8_t)((d->temp_st[p] & 0x10U) != 0U); int32_t t = d->temp_dc[p]; uint32_t v, n = 0U;
+    o[0] = '\0';
+    if (st == 2U) { o[0] = '-'; o[1] = '-'; o[2] = '-'; o[3] = '\0'; return 3U; }
+    if (st == 3U) { o[0] = 'S'; o[1] = 'H'; o[2] = 'T'; o[3] = '\0'; return 3U; }
+    if (st != 1U) return 0U;
+    v = (t < 0) ? 0U : (uint32_t)((t + 5) / 10); if (v > 999U) v = 999U;                    /* whole degrees, rounded */
+    if (v >= 100U) { o[n++] = (char)('0' + (v / 100U)); }
+    if (v >= 10U)  { o[n++] = (char)('0' + ((v / 10U) % 10U)); }
+    o[n++] = (char)('0' + (v % 10U));
+    o[n++] = 'C'; if ((hot != 0U) && (n < 4U)) o[n++] = '!'; o[n] = '\0';
+    return n;
 }
 
 static void render_log(const MUI_t *u, Frame_t f)

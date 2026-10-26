@@ -401,6 +401,12 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         ld = sl_to_da(&a->settings, d->iout_pk_ca); lok = 1U;
     }
     r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3, now);   /* tenths of an amp, 0.3 A band */
+    for (ph = 0U; ph < 3U; ph++)
+    {   /* the heat-sink temperature of each phase for the Run screens (v0.9.50) */
+        int16_t tdc; uint8_t ts = MApp_TempDeci(a, ph, &tdc);
+        r.temp_dc[ph] = tdc; r.temp_st[ph] = (uint8_t)((ts == 255U) ? 0U : ((ts == MNTC_OK) ? 1U : ((ts == MNTC_OPEN) ? 2U : 3U)));
+        if ((r.temp_st[ph] != 0U) && (a->heat_on[ph] != 0U)) r.temp_st[ph] |= 0x10U;
+    }
     for (ph = 0U; ph < 2U; ph++)
     {   /* the Y and B slaves (v0.9.48): the same readings and display filters as the R slave's */
         const MAppSlave_t *s = &d->yb[ph];

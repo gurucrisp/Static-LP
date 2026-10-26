@@ -11,7 +11,10 @@ Set-Mode item **Overheat Temp** (after Overheat Trip Delay): 50 to 120 degC, def
 * **In three-phase modes each slave's own NTC** is used: Domestic trips only the unit whose heat sink is hot, Industrial stops all three.
 
 ## Seeing the temperature
-LOG, then MENU x7: the **Converter Current** page's last row is `Heat Sink 047.3 C` (R slave). `OVERHEAT 082.0 C` while the overheat signal is asserted; `Heat Sink: no NTC` if the reading is at the top of the scale; `Heat Sink  ---` with no fresh reading from the slave. (The Y and B temperatures are used for the protection but not displayed yet.)
+* **Single phase, Run screen:** at the right of the status row: `Output ON        Temp 47C`. `Temp 82C!` while the overheat signal is asserted, `Temp ---` no NTC fitted, `Temp SHT` a shorted NTC. The status row belongs to a fault text, the restart countdown (`Heat   Rst 0:20`) or a long status first: when they need the row the temperature steps aside.
+* **Domestic and Industrial, Run screen (the page with the R:, Y:, B: rows):** each phase's own heat sink between its voltage and its load: `R:  230V 47C  12.3A`, `Y:  230V 82C! 12.1A`. (With Display Scroll on, the page comes round every few seconds; MENU shifts it by hand when Display Scroll is off.)
+* **LOG, MENU x7 (Single mode only): the Converter Current page's last row** `Heat Sink 047.3 C` shows tenths of a degree (R slave), `OVERHEAT 082.0 C` while the signal is asserted.
+* Whole degrees on the Run screens: the sensor and the table are good for about a degree, not for a tenth.
 
 ## Fail-safe rules
 * **NTC shorted** (reading below 150): counted as OVERHEAT.

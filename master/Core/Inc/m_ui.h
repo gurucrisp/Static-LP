@@ -52,6 +52,8 @@ typedef struct
     uint16_t vll_dv[3];               /* R-Y, Y-B, B-R phase-to-phase; 0 = a phase is missing ("---")            */
     uint8_t  out_on;                  /* the output is on                                                        */
     uint16_t vin_raw_dv, vout_raw_dv; /* the slave's calibrated voltage readings, unfiltered, tenths of a volt (the Voltage Calibration pages show them) */
+    int16_t  temp_dc[3];              /* the heat-sink temperature per phase, tenths of a degC (v0.9.50)                                                                   */
+    uint8_t  temp_st[3];              /* 0 no reading, 1 OK, 2 open (no NTC), 3 shorted; add 0x10 while the overheat signal is asserted                                    */
     uint16_t sl_pk_ca, sl_rms_ca;     /* the slave's converter current, hundredths of an ampere: the peak and the RMS (the Slave Load Cal page shows both)       */
     uint8_t  sl_valid, sl_run;        /* the converter current is measured / the slave is in RUN (the zero is taken with the unit running)                    */
     uint8_t  active;                  /* the unit is running or starting (the Voltage Calibration pages ask for it to be stopped first) */
