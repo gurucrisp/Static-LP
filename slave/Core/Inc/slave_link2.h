@@ -50,6 +50,8 @@ typedef struct
     int     (*tune_command)(uint8_t cmd, const char *name, int32_t num, uint8_t *status, int32_t *value, uint32_t now_ms);
     /* a $T progress frame is ready: 1 and the frame; the link keeps it and offers it to the transmitter until it is accepted */
     int     (*tune_frame)(LinkT_t *f, uint32_t now_ms);
+    /* the phase sequence measurement ($K SEQ <round>): the next SYNC byte is real. Answered OK at once. NULL = this build has no such measurement: UNKNOWN_CMD. (v0.9.51) */
+    void    (*seq_arm)(uint8_t round, uint32_t now_ms);
 } SL2_Hooks_t;
 
 typedef struct

@@ -68,6 +68,10 @@ static void handle_k(const LinkK_t *k)
         {   /* the autotune commands are answered at once; a command this build does not know stays UNKNOWN_CMD */
             if (s_hk.tune_command((uint8_t)k->cmd, k->name, k->num, &status, &value, s_now_ms) == 0) { status = LINKV2_ST_UNKNOWN_CMD; value = 0; }
         }
+        else if ((k->cmd == LINKCMD_SEQ) && (s_hk.seq_arm != 0))
+        {   /* the phase sequence round: executed once (a retry of the same id is answered from s_last_resp above) */
+            s_hk.seq_arm((uint8_t)k->num, s_now_ms); status = LINKV2_ST_OK;
+        }
         else if (((k->cmd == LINKCMD_CALV) || (k->cmd == LINKCMD_CALO) || (k->cmd == LINKCMD_CALR)) && (s_hk.cal_command != 0))
         {
             if (s_cal_pending != 0U) { status = LINKV2_ST_NOT_ALLOWED; }                          /* another calibration is averaging */
@@ -157,7 +161,7 @@ void SL2_Service(uint32_t now_ms)
     if (reached(now_ms, s_e_next))
     {
         LinkE_t e;
-        e.seq = s_e_seq; e.setv_dv = 0U; e.flags2 = 0U; e.clr = 0U; e.reach_lo_dv = 0U; e.reach_hi_dv = 0U; e.iout_rms_ca = 0U; e.iout_pk_ca = 0U;
+        e.seq = s_e_seq; e.setv_dv = 0U; e.flags2 = 0U; e.clr = 0U; e.reach_lo_dv = 0U; e.reach_hi_dv = 0U; e.iout_rms_ca = 0U; e.iout_pk_ca = 0U; e.sq_id = 0U; e.sq_delay_us = 0U; e.sq_period_us = 0U;
         if (s_hk.fill_e != 0) s_hk.fill_e(&e);
         e.seq = s_e_seq;
         s_e_seq++;

@@ -23,6 +23,15 @@
 #ifndef SLAVE_MASTER_CONTROL
 #define SLAVE_MASTER_CONTROL   0
 #endif
+/* v0.9.51: the phase sequence measurement (slave_phase.c): the slave time-stamps the master's SYNC byte in its receive interrupt and reports the time to its next rising zero-cross.
+ * ON by default wherever a master runs the slave over link v2 (the three-phase unit needs it; a single-phase unit just answers the rounds if the master starts any: it does not in
+ * Single mode). 0 = the build has no such measurement and answers $K SEQ with UNKNOWN_CMD. */
+#ifndef SLAVE_SEQ_SYNC
+#define SLAVE_SEQ_SYNC         (((SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 != 0)) ? 1 : 0)
+#endif
+#if (SLAVE_SEQ_SYNC != 0) && (SLAVE_LINK_V2 == 0)
+#error "SLAVE_SEQ_SYNC needs SLAVE_LINK_V2 (the $K SEQ command and the $E result are version 2 frames)"
+#endif
 /* 1 = switch on the USART's 8-byte receive FIFO (and the transmit FIFO) when SLAVE_LINK_V2 is on: at 500 kbaud a byte arrives every 20 us, the FIFO gives the receive interrupt about 160 us of slack
  * when a higher-priority interrupt runs long. If the link ever misbehaves after this change, set 0 and tell me: the counters in g_link (rx_overruns) show whether bytes were lost. */
 #ifndef SLAVE_LINK_RX_FIFO
@@ -121,7 +130,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       950UL
+#define SLAVE_FW_VERSION       951UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

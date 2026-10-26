@@ -43,7 +43,7 @@ static void h_fill_e(LinkE_t *e) { e->setv_dv = 2300U; e->flags2 = SlaveTuneLink
 static void h_fill_h(LinkH_t *h) { h->fw = 931UL; h->vin_min_dv = 800U; h->vin_max_dv = 3000U; h->tuned = SlaveProfile_Tuned(); h->vout_max_dv = 2800U; }
 static int h_tune_cmd(uint8_t c, const char *n, int32_t v, uint8_t *s, int32_t *val, uint32_t now) { return SlaveTuneLink_Command(c, n, v, s, val, now); }
 static int h_tune_frame(LinkT_t *f, uint32_t now) { return SlaveTuneLink_NextFrame(f, now); }
-static const SL2_Hooks_t HK = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, h_tune_cmd, h_tune_frame };
+static const SL2_Hooks_t HK = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, h_tune_cmd, h_tune_frame, 0 };
 
 /* ---- the simulated transformer ---- */
 typedef struct { double k, dead, knee, sign, noise, vin; } Plant_t;

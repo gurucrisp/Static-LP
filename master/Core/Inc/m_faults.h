@@ -51,6 +51,7 @@ typedef struct
 {
     MPhaseIn_t ph[3];
     uint8_t  seq_state;        /* phase sequence: 0 ok or not checked, 1 reverse, 2 same phase               */
+    uint8_t  seq_unknown;      /* 1 = the sequence has not been measured yet (v0.9.51): in Industrial mode with Phase Sequence on, a START waits for it (a running unit is not affected) */
     uint8_t  key_start, key_stop;   /* one tick each per key press                                            */
     uint8_t  setmode;          /* Set-Mode is open                                                           */
     uint32_t run_min;          /* running time in minutes, for the log                                       */

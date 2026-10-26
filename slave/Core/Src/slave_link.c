@@ -32,6 +32,9 @@
 #include "slave_irq_prio.h"
 #include "link_v2.h"
 #include "slave_link2.h"
+#if (SLAVE_SEQ_SYNC != 0)
+#include "slave_phase.h"           /* the phase sequence measurement (v0.9.51) */
+#endif
 #endif
 
 extern UART_HandleTypeDef huart1;          /* USART1: PB6 = TX, PB7 = RX (main.c) */
@@ -77,7 +80,11 @@ void SlaveLink_RxIrq(void)
     while ((u->ISR & USART_ISR_RXNE_RXFNE) != 0U)
     {
         uint8_t  b  = (uint8_t)u->RDR;
-        uint32_t nh = (s_rx_head + 1U) & RXBUF_MASK;
+        uint32_t nh;
+#if (SLAVE_SEQ_SYNC != 0)
+        if (b == (uint8_t)LINKV2_SYNC_BYTE) { SlavePhase_OnSync(SlaveZC_NowUs()); continue; }       /* the SYNC byte of the phase sequence measurement: time-stamped HERE with the zero-cross clock; it is no part of any frame */
+#endif
+        nh = (s_rx_head + 1U) & RXBUF_MASK;
         if (nh != s_rx_tail) { s_rx[s_rx_head] = b; s_rx_head = nh; }
         else                 { g_link.rx_dropped++; }
     }
@@ -100,6 +107,16 @@ static int hk_tune_frame(LinkT_t *f, uint32_t now_ms) { return SlaveTuneLink_Nex
 #define SLAVE_TUNE_HOOKS 0, 0
 #endif
 
+#if (SLAVE_SEQ_SYNC != 0)
+static uint32_t s_ph_pm;                                                                     /* the interrupt mask saved by the lock */
+static void ph_lock(void)   { s_ph_pm = __get_PRIMASK(); __disable_irq(); }
+static void ph_unlock(void) { __set_PRIMASK(s_ph_pm); }
+static void hk_seq_arm(uint8_t round, uint32_t now_ms) { SlavePhase_Arm(round, now_ms); }
+#define SLAVE_SEQ_HOOK hk_seq_arm
+#else
+#define SLAVE_SEQ_HOOK 0
+#endif
+
 static void hk_fill_e(LinkE_t *e)
 {
     e->setv_dv      = SlaveCtrl_SetvDv();
@@ -109,6 +126,9 @@ static void hk_fill_e(LinkE_t *e)
     e->reach_hi_dv  = 0U;
 #if (SLAVE_AUTOTUNE != 0)
     e->flags2 = (uint16_t)(e->flags2 | SlaveTuneLink_Flags2());       /* BUSY while a sweep runs, NOT_TUNED without a valid profile or Max Correction */
+#endif
+#if (SLAVE_SEQ_SYNC != 0)
+    SlavePhase_Result(&e->sq_id, &e->sq_delay_us, &e->sq_period_us);                 /* the last phase sequence round: id, time from the SYNC byte to this slave's rising zero-cross, its mains period */
 #endif
 #if (SLAVE_IOUT != 0)
     e->iout_rms_ca  = Iout_ToCentiAmps(g_meas.irms_a);          /* the converter-side current, hundredths of an ampere (slave_iout.h) */
@@ -161,9 +181,9 @@ static int hk_cal_command(uint8_t cmd, int32_t num, char letter, uint8_t *status
     return SlaveCal_Command(c, num, letter, status, value, now_ms);
 }
 static int hk_cal_poll(uint8_t *status, int32_t *value, uint32_t now_ms) { return SlaveCal_Poll(status, value, now_ms); }
-static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, hk_cal_command, hk_cal_poll, SLAVE_TUNE_HOOKS };
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, hk_cal_command, hk_cal_poll, SLAVE_TUNE_HOOKS, SLAVE_SEQ_HOOK };
 #else
-static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, 0, 0, SLAVE_TUNE_HOOKS };
+static const SL2_Hooks_t s_hooks = { hk_on_control, hk_fill_e, hk_fill_h, hk_tx, 0, 0, SLAVE_TUNE_HOOKS, SLAVE_SEQ_HOOK };
 #endif
 
 static void capture_reset_cause(void)
@@ -278,6 +298,9 @@ void SlaveLink_Init(void)
     (void)HAL_UARTEx_EnableFifoMode(&huart1);
 #endif
     huart1.Instance->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
+#if (SLAVE_SEQ_SYNC != 0)
+    SlavePhase_Init(ph_lock, ph_unlock);
+#endif
     SL2_Init(&s_hooks, CtrlHw_NowMs());
     huart1.Instance->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
     HAL_NVIC_SetPriority(USART1_IRQn, IRQ_PRIO_LINK, 0U);
@@ -307,6 +330,9 @@ void SlaveLink_Service(void)
             s_rx_tail = (s_rx_tail + 1U) & RXBUF_MASK;
         }
         SL2_Service(now_ms);
+#if (SLAVE_SEQ_SYNC != 0)
+        SlavePhase_Service(now_ms);
+#endif
     }
 #endif
 

@@ -79,7 +79,7 @@ void Mon_ProcessBytesCtx(MasterMon_t *m, LinkRx_t *lrx, LinkV2Rx_t *l2rx, uint32
             on_frame(m, fps, &st, now_ms);
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(l2rx, b, &f2);
-            if (t2 == (int32_t)LINKV2_E) { m->e_valid = 1U; m->e_flags2 = f2.u.e.flags2; m->e_clr = f2.u.e.clr; m->e_setv_dv = f2.u.e.setv_dv; m->e_iout_rms_ca = f2.u.e.iout_rms_ca; m->e_iout_pk_ca = f2.u.e.iout_pk_ca; m->e_t_ms = now_ms; }
+            if (t2 == (int32_t)LINKV2_E) { m->e_valid = 1U; m->e_flags2 = f2.u.e.flags2; m->e_clr = f2.u.e.clr; m->e_setv_dv = f2.u.e.setv_dv; m->e_iout_rms_ca = f2.u.e.iout_rms_ca; m->e_iout_pk_ca = f2.u.e.iout_pk_ca; m->e_sq_id = f2.u.e.sq_id; m->e_sq_delay_us = f2.u.e.sq_delay_us; m->e_sq_period_us = f2.u.e.sq_period_us; m->e_t_ms = now_ms; }
             else if (t2 == (int32_t)LINKV2_T) { m->t_step = f2.u.t.step; m->t_ticks = f2.u.t.ticks; m->t_vin_dv = f2.u.t.vin_dv; m->t_dv_dv = f2.u.t.dv; m->t_result = f2.u.t.result; m->t_n++; }
             else if (t2 == (int32_t)LINKV2_R) { m->r_id = f2.u.r.id; m->r_status = f2.u.r.status; m->r_value = f2.u.r.value; m->r_n++; }
             else if (t2 == (int32_t)LINKV2_H) { m->h_valid = 1U; m->h_win_lo_dv = f2.u.h.vin_min_dv; m->h_win_hi_dv = f2.u.h.vin_max_dv; m->h_vout_max_dv = f2.u.h.vout_max_dv; m->h_rst = f2.u.h.rst; m->h_tuned = f2.u.h.tuned; m->h_prof_cap = f2.u.h.prof_cap; m->h_prof_kib = f2.u.h.prof_kib; m->h_prof_kiu = f2.u.h.prof_kiu; m->h_prof_vref_dv = f2.u.h.prof_vref_dv; m->h_prof_maxc_dv = f2.u.h.prof_maxc_dv; m->h_prof_n = f2.u.h.prof_n; m->h_prof_knee = f2.u.h.prof_knee; }
@@ -637,7 +637,8 @@ void MasterApp_Run(void)
                 d.iout_valid = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_VALID) != 0U)); d.iout_clip = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U));
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
-                d.ntc_raw = g_mon.last.ntc_raw; d.ntc_valid = d.have;                       /* the R slave's heat-sink NTC, in every $S frame */
+                d.ntc_raw = g_mon.last.ntc_raw; d.ntc_valid = d.have;
+                if (g_mon.e_valid != 0U) { d.sq_id = g_mon.e_sq_id; d.sq_delay_us = g_mon.e_sq_delay_us; d.sq_period_us = g_mon.e_sq_period_us; } else { d.sq_id = 0U; d.sq_delay_us = 0U; d.sq_period_us = 0U; }      /* the R slave's last phase sequence round */                       /* the R slave's heat-sink NTC, in every $S frame */
                 d.wait_valid = (uint8_t)((g_mon.last.state == 1U) && ((g_mon.last.flags & 0x8000U) != 0U));       /* the slave waits in SYNC and says what for */
                 d.wait_ctx   = (uint8_t)((g_mon.last.flags >> 8) & 0x7FU);
                 d.h_valid = g_mon.h_valid; d.win_lo_dv = g_mon.h_win_lo_dv; d.win_hi_dv = g_mon.h_win_hi_dv; d.vout_max_dv = g_mon.h_vout_max_dv;
@@ -672,6 +673,26 @@ void MasterApp_Run(void)
                       key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);
 #if (MASTER_RTC_ENABLED == 1)
             {   MDateTime_t nt; if (MApp_TakeClockSet(&app, &nt) != 0U) { MRtc_Set(&nt); clk = nt; clk_ok = 1U; t_clk = now; } }      /* a Date or Time saved in Set-Mode */
+#endif
+#if (MASTER_YB_LINKS == 1)
+            {   /* the phase sequence measurement (v0.9.51): $K SEQ <round> on the three links, then ONE SYNC byte on the three links at the same moment: each slave times it against its own rising zero-cross */
+                uint8_t sq_round, sq_act = MApp_TakeSeqAction(&app, &sq_round);
+                if (sq_act == 1U)
+                {
+                    LinkK_t k; char sb[LINKV2_MAX_LEN + 8U]; int32_t sn; uint8_t yb3;
+                    memset(&k, 0, sizeof k); k.id = MApp_NextKId(&app); k.cmd = LINKCMD_SEQ; k.num = (int32_t)sq_round;
+                    sn = LinkV2_BuildK(sb, sizeof sb, &k); if (sn > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)sb, (uint16_t)sn, 5U);
+                    for (yb3 = 0U; yb3 < MLINKS_N; yb3++) { sn = MLinks_BuildSeq(yb3, sq_round, sb, sizeof sb); if (sn > 0) (void)HAL_UART_Transmit(s_uart_yb[yb3], (uint8_t *)sb, (uint16_t)sn, 5U); }
+                }
+                else if (sq_act == 2U)
+                {   /* wait until the three transmitters are free, then write the three data registers back to back: the bytes start within about a microsecond of each other */
+                    uint8_t sy = (uint8_t)LINKV2_SYNC_BYTE; USART_TypeDef *u0 = huart1.Instance, *u1 = s_uart_yb[0]->Instance, *u2 = s_uart_yb[1]->Instance; uint32_t guard = 20000U;
+                    while ((guard > 0U) && ((u0->ISR & u1->ISR & u2->ISR & USART_ISR_TXE_TXFNF) == 0U)) guard--;
+                    u0->TDR = sy; u1->TDR = sy; u2->TDR = sy;
+                }
+            }
+#else
+            {   uint8_t sq_round; (void)MApp_TakeSeqAction(&app, &sq_round); }                          /* no Y and B links: no measurement */
 #endif
             if (MApp_ShowsMonitor(&app) != 0U)
             {   /* the monitor diagnostics, one MENU press away. In Industrial and Domestic mode it shows the R, Y and B links in turn, 3 s each: row 0 names the phase letter the slave on that cable reports (a Y board on the B cable says "SLAVE Y" in the B turn). */

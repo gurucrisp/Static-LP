@@ -181,7 +181,7 @@ static void t_ranges(void)
     range_test("E", 'E', E, 6, 0); range_test("H", 'H', H, 7, 0); range_test("R", 'R', R, 3, 1);
     range_test("T", 'T', T, 5, 1); range_test("M", 'M', M, 5, 0);
     {   /* the two OPTIONAL trailing fields of E (the converter-side current): an older sender has 6 fields, an older receiver ignores the extra ones */
-        LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkE_t e = {7, 2300, 3, 3, 2020, 2700, 0, 0}; int commas, j;
+        LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkE_t e = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0}; int commas, j;
         n = LinkV2_BuildE(b, sizeof b, &e); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
         CHECK(n > 0 && commas == 6, "both optional fields 0: the frame is the 6-field frame of the first protocol (%d commas)", commas);
         e.iout_rms_ca = 589U; e.iout_pk_ca = 831U; n = LinkV2_BuildE(b, sizeof b, &e); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
@@ -233,7 +233,7 @@ static void t_ranges(void)
         m.setv_dv = 2300U; m.run = 2U; CHECK(LinkV2_BuildM(b, sizeof b, &m) == LINK_ERR_RANGE, "M with run 2 is refused by the builder");
         m.run = 1U; m.maxc_dv = 1991U; CHECK(LinkV2_BuildM(b, sizeof b, &m) == LINK_ERR_RANGE, "M with Max Correction 199.1 V is refused by the builder");
         m.maxc_dv = 1990U; CHECK(LinkV2_BuildM(b, sizeof b, &m) > 0, "Max Correction 199.0 V builds");
-        {   LinkE_t e = {0, 999, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with setv 99.9 V is refused"); e.setv_dv = 0U; CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "E with setv 0 (none yet) builds");
+        {   LinkE_t e = {0, 999, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with setv 99.9 V is refused"); e.setv_dv = 0U; CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "E with setv 0 (none yet) builds");
                     e.reach_lo_dv = 499U; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with reach 49.9 V is refused"); }
         {   LinkH_t h = {2, 10000000UL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "H with fw 10000000 is refused"); }
     }
@@ -340,6 +340,45 @@ static void t_commands(void)
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
+
+/* ---- v0.9.51: the phase sequence measurement: $K SEQ, the SYNC byte, and the optional sq_* fields of $E ---- */
+static void t_sequence(void)
+{
+    LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkE_t e; LinkK_t k; int commas, j;
+    memset(&e, 0, sizeof e); e.seq = 7U; e.setv_dv = 2300U; e.flags2 = 3U; e.clr = 3U; e.reach_lo_dv = 2020U; e.reach_hi_dv = 2700U;
+    n = LinkV2_BuildE(b, sizeof b, &e); for (commas = 0, j = 0; j < n; j++) if (b[j] == ',') commas++;
+    CHECK(n > 0 && commas == 6, "an $E without a sequence result is built with 6 fields exactly as before (%d commas incl. the one after E)", commas);
+    e.iout_rms_ca = 589U; e.iout_pk_ca = 831U; n = LinkV2_BuildE(b, sizeof b, &e); for (commas = 0, j = 0; j < n; j++) if (b[j] == ',') commas++;
+    CHECK(n > 0 && commas == 8, "with the converter current: 8 fields as before (%d commas)", commas);
+    e.sq_id = 12U; e.sq_delay_us = 6667U; e.sq_period_us = 20003U; n = LinkV2_BuildE(b, sizeof b, &e); for (commas = 0, j = 0; j < n; j++) if (b[j] == ',') commas++;
+    CHECK(n > 0 && commas == 11 && strstr(b, ",12,6667,20003*") != NULL, "with a sequence result: 11 fields, the last three 12,6667,20003 (%d commas)", commas);
+    CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.type == LINKV2_E && f.u.e.sq_id == 12U && f.u.e.sq_delay_us == 6667U && f.u.e.sq_period_us == 20003U && f.u.e.iout_rms_ca == 589U && f.u.e.iout_pk_ca == 831U && f.u.e.reach_hi_dv == 2700U, "it parses back with every field");
+    e.iout_rms_ca = 0U; e.iout_pk_ca = 0U; n = LinkV2_BuildE(b, sizeof b, &e);
+    CHECK(n > 0 && LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.sq_id == 12U && f.u.e.sq_delay_us == 6667U && f.u.e.iout_rms_ca == 0U, "a sequence result with no converter current still carries the (zero) current fields in between");
+    e.sq_delay_us = LINKV2_SQ_NONE; e.sq_period_us = 0U; n = LinkV2_BuildE(b, sizeof b, &e);
+    CHECK(n > 0 && LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.sq_delay_us == 65535U && f.u.e.sq_period_us == 0U, "a failed round: delay 65535 (none), period 0");
+    memset(&e, 0, sizeof e); e.setv_dv = 2300U; e.sq_id = 256U; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "a round id of 256 is refused by the builder");
+    /* an older receiver's view: a frame with 8 fields (no sq_*) parses with sq_id = 0 */
+    memset(&e, 0, sizeof e); e.seq = 1U; e.setv_dv = 2300U; e.iout_rms_ca = 100U; e.iout_pk_ca = 200U; n = LinkV2_BuildE(b, sizeof b, &e);
+    CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.sq_id == 0U && f.u.e.sq_delay_us == 0U && f.u.e.sq_period_us == 0U, "a frame without the optional fields parses with them zero");
+    /* the command */
+    memset(&k, 0, sizeof k); k.id = 5U; k.cmd = LINKCMD_SEQ; k.num = 12;
+    n = LinkV2_BuildK(b, sizeof b, &k);
+    CHECK(n > 0 && strstr(b, "$K,5,SEQ,12*") != NULL && LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.type == LINKV2_K && f.u.k.cmd == LINKCMD_SEQ && f.u.k.num == 12 && f.u.k.id == 5U, "$K,5,SEQ,12 builds and parses back");
+    k.num = 0; CHECK(LinkV2_BuildK(b, sizeof b, &k) == LINK_ERR_RANGE, "a round id of 0 is refused"); k.num = 256; CHECK(LinkV2_BuildK(b, sizeof b, &k) == LINK_ERR_RANGE, "and 256"); k.num = 255; CHECK(LinkV2_BuildK(b, sizeof b, &k) > 0, "255 is the last");
+    CHECK(LinkV2_CmdWord(LINKCMD_SEQ) != NULL && strcmp(LinkV2_CmdWord(LINKCMD_SEQ), "SEQ") == 0, "the command word is SEQ");
+    CHECK(LinkV2_Parse("$K,5,SEQ*00", 11U, &f) != LINK_OK, "$K,5,SEQ with no round id is refused");
+    CHECK(LINKV2_SYNC_BYTE == 0x16U && LINKV2_SYNC_BYTE < 0x20U, "the SYNC byte is a control character (0x16), never part of a printable frame");
+    {   int32_t i; int inside = 0;
+        memset(&e, 0, sizeof e); e.setv_dv = 2300U; e.sq_id = 1U; e.sq_delay_us = 65535U; e.sq_period_us = 65535U; n = LinkV2_BuildE(b, sizeof b, &e);
+        for (i = 0; i < n; i++) { if ((uint8_t)b[i] == LINKV2_SYNC_BYTE) inside = 1; }
+        k.num = 7; n = LinkV2_BuildK(b, sizeof b, &k);
+        for (i = 0; i < n; i++) { if ((uint8_t)b[i] == LINKV2_SYNC_BYTE) inside = 1; }
+        CHECK(!inside, "no frame the library builds contains the SYNC byte");
+    }
+    printf("  sequence: $K SEQ round id, optional sq_* fields of $E (11 fields, older frames unchanged), the SYNC byte\n");
+}
+
 static void t_stream(void)
 {
     LinkV2Rx_t rx; LinkV2Frame_t f; char buf[4096]; uint32_t n = 0U, i; int got = 0; int types[40];
@@ -452,7 +491,7 @@ static void t_property(void)
         if ((fl[nf - 1].lo < -1000) && (v[nf - 1] == -2147483647 - 1)) continue;
         switch (which)
         {
-        case 0: { LinkE_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4], (uint16_t)v[5], (uint16_t)v[6], (uint16_t)v[7] }; n = (all_ok) ? LinkV2_BuildE(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
+        case 0: { LinkE_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4], (uint16_t)v[5], (uint16_t)v[6], (uint16_t)v[7], 0, 0, 0 }; n = (all_ok) ? LinkV2_BuildE(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 1: { LinkH_t x = { (uint8_t)v[0], (uint32_t)v[1], (uint16_t)v[2], (uint16_t)v[3], (uint8_t)v[4], (uint8_t)v[5], (uint16_t)v[6], (uint16_t)v[7], (uint16_t)v[8], (uint16_t)v[9], (uint16_t)v[10], (uint16_t)v[11], (uint8_t)v[12], (uint8_t)v[13] }; n = (all_ok) ? LinkV2_BuildH(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 2: { LinkR_t x = { (uint8_t)v[0], (uint8_t)v[1], v[2] }; n = (all_ok) ? LinkV2_BuildR(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 3: { LinkT_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (int16_t)v[3], (uint8_t)v[4] }; n = (all_ok) ? LinkV2_BuildT(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
@@ -534,7 +573,7 @@ static void t_mutation(void)
 static void t_lengths(void)
 {
     char b[LINKV2_MAX_LEN + 8]; int32_t n, maxlen = 0;
-    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535, 4095, 65535, 65535, 65535, 65535, 15, 1}; LinkR_t r = {255, 7, -2147483647};
+    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000, 255, 65535, 65535}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535, 4095, 65535, 65535, 65535, 65535, 15, 1}; LinkR_t r = {255, 7, -2147483647};
     LinkT_t t = {255, 4095, 65535, -999, 6}; LinkM_t m = {255, 1, 3000, 255, 1990}; LinkK_t k;
     n = LinkV2_BuildE(b, sizeof b, &e); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN && b[n - 1] == '\n' && b[n - 2] == '\r', "E at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
     n = LinkV2_BuildH(b, sizeof b, &h); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN, "H at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
@@ -548,7 +587,7 @@ static void t_lengths(void)
     /* field counts against the Frames sheet: E 6, H 7, R 3, T 5, M 5 numeric fields (commas = fields) */
     {   struct { const char *name; int32_t n; int want; } c[5];
         char bb[LINKV2_MAX_LEN + 8]; int i, commas, j;
-        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200, 0, 0, 0, 0, 0, 0, 0}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300};
+        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200, 0, 0, 0, 0, 0, 0, 0}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300};
         c[0].name = "E"; c[0].n = LinkV2_BuildE(bb, sizeof bb, &e2); c[0].want = 6; for (i = 0; i < 1; i++) { commas = 0; for (j = 0; j < c[0].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 6, "E has 6 fields (%d)", commas); }
         c[1].name = "H"; c[1].n = LinkV2_BuildH(bb, sizeof bb, &h2); commas = 0; for (j = 0; j < c[1].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 7, "H has 7 fields (%d)", commas);
         c[2].name = "R"; c[2].n = LinkV2_BuildR(bb, sizeof bb, &r2); commas = 0; for (j = 0; j < c[2].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 3, "R has 3 fields (%d)", commas);
@@ -585,6 +624,7 @@ static void t_v1_compat(void)
 
 int main(void)
 {
+    t_sequence();
     t_examples();
     t_ranges();
     t_malformed();

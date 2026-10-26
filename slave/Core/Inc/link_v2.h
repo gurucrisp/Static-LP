@@ -75,7 +75,15 @@ typedef struct
     uint16_t reach_hi_dv;  /* highest input, same range                                */
     uint16_t iout_rms_ca;  /* converter-side current (I-OUT), AC RMS, hundredths of an ampere, 0..4000 (valid only with LINKV2_FLAG_IOUT_VALID) */
     uint16_t iout_pk_ca;   /* its peak, same unit                                      */
+    /* v0.9.51: the phase sequence measurement. OPTIONAL trailing fields (a frame without them parses with zeros): the result of the last round the master started with $K SEQ.
+     * sq_id = the round (0 = no result), sq_delay_us = the time from the SYNC byte to this slave's next RISING zero-cross (LINKV2_SQ_NONE = the round failed: no zero-cross,
+     * no period yet), sq_period_us = this slave's mains period at that moment (0 = not known yet). */
+    uint16_t sq_id;
+    uint16_t sq_delay_us;
+    uint16_t sq_period_us;
 } LinkE_t;
+#define LINKV2_SYNC_BYTE   0x16U    /* ASCII SYN: never inside a frame (frames are printable text): the master sends it on every link at the same instant after $K SEQ */
+#define LINKV2_SQ_NONE     65535U
 
 /* ---- $H hello: proto,fw,vin_min,vin_max,rst,tuned,vout_max ----------------------------- */
 #define LINKV2_RST_POWER_ON  0U
@@ -158,6 +166,7 @@ typedef enum
     LINKCMD_TABORT,
     LINKCMD_TPARAM,        /* name = CAP, KIB, KIU, INJ, DBND or ABRT; num = the value       */
     LINKCMD_TSAVE,
+    LINKCMD_SEQ,           /* num = the round id 1..255: "the next SYNC byte (LINKV2_SYNC_BYTE) within 100 ms is real": the phase sequence measurement (v0.9.51) */
     LINKCMD_UNKNOWN        /* a well-formed $K with a command word this version does not know: name holds it, so the receiver can answer UNKNOWN_CMD */
 } LinkCmd_t;
 

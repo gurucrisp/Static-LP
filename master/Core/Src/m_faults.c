@@ -172,6 +172,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             can_start = 0U;
             if (energised != 0U) consider(&best, &have, MLOG_T_PHASE_SEQ, (uint8_t)FC_VOLT, 3U, 0U);
         }
+        else if ((f->mode == (uint8_t)M_MODE_INDUSTRIAL) && (s->phase_seq != 0U) && (in->seq_unknown != 0U)) can_start = 0U;       /* not measured yet: no START (it is only ever consulted by the states that start; a running unit is not tripped by it) */
 
         /* ---- a trip ---- */
         if ((energised != 0U) && (have != 0U))

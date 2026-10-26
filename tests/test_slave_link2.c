@@ -22,10 +22,10 @@ static uint8_t h_tx(const char *f, uint32_t n)
     memcpy(cap[ncap], f, n); cap[ncap][n] = '\0'; cap_len[ncap] = (int)n; ncap++;
     return 1U;
 }
-static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, 0, 0 };
+static const SL2_Hooks_t HOOKS = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, 0, 0, 0 };
 /* what the slave's real glue does when NO profile is stored: it sets the 7 original fields and leaves the optional profile fields alone */
 static void h_fill_h_partial(LinkH_t *h) { h->fw = 939UL; h->vin_min_dv = 800U; h->vin_max_dv = 3000U; h->rst = 0U; h->tuned = 0U; h->vout_max_dv = 2800U; }
-static const SL2_Hooks_t HOOKS_PARTIAL = { h_on_control, h_fill_e, h_fill_h_partial, h_tx, 0, 0, 0, 0 };
+static const SL2_Hooks_t HOOKS_PARTIAL = { h_on_control, h_fill_e, h_fill_h_partial, h_tx, 0, 0, 0, 0, 0 };
 static void dirty_stack(void) { volatile uint8_t junk[3072]; unsigned i; for (i = 0U; i < sizeof junk; i++) junk[i] = 0xA5U; }
 
 static void reset_world(uint32_t t0)
@@ -220,11 +220,47 @@ static void t_fuzz(void)
     CHECK(n_ctrl == (int)SL2_Stats()->m_ok, "every delivery is a counted valid $M (%d vs %u)", n_ctrl, (unsigned)SL2_Stats()->m_ok);
     CHECK(n_ctrl < 20, "random bytes (with a 1-in-256 chance per corrupted frame to pass the checksum) hardly ever deliver a control frame (%d of 2,000,000 bytes)", n_ctrl);
     /* NULL hooks must not crash */
-    {   SL2_Hooks_t none = { 0, 0, 0, 0, 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
+    {   SL2_Hooks_t none = { 0, 0, 0, 0, 0, 0, 0, 0, 0 }; char l[160]; uint32_t n; SL2_Init(&none, 5U); n = mk(l, "M,1,1,2300,0,300"); feed(l, n, 5U); n = mk(l, "K,1,HELLO"); feed(l, n, 5U); SL2_Service(10U); SL2_Service(500U); }
     CHECK(1, "NULL hooks do not crash");
     printf("  fuzz: 2,000,000 random bytes: no crash, deliveries all counted and rare; NULL hooks are safe\n");
 }
 
+
+
+/* ---- v0.9.51: $K SEQ arms the phase sequence measurement ---- */
+static int seq_calls; static uint8_t seq_round; static uint32_t seq_now;
+static void h_seq_arm(uint8_t round, uint32_t now) { seq_calls++; seq_round = round; seq_now = now; }
+static int fe_min_calls, fe_min_clean;
+static void dirty_big(void) { volatile uint8_t junk[65536]; unsigned i; for (i = 0U; i < sizeof junk; i++) junk[i] = 0xA5U; }
+static void h_fill_e_min(LinkE_t *e) { fe_min_calls++; if ((e->sq_id == 0U) && (e->sq_delay_us == 0U) && (e->sq_period_us == 0U)) fe_min_clean++; e->setv_dv = 2300U; }                              /* sets almost nothing: whatever the module did not initialise would show */
+static const SL2_Hooks_t HOOKS_SEQ = { h_on_control, h_fill_e, h_fill_h, h_tx, 0, 0, 0, 0, h_seq_arm };
+static void t_seq(void)
+{
+    LinkV2Frame_t f; int i, found = 0;
+    reset_world(1000U); SL2_Init(&HOOKS_SEQ, 1000U); seq_calls = 0; ncap = 0;
+    feed_body("K,5,SEQ,12", 2000U); SL2_Service(2000U);
+    CHECK(seq_calls == 1 && seq_round == 12U && seq_now == 2000U, "$K,5,SEQ,12 calls the hook once with the round 12 and the time (%d, %u, %u)", seq_calls, (unsigned)seq_round, (unsigned)seq_now);
+    for (i = 0; i < ncap; i++) if (parse_cap(i, &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == 5U) { found = 1; CHECK(f.u.r.status == LINKV2_ST_OK, "and is answered OK (status %u)", (unsigned)f.u.r.status); }
+    CHECK(found, "with an $R for id 5");
+    feed_body("K,5,SEQ,12", 2010U); SL2_Service(2010U);
+    CHECK(seq_calls == 1, "the master's retry of the same id is answered again but NOT executed twice (%d)", seq_calls);
+    feed_body("K,6,SEQ,13", 2100U); SL2_Service(2100U); CHECK(seq_calls == 2 && seq_round == 13U, "the next id is a new round (13)");
+    feed_body("K,7,SEQ,255", 2200U); SL2_Service(2200U); CHECK(seq_calls == 3 && seq_round == 255U, "round 255 is accepted");
+    feed_body("K,8,SEQ,0", 2300U); SL2_Service(2300U); feed_body("K,9,SEQ,256", 2310U); SL2_Service(2310U); feed_body("K,10,SEQ", 2320U); SL2_Service(2320U);
+    CHECK(seq_calls == 3, "round 0, round 256 and no round at all are rejected by the parser: the hook is not called (%d)", seq_calls);
+    /* a build without the measurement: UNKNOWN_CMD */
+    reset_world(1000U); ncap = 0; feed_body("K,5,SEQ,12", 2000U); SL2_Service(2000U); found = 0;
+    for (i = 0; i < ncap; i++) if (parse_cap(i, &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == 5U) { found = 1; CHECK(f.u.r.status == LINKV2_ST_UNKNOWN_CMD, "a build without the hook answers UNKNOWN_CMD (status %u)", (unsigned)f.u.r.status); }
+    CHECK(found, "(the answer was sent)");
+    /* a build whose fill_e hook does NOT set the sequence fields (no SLAVE_SEQ_SYNC): the $E frame must carry no garbage in them, whatever was on the stack */
+    { static const SL2_Hooks_t HOOKS_PART = { h_on_control, h_fill_e_min, h_fill_h, h_tx, 0, 0, 0, 0, 0 }; int idx = -1, k;
+      SL2_Init(&HOOKS_PART, 1000U); ncap = 0; fe_min_calls = 0; fe_min_clean = 0; dirty_big(); SL2_Service(1000U); dirty_big(); SL2_Service(1200U); dirty_big(); SL2_Service(1400U); dirty_big(); SL2_Service(1600U);
+      CHECK(fe_min_calls >= 3 && fe_min_clean == fe_min_calls, "the structure the link layer hands to fill_e has the sequence fields ZEROED (%d of %d calls clean, after 64 KB of dirtied stack)", fe_min_clean, fe_min_calls);
+      for (k = 0; k < ncap; k++) if (parse_cap(k, &f) == LINK_OK && f.type == LINKV2_E) idx = k;
+      CHECK(idx >= 0 && parse_cap(idx, &f) == LINK_OK && f.u.e.sq_id == 0U && f.u.e.sq_delay_us == 0U && f.u.e.sq_period_us == 0U && f.u.e.iout_rms_ca == 0U, "a fill_e hook that leaves the sequence fields alone: the $E carries zeros there, not stack garbage (sq_id %u)", (unsigned)f.u.e.sq_id);
+      { int commas = 0, j; for (j = 0; j < cap_len[idx]; j++) if (cap[idx][j] == ',') commas++; CHECK(commas == 6, "and is the 6 field frame of old (%d commas)", commas); } }
+    printf("  sequence command: $K SEQ <round> calls the hook once (retries answered, not repeated), 1..255 only, UNKNOWN_CMD without the hook\n");
+}
 
 /* ---- voltage calibration over $K: started, answered later, retries not executed twice ---- */
 static int cal_calls, cal_polls, cal_immediate; static uint8_t cal_imm_status, cal_st, last_cmd; static int32_t cal_val, last_num; static char last_letter; static uint32_t cal_t0;
@@ -235,7 +271,7 @@ static int h_cal_cmd(uint8_t cmd, int32_t num, char letter, uint8_t *st, int32_t
     cal_t0 = now; return 0;
 }
 static int h_cal_poll(uint8_t *st, int32_t *val, uint32_t now) { cal_polls++; if ((uint32_t)(now - cal_t0) >= 1000U) { *st = cal_st; *val = cal_val; return 1; } return 0; }
-static const SL2_Hooks_t HOOKS_CAL = { h_on_control, h_fill_e, h_fill_h, h_tx, h_cal_cmd, h_cal_poll, 0, 0 };
+static const SL2_Hooks_t HOOKS_CAL = { h_on_control, h_fill_e, h_fill_h, h_tx, h_cal_cmd, h_cal_poll, 0, 0, 0 };
 static int count_r(uint8_t id, int *status, int32_t *value) { int i, c = 0; LinkV2Frame_t f; for (i = 0; i < ncap; i++) if (parse_cap(i, &f) == LINK_OK && f.type == LINKV2_R && f.u.r.id == id) { c++; *status = f.u.r.status; *value = f.u.r.value; } return c; }
 
 static void t_calibration(void)
@@ -278,6 +314,7 @@ static void t_calibration(void)
 int main(void)
 {
     t_hello_boot();
+    t_seq();
     {   /* v0.9.39: a hook that does not set the optional profile fields must not make the hello disappear (they were stack garbage, the builder refused the frame) */
         LinkV2Frame_t f; int k, ok = 0;
         reset_world(5000U); SL2_Init(&HOOKS_PARTIAL, 5000U); dirty_stack(); SL2_Service(5000U);

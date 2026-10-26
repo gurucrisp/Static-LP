@@ -47,7 +47,7 @@ static void s_fill_h(LinkH_t *h)
 }
 static int  s_tcmd(uint8_t c, const char *n, int32_t v, uint8_t *s, int32_t *val, uint32_t now) { return SlaveTuneLink_Command(c, n, v, s, val, now); }
 static int  s_tfr(LinkT_t *f, uint32_t now) { return SlaveTuneLink_NextFrame(f, now); }
-static const SL2_Hooks_t SHK = { s_on_control, s_fill_e, s_fill_h, s_tx, 0, 0, s_tcmd, s_tfr };
+static const SL2_Hooks_t SHK = { s_on_control, s_fill_e, s_fill_h, s_tx, 0, 0, s_tcmd, s_tfr, 0 };
 /* ---- the simulated transformer ---- */
 static double pk, pdead, psign, pinj; static uint32_t prs = 7U; static double pg(void) { double q = 0.0; int i; for (i = 0; i < 3; i++) { prs = prs * 1664525U + 1013904223U; q += (double)((prs >> 8) & 0xFFFFFFU) / 8388608.0 - 1.0; } return q / 1.732; }
 static uint32_t last_slave_ms;

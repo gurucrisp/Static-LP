@@ -27,7 +27,7 @@
 * **S1. The data model: DONE (v0.9.48).** Per-phase data in the master application (`MAppData_t.yb[2]`: the Y and B slaves), the engine fed for R, Y and B, and per-phase `$M` content with its own run level and clear counter (`MApp_ControlPh`, `MApp_ControlValidPh`, phase 0 = R, 1 = Y, 2 = B). Domestic (three independent units) and Industrial (one unit, all trip) both behave as the engine specifies; Single mode ignores Y and B. Tested on the PC only: nothing reaches `yb[]` until S2 (the glue) fills it from the Y and B links.
 * **S2. The Y and B links in the glue: DONE (v0.9.49).** `master_links.c` (pure, tested) decodes the Y and B links, builds their application data, `$M` frames and hello requests; `master_monitor.c` has their receive rings and DMA (USART4 and USART3, 500000 baud) and transmits. The R link's code path is unchanged. The hardware part of the glue is now COMPILE-CHECKED on the PC against a declarations-only HAL (tests/hal_check), which was never possible before; its behaviour on the target is not tested. Per-slave phase letter (`SLAVE_PHASE_ID`), refused when wrong. See section 8 for the bench steps.
 * **S3. The three-phase screens fed from the three slaves,** and the per-phase service pages.
-* **S4. Phase sequence and phase-to-phase voltage from the slaves** (section 5): the ARM frame, the SYNC byte, the slave timestamp, the classification.
+* **S4. Phase sequence and phase-to-phase voltage from the slaves: DONE (v0.9.51)**, see PHASE_SEQUENCE.md (the ARM frame, the SYNC byte, the slave time stamp, the classification, the line voltages on the second Run page). Both boards change; not proven on hardware.
 * **S5. Industrial rules:** any phase trips all, the sequence check, a lost slave.
 * **S6. Per-phase autotune,** only after the single-phase sweeps are proven safe on the bench.
 
@@ -75,3 +75,6 @@
 5. **A wrong letter** (a Y board on the B cable) shows `SLAVE Y` during the B turn and the B phase as having no link: the master never starts that unit and never tells that slave to run. Swap the cables or the letters.
 6. **Only then** the stages, one phase at a time, from a current-limited source, with the single-phase protection checks of AUTOTUNE_BENCH.md on EACH stage; Domestic before Industrial.
 7. Not in this step: the phase sequence (section 5), the phase-to-phase voltage, per-phase Re-tune and load calibration. The master CT and the R-link load calibration still serve the R phase only; Y and B show no load current yet.
+
+## 9. Checking the phase sequence on the bench (v0.9.51)
+After section 8 (the links alive, stages not powered): the slaves need their own mains reference (the zero-cross input) for this. Set Mode = Domestic or Industrial. The second Run page (MENU) should show `R-Y`, `Y-B` and `B-R` of about 1.73 times the phase voltage within about two seconds. Swap two phases on the zero-cross inputs: the voltages stay, and in Industrial with Phase Sequence = Yes the unit refuses to start ("Phase Sequence"). Details and limits: PHASE_SEQUENCE.md.

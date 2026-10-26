@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include "m_ui.h"
 #include "m_ntc.h"
+#include "m_phase.h"
 #include "m_ctl.h"
 
 /* one display filter: the filtered reading, the number shown, whether it is initialised, when the shown number last changed */
@@ -48,6 +49,7 @@ typedef struct
     uint16_t vin_dv, vout_dv;          /* its input and output, tenths of a volt                                                       */
     uint16_t load_da; uint8_t load_ok; /* its load, tenths of an ampere (from its converter current, a later step)                     */
     uint16_t ntc_raw; uint8_t ntc_valid; /* its heat-sink NTC: the 12 bit reading of PA5 / it is fresh (v0.9.49)                         */
+    uint16_t sq_id, sq_delay_us, sq_period_us;   /* its last phase sequence round (v0.9.51): the round id (0 = none), delay, period                       */
 } MAppSlave_t;
 
 typedef struct
@@ -87,6 +89,7 @@ typedef struct
     uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
     uint16_t win_lo_dv, win_hi_dv, vout_max_dv;   /* the slave's input window and output guard, tenths of a volt */
     MAppSlave_t yb[2];                  /* [0] = the Y slave, [1] = the B slave: the Industrial and Domestic modes use them (v0.9.48) */
+    uint16_t sq_id, sq_delay_us, sq_period_us;   /* the R slave's last phase sequence round (v0.9.51)                                           */
     uint16_t ntc_raw; uint8_t ntc_valid;   /* the R slave's heat-sink NTC: the 12 bit reading of PA5 (the $S frame) / it is fresh (v0.9.49) */
 } MAppData_t;
 
@@ -101,6 +104,9 @@ typedef struct
     MFaults_t    eng;                  /* the fault and restart engine: it decides run, the clear pulses, the contactor and the buzzer */
     MFOut_t      eout;
     MCtlOut_t    ctl_out;
+    MPhase_t     phase;                            /* the phase sequence decision and the angles between the phases (v0.9.51) */
+    uint8_t      seq_fsm, seq_round, seq_act, seq_wait;   /* the round: 0 idle, 1 armed, 2 synced; its id; the action for the glue (0 none, 1 ARM, 2 SYNC); Industrial + Phase Sequence + not measured yet */
+    uint32_t     t_seq, t_seq_next;
     uint8_t      ntc_heat;                         /* 1 = the heat-sink temperature trips the unit (the default); 0 = it is only shown */
     uint32_t     ntc_f16[3];                       /* the filtered reading x 16, per phase (R, Y, B) */
     uint8_t      ntc_have[3], heat_on[3], temp_st[3]; int16_t temp_dc[3];
@@ -148,6 +154,14 @@ void    MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t page_set_a, uint32_t p
 /* call every few ms: raw key levels (1 = pressed) and the slave's latest data; fills the frame to draw */
 void    MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);
 uint8_t MApp_SetModeOpen(const MApp_t *a);      /* the output must be off while this is 1 */
+#define MAPP_SEQ_SYNC_DELAY_MS  20U     /* from the $K SEQ (ARM) to the SYNC byte: the slaves act on the $K in their main loop */
+#define MAPP_SEQ_TIMEOUT_MS     500U    /* from the SYNC byte to the three results ($E every 100 ms) */
+#define MAPP_SEQ_FAST_MS        300U    /* between rounds while the sequence is not known */
+#define MAPP_SEQ_SLOW_MS        5000U   /* between rounds once it is (the monitoring) */
+#define MAPP_SEQ_SILENT_MS      2000U   /* between rounds when NO slave answered the last one (a build without the measurement) */
+/* The glue asks this every pass: 0 = nothing to do, 1 = send $K SEQ <*round> on all three links, 2 = send the SYNC byte (LINKV2_SYNC_BYTE) on all three links at once. Each is returned once. */
+uint8_t MApp_TakeSeqAction(MApp_t *a, uint8_t *round);
+const MPhase_t *MApp_Phase(const MApp_t *a);
 void    MApp_SetNtcHeat(MApp_t *a, uint8_t on);                       /* MASTER_NTC_HEAT: 1 = the temperature trips the unit */
 /* the heat-sink temperature of phase ph (0 R, 1 Y, 2 B), tenths of a degC: returns MNTC_OK / MNTC_OPEN / MNTC_SHORT, or 255 = no reading */
 uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc);

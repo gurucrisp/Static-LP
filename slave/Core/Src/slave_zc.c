@@ -10,8 +10,12 @@
 #include "slave_zc.h"
 #include "slave_irq_prio.h"
 #include "slave_config.h"
+#include "slave_features.h"
 #if (SLAVE_POWER_STAGE >= 1)
 #include "slave_ctrl.h"
+#endif
+#if (SLAVE_SEQ_SYNC != 0)
+#include "slave_phase.h"           /* the phase sequence measurement (v0.9.51) */
 #endif
 
 TIM_HandleTypeDef htim2;
@@ -161,6 +165,9 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 #if (SLAVE_POWER_STAGE >= 1)
     SlaveCtrl_OnZcEdge(now_us, 1U);          /* BEFORE any bookkeeping: drop the converter diagonal */
 #endif
+#if (SLAVE_SEQ_SYNC != 0)
+    SlavePhase_OnZc(now_us, 1U);             /* the reference edge of the phase sequence measurement */
+#endif
     g_zc.level = ((ZCD_GPIO_Port->IDR & ZCD_Pin) != 0U) ? 1U : 0U;
     SlaveZC_OnEdge(now_us, 1U);
 }
@@ -175,6 +182,9 @@ void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
     now_us = TIM2->CNT;
 #if (SLAVE_POWER_STAGE >= 1)
     SlaveCtrl_OnZcEdge(now_us, 0U);
+#endif
+#if (SLAVE_SEQ_SYNC != 0)
+    SlavePhase_OnZc(now_us, 0U);
 #endif
     g_zc.level = ((ZCD_GPIO_Port->IDR & ZCD_Pin) != 0U) ? 1U : 0U;
     SlaveZC_OnEdge(now_us, 0U);

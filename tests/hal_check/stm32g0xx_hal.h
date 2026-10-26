@@ -43,6 +43,7 @@ typedef struct { volatile uint32_t DR; } DWT_Type;
 #define GPIO_SPEED_FREQ_LOW 0U
 #define DMA_CIRCULAR 0x20U
 #define ADC_CHANNEL_0 0U
+#define USART_ISR_TXE_TXFNF 0x80U
 #define USART_ISR_ORE 0x08U
 #define USART_ISR_FE 0x02U
 #define USART_ISR_NE 0x04U

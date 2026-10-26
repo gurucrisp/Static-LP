@@ -53,7 +53,8 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)
     s->have = 1U; s->link_ok = 1U;
     s->vin_dv = m->last.vin_dv; s->vout_dv = m->last.vout_dv;
     s->state = m->last.state; s->fault = (uint8_t)m->last.fault;
-    s->ntc_raw = m->last.ntc_raw; s->ntc_valid = 1U;                                          /* the slave's heat-sink NTC */
+    s->ntc_raw = m->last.ntc_raw; s->ntc_valid = 1U;
+    if (m->e_valid != 0U) { s->sq_id = m->e_sq_id; s->sq_delay_us = m->e_sq_delay_us; s->sq_period_us = m->e_sq_period_us; }       /* its last phase sequence round */                                          /* the slave's heat-sink NTC */
     s->in_band = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
     s->heat    = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_OVERHEAT) != 0U));       /* the slave's own overheat decision, when it makes one */
 }
@@ -81,11 +82,20 @@ uint8_t MLinks_HelloDue(uint8_t i, uint32_t now_ms)
     l->t_hello = now_ms; l->hello_n = 1U; return 1U;
 }
 
+int32_t MLinks_BuildSeq(uint8_t i, uint8_t round, char *out, uint32_t cap)
+{
+    LinkK_t k;
+    if ((i >= MLINKS_N) || (round == 0U)) return 0;
+    memset(&k, 0, sizeof k);
+    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 255U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_SEQ; k.num = (int32_t)round;
+    return LinkV2_BuildK(out, cap, &k);
+}
+
 int32_t MLinks_BuildHello(uint8_t i, char *out, uint32_t cap)
 {
     LinkK_t k;
     if (i >= MLINKS_N) return 0;
     memset(&k, 0, sizeof k);
-    k.id = ++s_l[i].k_id; k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
+    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 255U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
     return LinkV2_BuildK(out, cap, &k);
 }

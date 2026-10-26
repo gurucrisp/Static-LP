@@ -464,6 +464,20 @@ static void t_modes(void)
     CHECK(w.out.contactor[0], "with the check switched off a reversed sequence is ignored");
     world(&w, M_MODE_SINGLE, 1U, 50000U); w.s.phase_seq = 1U; w.in.seq_state = 1U; for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
     CHECK(w.out.contactor[0], "and in Single mode the sequence is never checked");
+    /* v0.9.51: the sequence NOT MEASURED YET (seq_unknown): it blocks a start, it never trips a running unit */
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U); w.s.phase_seq = 1U; w.in.seq_unknown = 1U; run_ms(&w, 30000U);
+    CHECK(w.out.run[0] == 0U && !w.out.contactor[0] && w.out.fault[0] == 0U, "Industrial with the Phase Sequence check on and the sequence not measured yet: no start, and no fault either");
+    w.in.seq_unknown = 0U; run_ms(&w, 8000U); CHECK(w.out.run[0] == 1U, "the moment it is known (and fine) the unit starts by itself"); for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0], "and reaches ON");
+    w.in.seq_unknown = 1U; run_ms(&w, 20000U); CHECK(w.out.contactor[0] == 1U && w.out.run[0] == 1U && w.out.fault[0] == 0U, "a RUNNING unit is not touched when the sequence becomes unknown again (a lost slave has its own rule)");
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U); w.s.phase_seq = 0U; w.in.seq_unknown = 1U; for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0], "with the check switched off, 'not measured' is ignored");
+    world(&w, M_MODE_SINGLE, 1U, 50000U); w.s.phase_seq = 1U; w.in.seq_unknown = 1U; for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0], "in Single mode too");
+    world(&w, M_MODE_DOMESTIC, 1U, 50000U); w.s.phase_seq = 1U; w.in.seq_unknown = 1U; for (k = 0U; k < 400U && !w.out.contactor[2]; k++) step(&w);
+    CHECK(w.out.contactor[0] && w.out.contactor[1] && w.out.contactor[2], "and in Domestic mode (no sequence check there)");
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U); w.s.phase_seq = 1U; w.in.seq_unknown = 1U; w.in.seq_state = 1U; run_ms(&w, 30000U);
+    CHECK(w.out.run[0] == 0U, "a measured REVERSE still blocks, unknown or not");
     /* Domestic: independent units, buzzer off for ordinary faults */
     world(&w, M_MODE_DOMESTIC, 1U, 50000U); for (k = 0U; k < 400U && !w.out.contactor[2]; k++) step(&w);
     w.in.ph[1].vin_dv = 1500U; run_ms(&w, 5300U);

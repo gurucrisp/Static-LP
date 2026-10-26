@@ -127,6 +127,7 @@ typedef struct
     uint8_t      h_valid;            /* a $H has arrived                              */
     uint16_t     h_win_lo_dv, h_win_hi_dv, h_vout_max_dv;
     uint16_t     e_setv_dv;          /* the set voltage the slave reports it is using ($E)  */
+    uint16_t     e_sq_id, e_sq_delay_us, e_sq_period_us;   /* the slave's last phase sequence round (v0.9.51): id (0 = none), time from the SYNC byte to its rising zero-cross, its mains period */
     uint16_t     e_iout_rms_ca, e_iout_pk_ca;   /* the slave's converter-side current ($E, optional fields), hundredths of an ampere */
     uint8_t      r_id, r_status;     /* the last $R (the answer to a calibration command) */
     uint8_t      t_n, t_step, t_result;           /* the last $T (the autotune's progress): a counter, its step and result */

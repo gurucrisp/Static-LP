@@ -84,6 +84,7 @@ static void make_status(const MApp_t *a, const MAppData_t *d, uint32_t now, char
     const MUnit_t *u = &a->eng.u[0]; const uint32_t rd = (uint32_t)a->settings.restart_time * 1000UL; uint32_t rem;
     o[0] = '\0';
     if ((d->have == 0U) || (MUI_SetModeOpen(&a->ui) != 0U)) return;
+    if ((a->seq_wait != 0U) && ((u->st == U_OFF) || (u->st == U_ONDELAY))) { copy(o, "Checking Phase Seq"); return; }      /* Industrial with Phase Sequence on: the sequence is measured before a start */
     switch (u->st)
     {
     case U_OFF:      copy(o, "Press START"); break;
@@ -164,6 +165,48 @@ static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 #define TR_LOST 7U      /* our own result code: the $T frames stopped coming */
 
 static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; MUI_Notify(&a->ui, l1, l2, now); }
+
+/* The phase sequence rounds (v0.9.51), three-phase modes with all three slaves heard: ARM ($K SEQ <round>) on the three links, 20 ms later one SYNC byte on the three links at once, then the three slaves'
+ * results come back in their $E frames (sq_id = the round, the time from the SYNC byte to their rising zero-cross, their period). MPhase decides after three identical rounds. */
+static void seq_step(MApp_t *a, const MAppData_t *d, uint32_t now)
+{
+    uint8_t three = (uint8_t)(a->settings.mode != (uint8_t)M_MODE_SINGLE);
+    uint8_t heard = (uint8_t)((d->have != 0U) && (d->yb[0].have != 0U) && (d->yb[1].have != 0U));
+    if ((three == 0U) || (heard == 0U))
+    {   /* a single-phase unit, or a slave is not heard: nothing to measure, and what was decided is gone */
+        a->seq_fsm = 0U; a->seq_act = 0U; MPhase_Lost(&a->phase); a->t_seq_next = now + MAPP_SEQ_FAST_MS; return;
+    }
+    MPhase_Age(&a->phase, now);
+    if (a->seq_fsm == 0U)
+    {
+        if ((int32_t)(now - a->t_seq_next) >= 0) { a->seq_round = (uint8_t)((a->seq_round % 255U) + 1U); a->seq_act = 1U; a->t_seq = now; a->seq_fsm = 1U; }
+    }
+    else if (a->seq_fsm == 1U)
+    {
+        if (age_ms(now, a->t_seq) >= MAPP_SEQ_SYNC_DELAY_MS) { a->seq_act = 2U; a->t_seq = now; a->seq_fsm = 2U; }
+    }
+    else
+    {
+        uint16_t id[3], dl[3], pd[3]; MPhRound_t r; uint32_t i, got = 0U;
+        id[0] = d->sq_id; dl[0] = d->sq_delay_us; pd[0] = d->sq_period_us;
+        id[1] = d->yb[0].sq_id; dl[1] = d->yb[0].sq_delay_us; pd[1] = d->yb[0].sq_period_us;
+        id[2] = d->yb[1].sq_id; dl[2] = d->yb[1].sq_delay_us; pd[2] = d->yb[1].sq_period_us;
+        for (i = 0U; i < 3U; i++)
+        {
+            uint8_t mine = (uint8_t)(id[i] == (uint16_t)a->seq_round);
+            if (mine != 0U) got++;
+            r.valid[i] = (uint8_t)((mine != 0U) && (dl[i] != (uint16_t)MPH_NONE_US)); r.delay_us[i] = dl[i]; r.period_us[i] = pd[i];
+        }
+        if ((got == 3U) || (age_ms(now, a->t_seq) >= MAPP_SEQ_TIMEOUT_MS))
+        {
+            MPhase_Round(&a->phase, &r, now);
+            a->t_seq_next = now + ((got == 0U) ? MAPP_SEQ_SILENT_MS : ((a->phase.state == MPH_UNKNOWN) ? MAPP_SEQ_FAST_MS : MAPP_SEQ_SLOW_MS));
+            a->seq_fsm = 0U;
+        }
+    }
+}
+uint8_t MApp_TakeSeqAction(MApp_t *a, uint8_t *round) { uint8_t act = a->seq_act; a->seq_act = 0U; *round = a->seq_round; return act; }
+const MPhase_t *MApp_Phase(const MApp_t *a) { return &a->phase; }
 
 /* The heat-sink temperature of one phase (v0.9.49): the slave's raw reading is filtered (1/16 per step), converted, and turned into the overheat signal the engine takes
  * (its Overheat Trip Delay, the restart when cooled and the three-trips rule are the engine's): asserted at the Overheat Temp, released at the Overheat Restart (a setting, 35 to Overheat Temp - 5, default 10 degC below).
@@ -415,6 +458,10 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         r.vout_dv[1U + ph] = disp_filter(&a->f_vout_yb[ph], s->vout_dv, s->have, 10, 7, now);
         r.load_ok[1U + ph] = s->load_ok; r.load_da[1U + ph] = disp_filter(&a->f_load_yb[ph], s->load_da, (uint8_t)(s->have && s->load_ok), 1, 3, now);
     }
+    r.seq_state = (uint8_t)((a->phase.state == MPH_REVERSE) ? 1U : ((a->phase.state == MPH_SAME) ? 2U : 0U));
+    r.vll_dv[0] = ((r.have[0] != 0U) && (r.have[1] != 0U)) ? MPhase_LineDv(&a->phase, 0U, 1U, r.vout_dv[0], r.vout_dv[1]) : 0U;      /* the phase-to-phase output voltages R-Y, Y-B, B-R from the three voltages and the angles the slaves measured */
+    r.vll_dv[1] = ((r.have[1] != 0U) && (r.have[2] != 0U)) ? MPhase_LineDv(&a->phase, 1U, 2U, r.vout_dv[1], r.vout_dv[2]) : 0U;
+    r.vll_dv[2] = ((r.have[2] != 0U) && (r.have[0] != 0U)) ? MPhase_LineDv(&a->phase, 2U, 0U, r.vout_dv[2], r.vout_dv[0]) : 0U;
 
     /* the slave's own limits (its $H frame): Set-Mode checks the I/P cut-offs against its window and O/P HV against its output guard (D7, D26) */
     if ((d->h_valid != 0U) && (a->lim_set == 0U))
@@ -438,6 +485,9 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             uint8_t meas = (uint8_t)((d->have != 0U) && (d->state == 2U) && (dv <= (int32_t)MAPP_BAND_DV) && (dv >= -(int32_t)MAPP_BAND_DV));
             in.ph[0].in_band = (uint8_t)(((d->e_valid != 0U) && (d->in_band != 0U)) || (meas != 0U));
         }
+        seq_step(a, d, now);
+        a->seq_wait = (uint8_t)((a->settings.mode == (uint8_t)M_MODE_INDUSTRIAL) && (a->settings.phase_seq != 0U) && (a->phase.state == MPH_UNKNOWN));
+        in.seq_state = (uint8_t)((a->phase.state == MPH_REVERSE) ? 1U : ((a->phase.state == MPH_SAME) ? 2U : 0U)); in.seq_unknown = a->seq_wait;
         ntc_update(a, 0U, d->ntc_valid, d->ntc_raw);
         for (k = 0U; k < 2U; k++) ntc_update(a, (uint8_t)(1U + k), d->yb[k].ntc_valid, d->yb[k].ntc_raw);
         in.ph[0].heat = (uint8_t)((d->heat != 0U) || (a->heat_on[0] != 0U)); in.ph[0].ct_peak = (uint8_t)(d->ct_peak | a->ct_peak_on);

@@ -35,6 +35,8 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms);
 /* the $M frame for link i if one is due (its content changed, or MLINKS_M_PERIOD_MS passed): returns its length, 0 = nothing to send. valid = MApp_ControlValidPh() */
 int32_t MLinks_BuildM(uint8_t i, const MCtlOut_t *c, uint8_t valid, uint32_t now_ms, char *out, uint32_t cap);
 /* 1 = ask link i's slave for its hello now ($E heard, no $H yet, not asked within MLINKS_HELLO_MS) */
+/* the $K SEQ <round> frame for link i (the phase sequence measurement, v0.9.51); returns its length */
+int32_t MLinks_BuildSeq(uint8_t i, uint8_t round, char *out, uint32_t cap);
 uint8_t MLinks_HelloDue(uint8_t i, uint32_t now_ms);
 int32_t MLinks_BuildHello(uint8_t i, char *out, uint32_t cap);
 const MasterMon_t *MLinks_Mon(uint8_t i);           /* the link's counters and last frames (diagnostics) */
