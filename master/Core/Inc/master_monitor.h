@@ -42,6 +42,7 @@ extern "C" {
 #include <stdint.h>
 #include "main.h"
 #include "link_proto.h"
+#include "link_v2.h"
 
 #define MASTER_MONITOR_MODE     1
 
@@ -52,6 +53,13 @@ extern "C" {
 /* The application drives the OUTPUT CONTACTOR(S) and the BUZZER from the fault engine (v0.9.5). 1 = drive them. 0 = never (they stay at their OFF level), for a first test with the load disconnected.
  * A contactor closes only after the slave reports IN_BAND for the Restart Time, and opens at once on any trip, in Set-Mode, on STOP and when the link is lost. */
 #define MASTER_DRIVE_CONTACTORS 1
+
+/* v0.9.49: the Y and B slave links of a three-phase unit: the receive rings and DMA of USART4 (Y: PC10 TX, PC11 RX) and USART3 (B: PB2 TX, PB0 RX), the $M frames
+ * and hello requests to those slaves, and their data for the application. 1 = on (the default). With only the R slave connected nothing is heard on them and nothing is
+ * sent (a $M goes out only to a slave that has been heard). 0 = the two ports are left alone, as before v0.9.49. */
+#ifndef MASTER_YB_LINKS
+#define MASTER_YB_LINKS         1
+#endif
 
 /* TEST ONLY: 1 = the master applies NO voltage limits: I/P LV, I/P HV, O/P LV, O/P HV and the input check before a start are off (the Set-Mode values for them are ignored). The slave has its own switch
  * (SLAVE_TEST_NO_VOLTAGE_CUTS, ready-made file slave_config_STAGE3_cap2752_full_range_MASTER_TEST_NOCUTS.h). Overload, heat, inrush, power-stage, mains and link-lost rules stay. The diagnostics page shows NOCUT.
@@ -138,6 +146,10 @@ void Mon_Reset(void);
  * frame receiver and updates g_mon. ring_size must be a power of two. */
 void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
                       uint32_t *rd, uint32_t wr, uint32_t now_ms);
+/* The same for ONE slave link given its own state and receivers (the Y and B links, master_links.c): bytes from ring[*rd .. wr) are fed to the decoders. */
+void Mon_ProcessBytesCtx(MasterMon_t *m, LinkRx_t *lrx, LinkV2Rx_t *l2rx, uint32_t *fps,
+                         const volatile uint8_t *ring, uint32_t ring_size,
+                         uint32_t *rd, uint32_t wr, uint32_t now_ms);
 
 /* Rolls the one-second frame counter. Call with the current time often. */
 void Mon_Tick(uint32_t now_ms);

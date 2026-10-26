@@ -15,6 +15,7 @@
 #endif
 #include "lcd.h"
 #include "link_v2.h"
+#include "master_links.h"
 
 MasterMon_t g_mon;
 static LinkV2Rx_t s_l2rx;       /* a second receiver for the version 2 frames ($E, $H); $S still goes through the version 1 one */
@@ -36,31 +37,33 @@ void Mon_Reset(void)
     s_fps_window_start_ms = 0U;
 }
 
-static void on_frame(const LinkStatus_t *st, uint32_t now_ms)
+static void on_frame(MasterMon_t *m, uint32_t *fps, const LinkStatus_t *st, uint32_t now_ms)
 {
     /* Count missing frames from gaps in the sequence number - but only while
      * the link was alive. After a silent spell (longer than the link timeout)
      * the slave has probably restarted and its counter began again at 0, so
      * just re-synchronise. A jump of more than 100 is treated the same way. */
-    if (g_mon.have_seq &&
-        ((uint32_t)(now_ms - g_mon.t_last_ms) < MON_LINK_TIMEOUT_MS))
+    if (m->have_seq &&
+        ((uint32_t)(now_ms - m->t_last_ms) < MON_LINK_TIMEOUT_MS))
     {
-        uint8_t gap = (uint8_t)(st->seq - g_mon.last_seq - 1U);
+        uint8_t gap = (uint8_t)(st->seq - m->last_seq - 1U);
         if (gap <= 100U)
         {
-            g_mon.lost += gap;
+            m->lost += gap;
         }
     }
-    g_mon.last_seq   = st->seq;
-    g_mon.have_seq   = 1U;
-    g_mon.last       = *st;
-    g_mon.have_frame = 1U;
-    g_mon.t_last_ms  = now_ms;
-    s_fps_count++;
+    m->last_seq   = st->seq;
+    m->have_seq   = 1U;
+    m->last       = *st;
+    m->have_frame = 1U;
+    m->t_last_ms  = now_ms;
+    (*fps)++;
 }
 
-void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
-                      uint32_t *rd, uint32_t wr, uint32_t now_ms)
+/* The decoder of ONE slave link: its own monitor state, version 1 receiver ($S), version 2 receiver ($E $H $T $R) and frame counter. The R link uses the globals (Mon_ProcessBytes), the Y and B links their own (master_links.c). */
+void Mon_ProcessBytesCtx(MasterMon_t *m, LinkRx_t *lrx, LinkV2Rx_t *l2rx, uint32_t *fps,
+                         const volatile uint8_t *ring, uint32_t ring_size,
+                         uint32_t *rd, uint32_t wr, uint32_t now_ms)
 {
     LinkStatus_t st;
     uint32_t     r    = *rd;
@@ -70,22 +73,28 @@ void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
     {
         uint8_t b = ring[r];
         r = (r + 1U) & mask;
-        g_mon.bytes_rx++;
-        if (LinkRx_Feed(&s_lrx, b, &st))
+        m->bytes_rx++;
+        if (LinkRx_Feed(lrx, b, &st))
         {
-            on_frame(&st, now_ms);
+            on_frame(m, fps, &st, now_ms);
         }
-        {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(&s_l2rx, b, &f2);
-            if (t2 == (int32_t)LINKV2_E) { g_mon.e_valid = 1U; g_mon.e_flags2 = f2.u.e.flags2; g_mon.e_clr = f2.u.e.clr; g_mon.e_setv_dv = f2.u.e.setv_dv; g_mon.e_iout_rms_ca = f2.u.e.iout_rms_ca; g_mon.e_iout_pk_ca = f2.u.e.iout_pk_ca; g_mon.e_t_ms = now_ms; }
-            else if (t2 == (int32_t)LINKV2_T) { g_mon.t_step = f2.u.t.step; g_mon.t_ticks = f2.u.t.ticks; g_mon.t_vin_dv = f2.u.t.vin_dv; g_mon.t_dv_dv = f2.u.t.dv; g_mon.t_result = f2.u.t.result; g_mon.t_n++; }
-            else if (t2 == (int32_t)LINKV2_R) { g_mon.r_id = f2.u.r.id; g_mon.r_status = f2.u.r.status; g_mon.r_value = f2.u.r.value; g_mon.r_n++; }
-            else if (t2 == (int32_t)LINKV2_H) { g_mon.h_valid = 1U; g_mon.h_win_lo_dv = f2.u.h.vin_min_dv; g_mon.h_win_hi_dv = f2.u.h.vin_max_dv; g_mon.h_vout_max_dv = f2.u.h.vout_max_dv; g_mon.h_rst = f2.u.h.rst; g_mon.h_tuned = f2.u.h.tuned; g_mon.h_prof_cap = f2.u.h.prof_cap; g_mon.h_prof_kib = f2.u.h.prof_kib; g_mon.h_prof_kiu = f2.u.h.prof_kiu; g_mon.h_prof_vref_dv = f2.u.h.prof_vref_dv; g_mon.h_prof_maxc_dv = f2.u.h.prof_maxc_dv; g_mon.h_prof_n = f2.u.h.prof_n; g_mon.h_prof_knee = f2.u.h.prof_knee; }
+        {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(l2rx, b, &f2);
+            if (t2 == (int32_t)LINKV2_E) { m->e_valid = 1U; m->e_flags2 = f2.u.e.flags2; m->e_clr = f2.u.e.clr; m->e_setv_dv = f2.u.e.setv_dv; m->e_iout_rms_ca = f2.u.e.iout_rms_ca; m->e_iout_pk_ca = f2.u.e.iout_pk_ca; m->e_t_ms = now_ms; }
+            else if (t2 == (int32_t)LINKV2_T) { m->t_step = f2.u.t.step; m->t_ticks = f2.u.t.ticks; m->t_vin_dv = f2.u.t.vin_dv; m->t_dv_dv = f2.u.t.dv; m->t_result = f2.u.t.result; m->t_n++; }
+            else if (t2 == (int32_t)LINKV2_R) { m->r_id = f2.u.r.id; m->r_status = f2.u.r.status; m->r_value = f2.u.r.value; m->r_n++; }
+            else if (t2 == (int32_t)LINKV2_H) { m->h_valid = 1U; m->h_win_lo_dv = f2.u.h.vin_min_dv; m->h_win_hi_dv = f2.u.h.vin_max_dv; m->h_vout_max_dv = f2.u.h.vout_max_dv; m->h_rst = f2.u.h.rst; m->h_tuned = f2.u.h.tuned; m->h_prof_cap = f2.u.h.prof_cap; m->h_prof_kib = f2.u.h.prof_kib; m->h_prof_kiu = f2.u.h.prof_kiu; m->h_prof_vref_dv = f2.u.h.prof_vref_dv; m->h_prof_maxc_dv = f2.u.h.prof_maxc_dv; m->h_prof_n = f2.u.h.prof_n; m->h_prof_knee = f2.u.h.prof_knee; }
         }
     }
     *rd = r;
-    g_mon.frames_ok  = s_lrx.frames_ok;
-    g_mon.frames_bad = s_lrx.frames_bad;
-    g_mon.overflows  = s_lrx.overflows;
+    m->frames_ok  = lrx->frames_ok;
+    m->frames_bad = lrx->frames_bad;
+    m->overflows  = lrx->overflows;
+}
+
+void Mon_ProcessBytes(const volatile uint8_t *ring, uint32_t ring_size,
+                      uint32_t *rd, uint32_t wr, uint32_t now_ms)
+{
+    Mon_ProcessBytesCtx(&g_mon, &s_lrx, &s_l2rx, &s_fps_count, ring, ring_size, rd, wr, now_ms);        /* the R link */
 }
 
 void Mon_Tick(uint32_t now_ms)
@@ -362,6 +371,14 @@ uint32_t MonLcd_Step(MonLcd_t *l, const char want[MON_LCD_ROWS][MON_LCD_COLS + 1
 #ifndef MON_HOST_TEST
 
 extern UART_HandleTypeDef huart1;
+#if (MASTER_YB_LINKS == 1)
+extern UART_HandleTypeDef huart3, huart4;                  /* B: USART3 (PB2 TX, PB0 RX), Y: USART4 (PC10 TX, PC11 RX) */
+extern DMA_HandleTypeDef  hdma_usart3_rx, hdma_usart4_rx;
+static volatile uint8_t s_rx_yb[MLINKS_N][MON_RXBUF_SIZE];                                       /* the DMA rings of the Y (0) and B (1) links */
+static uint32_t s_rd_yb[MLINKS_N];
+static UART_HandleTypeDef *const s_uart_yb[MLINKS_N] = { &huart4, &huart3 };
+static DMA_HandleTypeDef  *const s_dma_yb[MLINKS_N]  = { &hdma_usart4_rx, &hdma_usart3_rx };
+#endif
 extern DMA_HandleTypeDef  hdma_usart1_rx;
 
 static volatile uint8_t s_rx[MON_RXBUF_SIZE];
@@ -435,6 +452,21 @@ static void rx_start(void)
     }
     SET_BIT(huart1.Instance->CR3, USART_CR3_DMAR);      /* USART RX -> DMA requests */
     s_rd = 0U;
+#if (MASTER_YB_LINKS == 1)
+    {   /* the Y and B links, the same way: circular DMA into a ring, no interrupts, no HAL receive state */
+        uint8_t i;
+        MLinks_Init();
+        for (i = 0U; i < MLINKS_N; i++)
+        {
+            s_dma_yb[i]->Init.Mode = DMA_CIRCULAR;
+            if (HAL_DMA_DeInit(s_dma_yb[i]) != HAL_OK) Error_Handler();
+            if (HAL_DMA_Init(s_dma_yb[i])   != HAL_OK) Error_Handler();
+            if (HAL_DMA_Start(s_dma_yb[i], (uint32_t)&s_uart_yb[i]->Instance->RDR, (uint32_t)s_rx_yb[i], MON_RXBUF_SIZE) != HAL_OK) Error_Handler();
+            SET_BIT(s_uart_yb[i]->Instance->CR3, USART_CR3_DMAR);
+            s_rd_yb[i] = 0U;
+        }
+    }
+#endif
 }
 
 static void rx_service(void)
@@ -465,6 +497,17 @@ static void rx_service(void)
     wr = (MON_RXBUF_SIZE - hdma_usart1_rx.Instance->CNDTR) & (MON_RXBUF_SIZE - 1U);
     Mon_ProcessBytes(s_rx, MON_RXBUF_SIZE, &s_rd, wr, HAL_GetTick());
     Mon_Tick(HAL_GetTick());
+#if (MASTER_YB_LINKS == 1)
+    {   uint8_t i;
+        for (i = 0U; i < MLINKS_N; i++)
+        {
+            uint32_t yisr = s_uart_yb[i]->Instance->ISR, ywr;
+            if ((yisr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE)) != 0U) s_uart_yb[i]->Instance->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;      /* never stall */
+            ywr = (MON_RXBUF_SIZE - s_dma_yb[i]->Instance->CNDTR) & (MON_RXBUF_SIZE - 1U);
+            MLinks_Feed(i, s_rx_yb[i], MON_RXBUF_SIZE, &s_rd_yb[i], ywr, HAL_GetTick());
+        }
+    }
+#endif
 }
 
 void MasterMonitor_Run(void)
@@ -617,13 +660,25 @@ void MasterApp_Run(void)
             if (MApp_TakeRunDirty(&app) != 0U) MHours_Save(&s_hours_io, MApp_RunMinutes(&app));      /* once a minute while the output is on */
 #endif
             d.slave_wdg = (uint8_t)((g_mon.h_valid != 0U) && (g_mon.h_rst == 1U));       /* the slave's last reset was its watchdog */
+#if (MASTER_YB_LINKS == 1)
+            { uint8_t yb; for (yb = 0U; yb < MLINKS_N; yb++) MLinks_Fill(yb, &d.yb[yb], now); }          /* the Y and B slaves (all zero while nothing is heard on their cables) */
+#else
+            memset(&d.yb, 0, sizeof d.yb);
+#endif
             d.clock = clk; d.clock_ok = clk_ok; d.rtc_src = rtc_src; d.rtc_bdcr = rtc_bd; d.rtc_icsr = rtc_ic;
             MApp_Step(&app, key_down(MKEY_MENU_PORT, MKEY_MENU_PIN), key_down(MKEY_START_PORT, MKEY_START_PIN), key_down(MKEY_STOP_PORT, MKEY_STOP_PIN),
                       key_down(MKEY_LOG_PORT, MKEY_LOG_PIN), &d, now, want);
 #if (MASTER_RTC_ENABLED == 1)
             {   MDateTime_t nt; if (MApp_TakeClockSet(&app, &nt) != 0U) { MRtc_Set(&nt); clk = nt; clk_ok = 1U; t_clk = now; } }      /* a Date or Time saved in Set-Mode */
 #endif
-            if (MApp_ShowsMonitor(&app) != 0U) Mon_Compose(&g_mon, now, want);       /* the monitor diagnostics, one MENU press away */
+            if (MApp_ShowsMonitor(&app) != 0U)
+            {   /* the monitor diagnostics, one MENU press away. In Industrial and Domestic mode it shows the R, Y and B links in turn, 3 s each: row 0 names the phase letter the slave on that cable reports (a Y board on the B cable says "SLAVE Y" in the B turn). */
+                const MasterMon_t *mm = &g_mon;
+#if (MASTER_YB_LINKS == 1)
+                if (app.settings.mode != (uint8_t)M_MODE_SINGLE) { uint32_t sel = (now / 3000U) % 3U; if (sel == 1U) mm = MLinks_Mon(0U); else if (sel == 2U) mm = MLinks_Mon(1U); }
+#endif
+                Mon_Compose(mm, now, want);
+            }
             if (MApp_ShowsDiag(&app) != 0U) MApp_Diag(&app, now, want);
             if (MApp_ShowsTune(&app) != 0U) MApp_TuneScreen(&app, now, want);          /* the transformer tuning screen over everything */
             if (MApp_ShowsIout(&app) != 0U) MApp_IoutPage(&app, now, want);
@@ -640,6 +695,22 @@ void MasterApp_Run(void)
                     MApp_NoteFrameSent(&app); t_tx = now; last = *c; have_last = 1U;
                 }
             }
+#if (MASTER_YB_LINKS == 1)
+            {   /* the Y and B slaves: their own $M (run level, clear counter), only once heard, and the hello request. About 0.6 ms per frame. */
+                uint8_t yb;
+                for (yb = 0U; yb < MLINKS_N; yb++)
+                {
+                    char bb[LINKV2_MAX_LEN + 8U]; int32_t nn;
+                    nn = MLinks_BuildM(yb, MApp_ControlPh(&app, (uint8_t)(1U + yb)), MApp_ControlValidPh(&app, (uint8_t)(1U + yb)), now, bb, sizeof bb);
+                    if (nn > 0) (void)HAL_UART_Transmit(s_uart_yb[yb], (uint8_t *)bb, (uint16_t)nn, 5U);
+                    if (MLinks_HelloDue(yb, now) != 0U)
+                    {
+                        nn = MLinks_BuildHello(yb, bb, sizeof bb);
+                        if (nn > 0) (void)HAL_UART_Transmit(s_uart_yb[yb], (uint8_t *)bb, (uint16_t)nn, 5U);
+                    }
+                }
+            }
+#endif
             if (MApp_HelloDue(&app, now) != 0U)
             {   /* the slave says hello only at ITS power-up: if this master started later, ask for the slave's limits ($K HELLO) */
                 LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;

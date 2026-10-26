@@ -16,9 +16,17 @@ extern "C" {
 
 #include <stdint.h>
 
-/* Phase this slave regulates, sent in every frame. Fixed for now; it will
- * come from the master / a setting when three-phase operation is built. */
+#include "slave_features.h"          /* slave_config.h: SLAVE_PHASE_ID can be set there */
+
+/* The phase this slave regulates, sent in every status frame: 'R' (the default), 'Y' or 'B'. In a three-phase unit each board is built with its own letter
+ * (#define SLAVE_PHASE_ID 'Y' in its slave_config.h); the master refuses a link that carries the wrong letter, so a swapped serial cable cannot make a
+ * contactor follow the wrong slave. */
+#ifndef SLAVE_PHASE_ID
 #define SLAVE_PHASE_ID          'R'
+#endif
+#if (SLAVE_PHASE_ID != 'R') && (SLAVE_PHASE_ID != 'Y') && (SLAVE_PHASE_ID != 'B')
+#error "SLAVE_PHASE_ID must be 'R', 'Y' or 'B'"
+#endif
 
 /* One status frame every 10 ms = twice per 50 Hz mains cycle, each with a
  * fresh measurement (MEAS_UPDATE_US in slave_meas.h is the same 10 ms). The
