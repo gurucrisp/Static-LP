@@ -1,5 +1,6 @@
 /** @file m_app.c  @brief The application: settings, log, UI and keys together. See m_app.h. */
 #include "m_app.h"
+#include "m_ntc.h"
 
 
 
@@ -114,7 +115,7 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     MLog_Init(&a->log, fl, la, lb);
     MK_Init(&a->keys);
     MF_Init(&a->eng, &a->settings, now);
-    a->retries_cfg = (uint8_t)MF_RETRIES;
+    a->retries_cfg = (uint8_t)MF_RETRIES; a->ntc_heat = 1U;                       /* the heat-sink temperature trips the unit by default (MApp_SetNtcHeat) */
     cal_defaults(&a->cal);                                                  /* until MApp_InitCal: the original firmware's scale and 3 A offset */
     a->k_id = 1U;                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
     MUI_Init(&a->ui, &a->settings, &a->log, now);
@@ -163,6 +164,29 @@ static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 #define TR_LOST 7U      /* our own result code: the $T frames stopped coming */
 
 static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; MUI_Notify(&a->ui, l1, l2, now); }
+
+/* The heat-sink temperature of one phase (v0.9.49): the slave's raw reading is filtered (1/16 per step), converted, and turned into the overheat signal the engine takes
+ * (its Overheat Trip Delay, the restart when cooled and the three-trips rule are the engine's): asserted at the Overheat Temp, released HYST (10 degC) below it.
+ * A SHORT reading counts as overheat (fail-safe); an OPEN one (no NTC fitted, a broken wire) is shown but never trips. No fresh reading: no signal. */
+static void ntc_update(MApp_t *a, uint8_t ph, uint8_t valid, uint16_t raw)
+{
+    int16_t t; int32_t trip = (int32_t)a->settings.heat_temp * 10;
+    if (valid == 0U) { a->ntc_have[ph] = 0U; a->heat_on[ph] = 0U; a->temp_st[ph] = 255U; return; }
+    if (a->ntc_have[ph] == 0U) { a->ntc_f16[ph] = (uint32_t)raw * 16U; a->ntc_have[ph] = 1U; }
+    else a->ntc_f16[ph] = (uint32_t)((int32_t)a->ntc_f16[ph] + (((int32_t)raw * 16 - (int32_t)a->ntc_f16[ph]) / 16));
+    a->temp_st[ph] = MNtc_RawToDeci((uint16_t)((a->ntc_f16[ph] + 8U) / 16U), &t); a->temp_dc[ph] = t;
+    if (a->ntc_heat == 0U) { a->heat_on[ph] = 0U; return; }
+    if (a->temp_st[ph] == MNTC_SHORT) a->heat_on[ph] = 1U;
+    else if (a->temp_st[ph] == MNTC_OPEN) a->heat_on[ph] = 0U;
+    else if ((int32_t)t >= trip) a->heat_on[ph] = 1U;
+    else if ((int32_t)t <= (trip - MAPP_HEAT_HYST_DC)) a->heat_on[ph] = 0U;
+}
+void MApp_SetNtcHeat(MApp_t *a, uint8_t on) { a->ntc_heat = on; }
+uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc)
+{
+    if ((ph > 2U) || (a->ntc_have[ph] == 0U)) { *t_dc = 0; return 255U; }
+    *t_dc = a->temp_dc[ph]; return a->temp_st[ph];
+}
 
 /* The Slave Load Cal page, LOG (v0.9.45). With the unit RUNNING: a typed 00.0 = "no load now": the converter PEAK now is the zero; a typed load = "this is the load now": the gain. Both saved with the settings. */
 static void slcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
@@ -408,7 +432,9 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             uint8_t meas = (uint8_t)((d->have != 0U) && (d->state == 2U) && (dv <= (int32_t)MAPP_BAND_DV) && (dv >= -(int32_t)MAPP_BAND_DV));
             in.ph[0].in_band = (uint8_t)(((d->e_valid != 0U) && (d->in_band != 0U)) || (meas != 0U));
         }
-        in.ph[0].heat = d->heat; in.ph[0].ct_peak = (uint8_t)(d->ct_peak | a->ct_peak_on);
+        ntc_update(a, 0U, d->ntc_valid, d->ntc_raw);
+        for (k = 0U; k < 2U; k++) ntc_update(a, (uint8_t)(1U + k), d->yb[k].ntc_valid, d->yb[k].ntc_raw);
+        in.ph[0].heat = (uint8_t)((d->heat != 0U) || (a->heat_on[0] != 0U)); in.ph[0].ct_peak = (uint8_t)(d->ct_peak | a->ct_peak_on);
         in.ph[0].slave_state = d->state; in.ph[0].state_valid = d->have;                    /* PWM off = load off */
         for (k = 0U; k < 2U; k++)
         {   /* the Y and B slaves (v0.9.48): what the engine needs from each. A slave that is not heard counts as missing, as before. */
@@ -418,7 +444,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             pi->link_ok = s->link_ok; pi->vin_dv = s->vin_dv; pi->vout_dv = s->vout_dv; pi->load_da = (s->load_ok != 0U) ? s->load_da : 0U;
             pi->slave_fault = (uint8_t)((s->have != 0U) ? s->fault : 0U);
             pi->in_band = (uint8_t)(((s->e_valid != 0U) && (s->in_band != 0U)) || (meas != 0U));
-            pi->heat = s->heat; pi->ct_peak = 0U; pi->slave_state = s->state; pi->state_valid = s->have;
+            pi->heat = (uint8_t)((s->heat != 0U) || (a->heat_on[1U + k] != 0U)); pi->ct_peak = 0U; pi->slave_state = s->state; pi->state_valid = s->have;
         }
         in.setmode = (uint8_t)((MUI_SetModeOpen(&a->ui) != 0U) || (a->tune_state != 0U)); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : a->run_min_total;       /* the log time: the real-time clock when it is set, else the running minutes */
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
@@ -702,6 +728,17 @@ void MApp_ProfilePage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_CO
 uint8_t MApp_ShowsIout(const MApp_t *a) { return MUI_ShowsIout(&a->ui); }
 
 /* The converter-side current page (LOG, then MENU x7): what the slave's CT2500 chain (net I-OUT) measures, to check the scaling against a clamp meter on the same conductor. It is the CT PRIMARY current. */
+/* the last row of the Converter Current page: the R slave's heat-sink temperature (v0.9.49) */
+static void heat_row(const MApp_t *a, char *t)
+{
+    int16_t dc; uint8_t st = MApp_TempDeci(a, 0U, &dc); uint32_t v;
+    if (st == 255U)       { copy(t, "Heat Sink  ---"); return; }
+    if (st == MNTC_OPEN)  { copy(t, "Heat Sink: no NTC"); return; }
+    if (st == MNTC_SHORT) { copy(t, "OVERHEAT: NTC short"); return; }
+    copy(t, (a->heat_on[0] != 0U) ? "OVERHEAT  000.0 C" : "Heat Sink 000.0 C");
+    v = (dc < 0) ? (uint32_t)(-(int32_t)dc) : (uint32_t)dc;
+    t[10] = (dc < 0) ? '-' : (char)('0' + ((v / 1000U) % 10U)); t[11] = (char)('0' + ((v / 100U) % 10U)); t[12] = (char)('0' + ((v / 10U) % 10U)); t[14] = (char)('0' + (v % 10U));
+}
 void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
 {
     const MAppData_t *d = &a->last; uint32_t r, c, n; char t[24]; (void)now;
@@ -714,9 +751,9 @@ void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS 
         for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
         copy(t, "Peak  00.00 A"); t[6] = (char)('0' + ((pk / 1000U) % 10U)); t[7] = (char)('0' + ((pk / 100U) % 10U)); t[9] = (char)('0' + ((pk / 10U) % 10U)); t[10] = (char)('0' + (pk % 10U)); if (t[6] == '0') t[6] = ' ';
         for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
-        copy(t, (d->iout_clip != 0U) ? "OVER RANGE (clipped)" : "CT primary current");
+        if (d->iout_clip != 0U) copy(t, "OVER RANGE (clipped)"); else heat_row(a, t);
     }
-    else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; copy(t, "Not measured"); }
+    else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; heat_row(a, t); }
     for (n = 0U; (t[n] != '\0') && (n < MUI_COLS); n++) frame[3][n] = t[n];
 }
 

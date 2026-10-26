@@ -712,10 +712,10 @@ static void t_iout_page(void)
     CHECK(MApp_ShowsIout(&A), "LOG, then MENU x7 opens the Converter Current page");
     /* the slave does not measure it (an older slave, or SLAVE_IOUT 0) */
     D.iout_valid = 0U; D.iout_rms_ca = 0U; D.iout_pk_ca = 0U; run(100U); MApp_IoutPage(&A, T, fr);
-    CHECK(strstr(fr[0], "Converter Current") != NULL && strstr(fr[1], "--.--") != NULL && strstr(fr[2], "--.--") != NULL && strstr(fr[3], "Not measured") != NULL, "not measured: dashes and 'Not measured' ('%s' / '%s' / '%s' / '%s')", fr[0], fr[1], fr[2], fr[3]);
+    CHECK(strstr(fr[0], "Converter Current") != NULL && strstr(fr[1], "--.--") != NULL && strstr(fr[2], "--.--") != NULL && strstr(fr[3], "Heat Sink") != NULL, "not measured: dashes, and the heat sink line instead of a hint ('%s' / '%s' / '%s' / '%s')", fr[0], fr[1], fr[2], fr[3]);
     /* the full load of the original board: 5.89 A RMS, 8.31 A peak */
     D.iout_valid = 1U; D.iout_rms_ca = 589U; D.iout_pk_ca = 831U; D.iout_clip = 0U; run(100U); MApp_IoutPage(&A, T, fr);
-    CHECK(strncmp(fr[1], "RMS    5.89 A", 13) == 0 && strncmp(fr[2], "Peak   8.31 A", 13) == 0 && strstr(fr[3], "CT primary current") != NULL, "5.89 A and 8.31 A: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
+    CHECK(strncmp(fr[1], "RMS    5.89 A", 13) == 0 && strncmp(fr[2], "Peak   8.31 A", 13) == 0 && strstr(fr[3], "Heat Sink") != NULL, "5.89 A and 8.31 A, and the heat sink line: '%s' / '%s' / '%s'", fr[1], fr[2], fr[3]);
     D.iout_rms_ca = 7U; D.iout_pk_ca = 12U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS    0.07 A", 13) == 0 && strncmp(fr[2], "Peak   0.12 A", 13) == 0, "0.07 A and 0.12 A keep their zeros ('%s' / '%s')", fr[1], fr[2]);
     D.iout_rms_ca = 0U; D.iout_pk_ca = 0U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS    0.00 A", 13) == 0 && strstr(fr[3], "Not measured") == NULL, "a measured zero is shown as 0.00 A, not as 'not measured'");
     D.iout_rms_ca = 1234U; D.iout_pk_ca = 3999U; run(100U); MApp_IoutPage(&A, T, fr); CHECK(strncmp(fr[1], "RMS   12.34 A", 13) == 0 && strncmp(fr[2], "Peak  39.99 A", 13) == 0, "12.34 A and 39.99 A fit the line ('%s' / '%s')", fr[1], fr[2]);
@@ -979,6 +979,51 @@ static void t_three_phase_app(void)
     printf("  three phases in the application: Domestic units independent, a lost or faulty phase touches only itself, Industrial all or nothing, per-phase control frames and clear counters, Single unchanged\n");
 }
 
+
+/* ---- v0.9.49: the heat-sink temperature (the slave's NTC) trips the unit ---- */
+static uint16_t raw_of(double tc) { double t = tc + 273.15, r = 10000.0 * exp(3950.0 * (1.0 / t - 1.0 / 298.15)); return (uint16_t)(4095.0 * r / (r + 1500.0) + 0.5); }
+static void hot(double tc) { D.ntc_valid = 1U; D.ntc_raw = raw_of(tc); }
+static void t_overheat(void)
+{
+    int16_t dc; uint8_t st;
+    /* a normal temperature does nothing, and is shown */
+    fresh(); to_run(); run(9000U); hot(60.0); run(20000U);
+    st = MApp_TempDeci(&A, 0U, &dc);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && st == MNTC_OK && dc >= 595 && dc <= 605, "60 degC: the unit keeps running and the temperature reads %d tenths", (int)dc);
+    { char fr[MUI_ROWS][MUI_COLS + 1U]; float v = -1.0f; MApp_IoutPage(&A, T, fr); (void)sscanf(fr[3], "Heat Sink %f", &v);
+      CHECK(v > 59.4f && v < 60.6f, "the Converter Current page shows 'Heat Sink 060.0 C' ('%s')", fr[3]); }
+    /* above the Overheat Temp (75): after the Overheat Trip Delay (10 s) the contactor opens */
+    hot(80.0); run(9000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "80 degC for 9 s: not yet (the Overheat Trip Delay is 10 s)");
+    run(2500U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && MApp_Engine(&A)->fault[0] == MLOG_T_HEAT, "after 10 s the unit trips: Overheat (fault %u)", (unsigned)MApp_Engine(&A)->fault[0]);
+    { char fr[MUI_ROWS][MUI_COLS + 1U]; MApp_IoutPage(&A, T, fr); CHECK(strstr(fr[3], "OVERHEAT") != NULL, "and the page says OVERHEAT ('%s')", fr[3]); }
+    /* 70 degC is below the trip but within 10 degC of it: still hot (hysteresis) */
+    hot(70.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "cooling to 70 degC is not enough: the unit stays off (the restart needs 65 degC or less)");
+    hot(64.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MApp_Engine(&A)->fault[0] == 0U, "at 64 degC it is cooled: the unit restarts by itself");
+    /* the setting decides */
+    fresh(); to_run(); run(9000U); A.settings.heat_temp = 90U; hot(80.0); run(30000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "with the Overheat Temp at 90, 80 degC is fine");
+    hot(95.0); run(12500U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "and 95 degC trips");
+    /* a missing NTC (open) is shown, never a trip; a shorted one is a trip */
+    fresh(); to_run(); run(9000U); D.ntc_valid = 1U; D.ntc_raw = 4095U; run(30000U); st = MApp_TempDeci(&A, 0U, &dc);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && st == MNTC_OPEN, "no NTC fitted (reading 4095): the unit runs, the temperature is 'open'");
+    { char fr[MUI_ROWS][MUI_COLS + 1U]; MApp_IoutPage(&A, T, fr); CHECK(strstr(fr[3], "no NTC") != NULL, "and the page says so ('%s')", fr[3]); }
+    D.ntc_raw = 10U; run(12500U); st = MApp_TempDeci(&A, 0U, &dc); CHECK(MApp_Engine(&A)->contactor[0] == 0U && st == MNTC_SHORT && MApp_Engine(&A)->fault[0] == MLOG_T_HEAT, "a shorted NTC (reading 10) is treated as overheat");
+    /* the switch, and no reading */
+    fresh(); to_run(); MApp_SetNtcHeat(&A, 0U); run(9000U); hot(100.0); run(30000U); st = MApp_TempDeci(&A, 0U, &dc);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && st == MNTC_OK && dc > 990, "with MASTER_NTC_HEAT 0 the temperature (100 degC) is only shown: no trip");
+    fresh(); to_run(); run(9000U); D.ntc_valid = 0U; D.ntc_raw = raw_of(120.0); run(30000U); st = MApp_TempDeci(&A, 0U, &dc);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U && st == 255U, "a reading that is not fresh (the link is not heard) is ignored: no trip, no value");
+    /* a flicker above the trip that does not last the delay does not trip */
+    fresh(); to_run(); run(9000U); { int k; for (k = 0; k < 20; k++) { hot(80.0); run(4000U); hot(60.0); run(4000U); } }
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "80 degC for 4 s, then 60 for 4 s, again and again: never trips (the delay restarts each time)");
+    /* THREE PHASES: only the hot phase's unit trips */
+    three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U); D.yb[0].ntc_valid = 1U; D.yb[0].ntc_raw = raw_of(85.0); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(50.0); run3(12500U);
+    { const MFOut_t *o = MApp_Engine(&A); int16_t dy, db; uint8_t sy = MApp_TempDeci(&A, 1U, &dy), sb = MApp_TempDeci(&A, 2U, &db);
+      CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_HEAT && sy == MNTC_OK && sb == MNTC_OK && dy > 840 && db > 490 && db < 510, "Domestic: the Y heat sink is at 85 degC: ONLY the Y unit trips (contactors %u %u %u, Y %d, B %d)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (int)dy, (int)db); }
+    three_fresh((uint8_t)M_MODE_INDUSTRIAL); run3(12000U); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(88.0); run3(12500U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U && MApp_ControlPh(&A, 0)->run == 0U && MApp_ControlPh(&A, 2)->run == 0U, "Industrial: the B heat sink at 88 degC stops all three");
+    printf("  overheat from the NTC: trip after the delay, 10 degC hysteresis, restart when cooled, the setting, open and short, the switch, a flicker, per phase\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -1037,6 +1082,7 @@ int main(void)
     t_profile_page();
     t_slave_load();
     t_three_phase_app();
+    t_overheat();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();

@@ -8,6 +8,7 @@
 #define M_APP_H
 #include <stdint.h>
 #include "m_ui.h"
+#include "m_ntc.h"
 #include "m_ctl.h"
 
 /* one display filter: the filtered reading, the number shown, whether it is initialised, when the shown number last changed */
@@ -46,6 +47,7 @@ typedef struct
     uint8_t  clr_echo;                 /* its clear counter, to start the master's from                                                */
     uint16_t vin_dv, vout_dv;          /* its input and output, tenths of a volt                                                       */
     uint16_t load_da; uint8_t load_ok; /* its load, tenths of an ampere (from its converter current, a later step)                     */
+    uint16_t ntc_raw; uint8_t ntc_valid; /* its heat-sink NTC: the 12 bit reading of PA5 / it is fresh (v0.9.49)                         */
 } MAppSlave_t;
 
 typedef struct
@@ -85,6 +87,7 @@ typedef struct
     uint8_t  h_valid;            /* a $H frame was received: the three below are the slave's own limits */
     uint16_t win_lo_dv, win_hi_dv, vout_max_dv;   /* the slave's input window and output guard, tenths of a volt */
     MAppSlave_t yb[2];                  /* [0] = the Y slave, [1] = the B slave: the Industrial and Domestic modes use them (v0.9.48) */
+    uint16_t ntc_raw; uint8_t ntc_valid;   /* the R slave's heat-sink NTC: the 12 bit reading of PA5 (the $S frame) / it is fresh (v0.9.49) */
 } MAppData_t;
 
 typedef struct
@@ -98,6 +101,9 @@ typedef struct
     MFaults_t    eng;                  /* the fault and restart engine: it decides run, the clear pulses, the contactor and the buzzer */
     MFOut_t      eout;
     MCtlOut_t    ctl_out;
+    uint8_t      ntc_heat;                         /* 1 = the heat-sink temperature trips the unit (the default); 0 = it is only shown */
+    uint32_t     ntc_f16[3];                       /* the filtered reading x 16, per phase (R, Y, B) */
+    uint8_t      ntc_have[3], heat_on[3], temp_st[3]; int16_t temp_dc[3];
     MCtlOut_t    ctl_out_yb[2];                    /* the $M content for the Y and B slaves */
     uint8_t      clr_cnt_yb[2], clr_synced_yb[2], ctl_valid_yb[2], have_seen_yb[2];
     uint32_t     t_first_have_yb[2];
@@ -142,6 +148,10 @@ void    MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t page_set_a, uint32_t p
 /* call every few ms: raw key levels (1 = pressed) and the slave's latest data; fills the frame to draw */
 void    MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);
 uint8_t MApp_SetModeOpen(const MApp_t *a);      /* the output must be off while this is 1 */
+#define MAPP_HEAT_HYST_DC   100     /* the unit may restart when the heat sink is this much (10 degC, in tenths) below the trip temperature */
+void    MApp_SetNtcHeat(MApp_t *a, uint8_t on);                       /* MASTER_NTC_HEAT: 1 = the temperature trips the unit */
+/* the heat-sink temperature of phase ph (0 R, 1 Y, 2 B), tenths of a degC: returns MNTC_OK / MNTC_OPEN / MNTC_SHORT, or 255 = no reading */
+uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc);
 const MCtlOut_t *MApp_ControlPh(const MApp_t *a, uint8_t ph);   /* the $M content for phase ph: 0 = R (MApp_Control), 1 = Y, 2 = B */
 uint8_t MApp_ControlValidPh(const MApp_t *a, uint8_t ph);       /* as MApp_ControlValid, per phase */
 const MCtlOut_t *MApp_Control(const MApp_t *a); /* the content of the $M frame to send to the slave (the caller sends it every 100 ms, and at once when it changes) */

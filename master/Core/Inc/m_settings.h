@@ -47,7 +47,11 @@ typedef struct
     uint8_t  load_src;         /* 0 = the load current is the master CT's, 1 = the slave's converter current, converted by the slave load calibration (v0.9.45)  */
     uint16_t sl_zero_ca;       /* the slave load calibration's zero: the converter-current PEAK at no load with the unit running, hundredths of an ampere 0..4000 */
     uint16_t sl_gain;          /* its gain, thousandths: load = (peak - zero) x gain / 1000; 0 = not calibrated, else 200..5000 */
+    uint8_t  heat_temp;        /* Overheat Temp: the heat-sink temperature that trips the unit, degC 50..120 (v0.9.49). Stored in byte 27 of the record; 0 there (an older record) means the default */
 } MSettings_t;
+#define MS_HEAT_TEMP_DEFAULT  75U
+#define MS_HEAT_TEMP_MIN      50U
+#define MS_HEAT_TEMP_MAX     120U
 
 /* what the slave announced in $H (D7, D26) and what the master knows; used to reject cut-offs the slave would never let be reached */
 typedef struct { uint16_t win_lo_v, win_hi_v; uint16_t out_guard_v; } MLimits_t;
@@ -55,7 +59,7 @@ typedef struct { uint16_t win_lo_v, win_hi_v; uint16_t out_guard_v; } MLimits_t;
 typedef enum
 {
     MS_OK = 0, MS_BAD_MODE, MS_BAD_SET_V, MS_BAD_MAXCORR, MS_BAD_IP_LV, MS_BAD_IP_HV, MS_BAD_OP_LV, MS_BAD_OP_HV, MS_BAD_VOLT_DELAY, MS_BAD_OVL_CURRENT,
-    MS_BAD_OVL_DELAY, MS_BAD_HEAT_DELAY, MS_BAD_SCROLL_TIME, MS_BAD_PASSWORD, MS_BAD_RESTART_TIME, MS_BAD_FLAG
+    MS_BAD_OVL_DELAY, MS_BAD_HEAT_DELAY, MS_BAD_SCROLL_TIME, MS_BAD_PASSWORD, MS_BAD_RESTART_TIME, MS_BAD_HEAT_TEMP, MS_BAD_FLAG
 } MSErr_t;
 
 #define MS_PACK_LEN  32U

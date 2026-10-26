@@ -425,6 +425,32 @@ static void t_load_source_item(void)
     printf("  load source item: after Overload Current, toggles Master CT / Slave, saved; Factory Reset keeps the slave load calibration\n");
 }
 
+/* ---- v0.9.49: the Overheat Temp item ---- */
+static void t_overheat_temp_item(void)
+{
+    uint8_t ids[32]; int n, i, p12 = -1, p26 = -1;
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); n = walk(ids);
+    for (i = 0; i < n; i++) { if (ids[i] == 12U) p12 = i; if (ids[i] == 26U) p26 = i; }
+    CHECK(p12 >= 0 && p26 == p12 + 1, "Overheat Temp (26) sits right after Overheat Trip Delay (12)");
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U);
+    CROW(1, "Overheat Temp"); CHECK(strstr(row(2), "075") != NULL && strstr(row(2), "C") != NULL, "it shows 075 C by default ('%s')", row(2));
+    { static const uint8_t bad[] = { 0U, 49U, 121U, 255U }; unsigned b;
+      for (b = 0U; b < sizeof bad; b++)
+      {
+          int g; ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U); U.work.heat_temp = bad[b];
+          for (g = 0; g < 40 && MUI_SetModeOpen(&U) && strstr(row(1), "Invalid Value") == NULL; g++) { key(MK_MENU_SHORT); tick(100U); }
+          CHECK(strstr(row(1), "Invalid Value") != NULL, "%u degC is refused when Set-Mode is left", (unsigned)bad[b]);
+          tick(1600U); CHECK(MUI_SetModeOpen(&U) && U.item == 26U, "and Set-Mode stays open on the Overheat Temp item (item %u)", (unsigned)U.item);
+      }
+      { static const uint8_t good[] = { 50U, 75U, 90U, 120U }; for (b = 0U; b < sizeof good; b++)
+        { int g; ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U); U.work.heat_temp = good[b]; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); }
+          CHECK(!MUI_SetModeOpen(&U) && S.heat_temp == good[b], "%u degC is accepted and saved (%u)", (unsigned)good[b], (unsigned)S.heat_temp); } } }
+    /* Factory Reset puts it back to 75 */
+    ui_reset(M_MODE_SINGLE); to_run(); S.heat_temp = 95U; enter_set(); goto_item(22U); key(MK_START); key(MK_MENU_SHORT); tick(100U);
+    CHECK(S.heat_temp == 75U, "Factory Reset puts the Overheat Temp back to 75 degC (%u)", (unsigned)S.heat_temp);
+    printf("  overheat temperature item: after the trip delay, shows 075 C, 50 to 120 accepted, the rest refused, Factory Reset gives 75\n");
+}
+
 static void t_setmode_nav(void)
 {
     uint8_t ids[32]; int n, m; MSettings_t *w;
@@ -438,7 +464,7 @@ static void t_setmode_nav(void)
     CHECK(ids[0] == 1U && ids[1] == 2U && ids[2] == 3U && ids[3] == 4U && ids[4] == 5U, "the first items are Mode, Calibration, Set Voltage, Max Correction, I/P LV");
     for (m = 0; m < n; m++) if (ids[m] == 13U || ids[m] == 14U || ids[m] == 15U) break;
     CHECK(m == n, "Single mode: Phase Sequence, Display Scroll and Scroll Time are not offered");
-    CHECK(n == 22, "Single mode with Auto restart offers 22 items: the 19 before, Load Source, Date and Time (%d)", n);
+    CHECK(n == 23, "Single mode with Auto restart offers 23 items: the 19 before, Load Source, Overheat Temp, Date and Time (%d)", n);
     CHECK(ids[n - 1] == 22U, "the last is Factory Reset");
     CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SAVE), "one round of the items is complete: the MENU press on the last one LEAVES Set-Mode (saving), it does not start again");
     CHECK(strstr(row(0), "O/P") != NULL, "and Run-Mode is shown");
@@ -447,11 +473,11 @@ static void t_setmode_nav(void)
     ui_reset(M_MODE_INDUSTRIAL); to_run(); enter_set();
     n = walk(ids);
     { int has13 = 0, has14 = 0, has15 = 0; for (m = 0; m < n; m++) { if (ids[m] == 13U) has13 = 1; if (ids[m] == 14U) has14 = 1; if (ids[m] == 15U) has15 = 1; }
-      CHECK(has13 && has14 && has15 && n == 25, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 25 items (%d)", n); }
+      CHECK(has13 && has14 && has15 && n == 26, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 26 items (%d)", n); }
     /* Domestic: no Phase Sequence */
     ui_reset(M_MODE_DOMESTIC); to_run(); enter_set();
     n = walk(ids);
-    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 24, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 24 items (%d)", n); }
+    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 25, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 25 items (%d)", n); }
     /* Manual restart hides Restart Time; Scroll No hides Scroll Time */
     ui_reset(M_MODE_INDUSTRIAL); S.restart_auto = 0U; S.scroll = 0U; to_run(); enter_set();
     n = walk(ids);
@@ -659,6 +685,7 @@ int main(void)
     t_cal_page();
     t_slave_cal_page();
     t_load_source_item();
+    t_overheat_temp_item();
     t_vcal_pages();
     t_log_viewer();
     t_setmode_nav();

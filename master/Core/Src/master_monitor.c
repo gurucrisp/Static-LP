@@ -595,6 +595,7 @@ void MasterApp_Run(void)
     MApp_BootReset(&app, g_mon.rst_wdg);                                         /* a restart by the watchdog is logged */
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
     MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
+    MApp_SetNtcHeat(&app, (uint8_t)MASTER_NTC_HEAT);                              /* the heat-sink temperature trips the unit (the Overheat Temp in Set-Mode) */
     rx_start();
 #if (MASTER_TEST_NO_VOLTAGE_CUTS != 0)
     MUI_Notify(&app.ui, "TEST: NO V CUTS", "Not For Field Use", HAL_GetTick());                  /* every start of a build with the voltage cuts removed says so */
@@ -636,6 +637,7 @@ void MasterApp_Run(void)
                 d.iout_valid = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_VALID) != 0U)); d.iout_clip = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U));
                 d.in_band = (uint8_t)(e_fresh && ((g_mon.e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
                 d.heat = 0U; d.ct_peak = 0U;
+                d.ntc_raw = g_mon.last.ntc_raw; d.ntc_valid = d.have;                       /* the R slave's heat-sink NTC, in every $S frame */
                 d.wait_valid = (uint8_t)((g_mon.last.state == 1U) && ((g_mon.last.flags & 0x8000U) != 0U));       /* the slave waits in SYNC and says what for */
                 d.wait_ctx   = (uint8_t)((g_mon.last.flags >> 8) & 0x7FU);
                 d.h_valid = g_mon.h_valid; d.win_lo_dv = g_mon.h_win_lo_dv; d.win_hi_dv = g_mon.h_win_hi_dv; d.vout_max_dv = g_mon.h_vout_max_dv;

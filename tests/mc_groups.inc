@@ -892,12 +892,12 @@ static void t_mc_iout(void)
     ma_start(1U, 225.0f); (void)ma_until(ma_c_contactor, 90000U); ma_run(3000U);
     /* a slave without the I-OUT channel: the old 6-field $E, the page says "Not measured" */
     e2e_iout_on = 0U; { int q; ma_tap(3, 100U); for (q = 0; q < 7; q++) ma_tap(0, 100U); } ma_run(500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(MUI_ShowsIout(&ma.ui) != 0U, "LOG, MENU x7: the Converter Current page");
-    CHECK(strstr(ma_f[3], "Not measured") != NULL && strstr(ma_f[1], "--.--") != NULL, "a slave without the channel: 'Not measured' ('%s' / '%s')", ma_f[3], ma_f[1]);
+    CHECK(strstr(ma_f[3], "Heat Sink") != NULL && strstr(ma_f[1], "--.--") != NULL, "a slave without the channel: dashes (and the heat sink line, not a hint) ('%s' / '%s')", ma_f[3], ma_f[1]);
     { int i, six = 0, eight = 0; LinkV2Frame_t f; char c; for (i = 0; i < e2e_cnt; i++) if (LinkV2_Parse(e2e_f[i], (uint32_t)e2e_n[i], &f) == LINK_OK && f.type == LINKV2_E) { int j, commas = 0; for (j = 0; (c = e2e_f[i][j]) != '\0' && j < e2e_n[i]; j++) if (c == ',') commas++; if (commas == 6) six++; if (commas == 8) eight++; }
       CHECK(eight == 0, "and it sends the 6-field frame of the first protocol, never the 8-field one (%d six, %d eight)", six, eight); }
     /* a slave that measures it: the values arrive through the link and are shown */
     e2e_iout_on = 1U; e2e_iout_rms = 589U; e2e_iout_pk = 831U; e2e_iout_clip = 0U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f);
-    CHECK(strncmp(ma_f[1], "RMS    5.89 A", 13) == 0 && strncmp(ma_f[2], "Peak   8.31 A", 13) == 0 && strstr(ma_f[3], "CT primary current") != NULL, "a slave that measures 5.89 A / 8.31 A: shown through the real link ('%s' / '%s' / '%s')", ma_f[1], ma_f[2], ma_f[3]);
+    CHECK(strncmp(ma_f[1], "RMS    5.89 A", 13) == 0 && strncmp(ma_f[2], "Peak   8.31 A", 13) == 0 && strstr(ma_f[3], "Heat Sink") != NULL, "a slave that measures 5.89 A / 8.31 A: shown through the real link ('%s' / '%s' / '%s')", ma_f[1], ma_f[2], ma_f[3]);
     e2e_iout_rms = 0U; e2e_iout_pk = 0U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(strncmp(ma_f[1], "RMS    0.00 A", 13) == 0 && strstr(ma_f[3], "Not measured") == NULL, "a measured zero (no load) is 0.00 A, not 'Not measured' (the VALID flag says it is measured) ('%s' / '%s')", ma_f[1], ma_f[3]);
     e2e_iout_rms = 700U; e2e_iout_pk = 1011U; e2e_iout_clip = 1U; ma_run(1500U); MApp_IoutPage(&ma, 0U, ma_f); CHECK(strstr(ma_f[3], "OVER RANGE") != NULL, "the clip flag reaches the page ('%s')", ma_f[3]);
     e2e_iout_on = 0U; e2e_iout_clip = 0U;

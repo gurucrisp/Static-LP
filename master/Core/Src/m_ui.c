@@ -97,13 +97,13 @@ static const char *mode_text(uint8_t m) { return (m == (uint8_t)M_MODE_INDUSTRIA
 /* ---------------------------------------------------------------------------------------------------- Set-Mode items */
 typedef enum { K_NUM = 0, K_MODE, K_YN, K_AUTOMAN, K_DATE, K_TIME, K_LOADSRC } MKind_t;
 typedef struct { uint8_t id; const char *name; uint8_t kind, digits; char unit; } MItem_t;
-#define N_ITEMS 25U
+#define N_ITEMS 26U
 static const MItem_t ITEMS[N_ITEMS] =
 {
     {  1, "Mode",                K_MODE,    0U, ' ' }, {  2, "Calibration",         K_YN,   0U, ' ' }, {  3, "Set Voltage",         K_NUM,  3U, 'V' },
     {  4, "Max Correction",      K_NUM,     3U, 'V' }, {  5, "I/P LV",              K_NUM,  3U, 'V' }, {  6, "I/P HV",              K_NUM,  3U, 'V' },
     {  7, "O/P LV",              K_NUM,     3U, 'V' }, {  8, "O/P HV",              K_NUM,  3U, 'V' }, {  9, "Volt Cut Delay",      K_NUM,  2U, 's' },
-    { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 25, "Load Source",         K_LOADSRC, 0U, ' ' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' },
+    { 10, "Overload Current",    K_NUM,     3U, 'A' }, { 25, "Load Source",         K_LOADSRC, 0U, ' ' }, { 11, "Overload Cut Delay",  K_NUM,  2U, 's' }, { 12, "Overheat Trip Delay", K_NUM,  2U, 's' }, { 26, "Overheat Temp",       K_NUM,  3U, 'C' },
     { 13, "Phase Sequence",      K_YN,      0U, ' ' }, { 14, "Display Scroll",      K_YN,   0U, ' ' }, { 15, "Scroll Time",         K_NUM,  2U, 's' },
     { 16, "Password",            K_NUM,     3U, ' ' }, { 17, "Restart Mode",        K_AUTOMAN, 0U, ' ' }, { 18, "Restart Time",     K_NUM,  3U, 's' },
     { 23, "Date",                K_DATE,    8U, ' ' }, { 24, "Time",                K_TIME, 4U, ' ' },
@@ -130,7 +130,7 @@ static uint16_t item_get(const MSettings_t *s, uint8_t id)
     switch (id)
     {
     case 1: return s->mode;   case 3: return s->set_v;  case 4: return s->maxcorr_v; case 5: return s->ip_lv; case 6: return s->ip_hv; case 7: return s->op_lv; case 8: return s->op_hv;
-    case 9: return s->volt_cut_delay; case 10: return s->ovl_current; case 11: return s->ovl_cut_delay; case 12: return s->heat_delay; case 13: return s->phase_seq; case 14: return s->scroll;
+    case 9: return s->volt_cut_delay; case 10: return s->ovl_current; case 11: return s->ovl_cut_delay; case 12: return s->heat_delay; case 26: return s->heat_temp; case 13: return s->phase_seq; case 14: return s->scroll;
     case 15: return s->scroll_time; case 16: return s->password; case 17: return s->restart_auto; case 18: return s->restart_time; case 25: return s->load_src; default: return 0U;
     }
 }
@@ -139,7 +139,7 @@ static void item_set(MSettings_t *s, uint8_t id, uint16_t v)
     switch (id)
     {
     case 1: s->mode = (uint8_t)v; break;   case 3: s->set_v = v; break;  case 4: s->maxcorr_v = v; break; case 5: s->ip_lv = v; break; case 6: s->ip_hv = v; break; case 7: s->op_lv = v; break; case 8: s->op_hv = v; break;
-    case 9: s->volt_cut_delay = (uint8_t)v; break; case 10: s->ovl_current = v; break; case 11: s->ovl_cut_delay = (uint8_t)v; break; case 12: s->heat_delay = (uint8_t)v; break;
+    case 9: s->volt_cut_delay = (uint8_t)v; break; case 10: s->ovl_current = v; break; case 11: s->ovl_cut_delay = (uint8_t)v; break; case 12: s->heat_delay = (uint8_t)v; break; case 26: s->heat_temp = (uint8_t)v; break;
     case 13: s->phase_seq = (uint8_t)v; break; case 14: s->scroll = (uint8_t)v; break; case 15: s->scroll_time = (uint8_t)v; break; case 16: s->password = v; break;
     case 17: s->restart_auto = (uint8_t)v; break; case 18: s->restart_time = v; break; case 25: s->load_src = (uint8_t)v; break; default: break;
     }
@@ -150,7 +150,7 @@ static uint8_t item_of_error(MSErr_t e)
     {
     case MS_BAD_MODE: return 1U; case MS_BAD_SET_V: return 3U; case MS_BAD_MAXCORR: return 4U; case MS_BAD_IP_LV: return 5U; case MS_BAD_IP_HV: return 6U; case MS_BAD_OP_LV: return 7U; case MS_BAD_OP_HV: return 8U;
     case MS_BAD_VOLT_DELAY: return 9U; case MS_BAD_OVL_CURRENT: return 10U; case MS_BAD_OVL_DELAY: return 11U; case MS_BAD_HEAT_DELAY: return 12U; case MS_BAD_SCROLL_TIME: return 15U;
-    case MS_BAD_PASSWORD: return 16U; case MS_BAD_RESTART_TIME: return 18U; default: return 1U;
+    case MS_BAD_PASSWORD: return 16U; case MS_BAD_HEAT_TEMP: return 26U; case MS_BAD_RESTART_TIME: return 18U; default: return 1U;
     }
 }
 

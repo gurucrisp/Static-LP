@@ -57,6 +57,12 @@ extern "C" {
 /* v0.9.49: the Y and B slave links of a three-phase unit: the receive rings and DMA of USART4 (Y: PC10 TX, PC11 RX) and USART3 (B: PB2 TX, PB0 RX), the $M frames
  * and hello requests to those slaves, and their data for the application. 1 = on (the default). With only the R slave connected nothing is heard on them and nothing is
  * sent (a $M goes out only to a slave that has been heard). 0 = the two ports are left alone, as before v0.9.49. */
+/* v0.9.49: 1 = the heat-sink temperature (the slave's NTC) trips the unit: the Overheat Temp (Set-Mode, default 75 degC) and the Overheat Trip Delay decide. 0 = it is only shown.
+ * (MASTER_HEAT_INPUT, a pin of the master, stays 0: PA5 of the master is the R phase input.) */
+#ifndef MASTER_NTC_HEAT
+#define MASTER_NTC_HEAT         1
+#endif
+
 #ifndef MASTER_YB_LINKS
 #define MASTER_YB_LINKS         1
 #endif

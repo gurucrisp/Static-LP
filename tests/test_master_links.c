@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include "master_links.h"
 #include "m_app.h"
 
@@ -9,9 +10,10 @@ static int g_checks, g_fail;
 #define CHECK(c, ...) do { g_checks++; if (!(c)) { g_fail++; printf("  FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* ---- frames a slave would send ---- */
+static uint16_t g_frame_ntc = 3000U;      /* the NTC reading the next status frame carries */
 static int s_frame(char *b, char ph, uint8_t seq, uint16_t vin, uint16_t vout, uint8_t state, uint16_t fault)
 {
-    LinkStatus_t st; memset(&st, 0, sizeof st); st.phase = ph; st.seq = seq; st.vin_dv = vin; st.vout_dv = vout; st.freq_chz = 5000U; st.state = state; st.fault = fault; st.ntc_raw = 2000U;
+    LinkStatus_t st; memset(&st, 0, sizeof st); st.phase = ph; st.seq = seq; st.vin_dv = vin; st.vout_dv = vout; st.freq_chz = 5000U; st.state = state; st.fault = fault; st.ntc_raw = g_frame_ntc;      /* default 3000: a cool heat sink, about 42 degC (2000 would be 77 degC: above the 75 degC default, the units would trip on overheat) */
     return (int)Link_BuildStatus(b, 96U, &st);
 }
 static int e_frame(char *b, uint8_t seq, uint16_t flags2, uint8_t clr)
@@ -60,6 +62,11 @@ static void t_module(void)
     reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_OVERHEAT, 0U); push(0, b, n); feed(0, 1000U); MLinks_Fill(0, &s0, 1020U);
     CHECK(s0.heat == 1U && s0.in_band == 0U, "the slave's OVERHEAT flag becomes heat = 1");
     MLinks_Fill(0, &s0, 1000U + 900U); CHECK(s0.heat == 0U, "and only while its $E is fresh");
+    /* the heat-sink NTC reading of the slave is passed on, only while the link is fresh */
+    { LinkStatus_t st; memset(&st, 0, sizeof st); st.phase = 'B'; st.seq = 1U; st.vin_dv = 2300U; st.vout_dv = 2300U; st.freq_chz = 5000U; st.state = 2U; st.ntc_raw = 2042U;
+      reset(); n = (int)Link_BuildStatus(b, 96U, &st); push(1, b, n); feed(1, 1000U); MLinks_Fill(1, &s1, 1020U);
+      CHECK(s1.ntc_valid == 1U && s1.ntc_raw == 2042U, "the B slave's NTC reading (2042) reaches the application (%u)", (unsigned)s1.ntc_raw);
+      MLinks_Fill(1, &s1, 1700U); CHECK(s1.ntc_valid == 0U && s1.ntc_raw == 0U, "and is gone when the link is silent"); }
     /* $S keeps arriving but the $E stops: after 500 ms the slave is no longer "in band" */
     reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_IN_BAND, 0U); push(0, b, n); feed(0, 1000U); MLinks_Fill(0, &s0, 1100U);
     CHECK(s0.in_band == 1U, "in band while its $E is fresh");
@@ -128,10 +135,11 @@ static MApp_t A; static MAppData_t D; static uint32_t T; static char F[4][21]; s
 typedef struct
 {   /* a simulated slave on a cable */
     char     letter; uint8_t silent, seq, state, fault, run_seen, clr_seen, h_pending, h_sent, rx_started;
-    uint16_t vin, vout; uint32_t t_s, t_e, t_run, n_m; LinkV2Rx_t rx;
+    uint16_t vin, vout, ntc; uint32_t t_s, t_e, t_run, n_m; LinkV2Rx_t rx;
 } Sim_t;
+static uint16_t raw_of(double tc) { double k = tc + 273.15, r = 10000.0 * exp(3950.0 * (1.0 / k - 1.0 / 298.15)); return (uint16_t)(4095.0 * r / (r + 1500.0) + 0.5); }
 static Sim_t SM[2];
-static void sim_init(Sim_t *s, char letter) { memset(s, 0, sizeof *s); s->letter = letter; s->vin = 2300U; s->vout = 2300U; s->h_pending = 3U; LinkV2Rx_Init(&s->rx); }
+static void sim_init(Sim_t *s, char letter) { memset(s, 0, sizeof *s); s->letter = letter; s->vin = 2300U; s->vout = 2300U; s->ntc = 3000U; s->h_pending = 3U; LinkV2Rx_Init(&s->rx); }
 static void sim_tick(int link, uint32_t now)
 {
     Sim_t *s = &SM[link]; char b[96]; int n;
@@ -140,7 +148,7 @@ static void sim_tick(int link, uint32_t now)
     if ((s->state == 1U) && ((uint32_t)(now - s->t_run) >= 500U)) s->state = 2U;
     if ((s->run_seen == 0U) && (s->state != 3U)) s->state = 0U;
     s->vout = (s->state == 2U) ? 2300U : s->vin;
-    if ((uint32_t)(now - s->t_s) >= 10U) { s->t_s = now; n = s_frame(b, s->letter, s->seq++, s->vin, s->vout, s->state, s->fault); push((uint8_t)link, b, n); }
+    if ((uint32_t)(now - s->t_s) >= 10U) { s->t_s = now; g_frame_ntc = s->ntc; n = s_frame(b, s->letter, s->seq++, s->vin, s->vout, s->state, s->fault); g_frame_ntc = 3000U; push((uint8_t)link, b, n); }
     if ((uint32_t)(now - s->t_e) >= 100U) { s->t_e = now; n = e_frame(b, s->seq, (uint16_t)((s->state == 2U) ? LINKV2_FLAG_IN_BAND : 0U), s->clr_seen); push((uint8_t)link, b, n); }
     if (s->h_pending != 0U) { s->h_pending--; n = h_frame(b); push((uint8_t)link, b, n); }
 }
@@ -188,6 +196,11 @@ static void t_loop(void)
     CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U && SM[0].state == 2U && SM[1].state == 2U, "closed loop, Domestic: the application starts the Y and B slaves over the links and the three contactors close (%u %u %u, slaves %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)SM[0].state, (unsigned)SM[1].state);
     CHECK(MLinks_Mon(0)->frames_bad == 0U && MLinks_Mon(1)->frames_bad == 0U && SM[0].n_m > 100U && SM[1].n_m > 100U, "no bad frame on either link, and each slave received more than 100 $M frames (%u, %u)", (unsigned)SM[0].n_m, (unsigned)SM[1].n_m);
     CHECK(MLinks_Mon(0)->h_valid == 1U && MLinks_Mon(1)->h_valid == 1U, "both slaves' hellos were received");
+    /* the Y heat sink gets hot (85 degC in its status frames): only the Y unit trips, and it restarts when cooled */
+    SM[0].ntc = raw_of(85.0); loop(12500U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_HEAT, "the Y slave reports an 85 degC heat sink over the link: ONLY the Y unit trips on Overheat (contactors %u %u %u, faults %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[0], (unsigned)o->fault[1], (unsigned)o->fault[2]);
+    SM[0].ntc = raw_of(55.0); loop(90000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[1] == 1U && o->contactor[0] == 1U && o->contactor[2] == 1U, "cooled to 55 degC: the Y unit restarts by itself (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
     /* a cable cut to Y */
     SM[0].silent = 1U; loop(4000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] != 0U, "the Y cable is cut: ONLY the Y unit trips (contactors %u %u %u, faults %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[0], (unsigned)o->fault[1], (unsigned)o->fault[2]);

@@ -53,6 +53,7 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)
     s->have = 1U; s->link_ok = 1U;
     s->vin_dv = m->last.vin_dv; s->vout_dv = m->last.vout_dv;
     s->state = m->last.state; s->fault = (uint8_t)m->last.fault;
+    s->ntc_raw = m->last.ntc_raw; s->ntc_valid = 1U;                                          /* the slave's heat-sink NTC */
     s->in_band = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
     s->heat    = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_OVERHEAT) != 0U));       /* the slave's own overheat decision, when it makes one */
 }
