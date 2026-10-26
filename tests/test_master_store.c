@@ -139,7 +139,8 @@ static int ms_eq(const MSettings_t *a, const MSettings_t *b)
 {
     return a->mode == b->mode && a->set_v == b->set_v && a->maxcorr_v == b->maxcorr_v && a->ip_lv == b->ip_lv && a->ip_hv == b->ip_hv && a->op_lv == b->op_lv && a->op_hv == b->op_hv &&
            a->volt_cut_delay == b->volt_cut_delay && a->ovl_current == b->ovl_current && a->ovl_cut_delay == b->ovl_cut_delay && a->heat_delay == b->heat_delay && a->phase_seq == b->phase_seq &&
-           a->scroll == b->scroll && a->scroll_time == b->scroll_time && a->password == b->password && a->restart_auto == b->restart_auto && a->restart_time == b->restart_time;
+           a->scroll == b->scroll && a->scroll_time == b->scroll_time && a->password == b->password && a->restart_auto == b->restart_auto && a->restart_time == b->restart_time &&
+           a->load_src == b->load_src && a->sl_zero_ca == b->sl_zero_ca && a->sl_gain == b->sl_gain && a->heat_temp == b->heat_temp && a->heat_reset == b->heat_reset;
 }
 
 static void t_settings_validate(void)
@@ -230,7 +231,7 @@ static void t_settings_limits_model(void)
 
 static void t_settings_store(void)
 {
-    MStore_t st; MSettings_t a, b, c; uint8_t raw[32]; int i, bad = 0;
+    MStore_t st; MSettings_t a, b, c; uint8_t raw[MS_PACK_LEN]; int i, bad = 0;
     flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     CHECK(MS_Load(&st, &a) == 0U, "blank flash: defaults are used"); { MSettings_t d; MS_Defaults(&d); CHECK(ms_eq(&a, &d), "and they ARE the defaults"); }
     a.set_v = 240U; a.maxcorr_v = 40U; { uint16_t x1, x2, x3, x4; MS_DefaultLimits(&a, 0, &x1, &x2, &x3, &x4); a.ip_lv = (uint16_t)(x1 + 5U); a.ip_hv = x2; a.op_lv = x3; a.op_hv = x4; } a.mode = 2U; a.restart_auto = 0U; a.password = 321U; a.ovl_current = 120U;
@@ -247,13 +248,15 @@ static void t_settings_store(void)
     /* pack / unpack: 100,000 random valid sets */
     for (i = 0; i < 100000; i++)
     {
-        MSettings_t x, y; uint8_t p[32];
+        MSettings_t x, y; uint8_t p[MS_PACK_LEN];
         MS_Defaults(&x); x.mode = (uint8_t)(rnd() % 3U); x.set_v = (uint16_t)(100U + rnd() % 191U); x.maxcorr_v = (rnd() & 1U) ? 0U : (uint16_t)(10U + rnd() % 190U);
         { uint16_t lo = MS_WinLo(&x), hi = MS_WinHi(&x);
           x.ip_lv = (uint16_t)(lo + rnd() % (uint32_t)(x.set_v - 10U - lo + 1U)); x.ip_hv = (uint16_t)(x.set_v + 10U + rnd() % (uint32_t)(hi - x.set_v - 10U + 1U));
           x.op_lv = (uint16_t)(x.ip_lv + rnd() % (uint32_t)(x.set_v - 10U - x.ip_lv + 1U)); x.op_hv = (uint16_t)(x.set_v + 10U + rnd() % (uint32_t)(x.ip_hv - x.set_v - 10U + 1U)); }
         x.volt_cut_delay = (uint8_t)(1U + rnd() % 99U); x.ovl_current = (uint16_t)(1U + rnd() % 180U); x.ovl_cut_delay = (uint8_t)(1U + rnd() % 99U); x.heat_delay = (uint8_t)(1U + rnd() % 99U);
         x.phase_seq = (uint8_t)(rnd() & 1U); x.scroll = (uint8_t)(rnd() & 1U); x.scroll_time = (uint8_t)(1U + rnd() % 99U); x.password = (uint16_t)(rnd() % 1000U); x.restart_auto = (uint8_t)(rnd() & 1U); x.restart_time = (uint16_t)(1U + rnd() % 999U);
+        x.load_src = (uint8_t)(rnd() & 1U); x.sl_zero_ca = (uint16_t)(rnd() % 4001U); x.sl_gain = (rnd() & 1U) ? 0U : (uint16_t)(200U + rnd() % 4801U);
+        x.heat_temp = (uint8_t)(50U + rnd() % 71U); x.heat_reset = (uint8_t)(35U + rnd() % (uint32_t)(x.heat_temp - 5U - 35U + 1U));
         MS_Pack(&x, p); MS_Unpack(&y, p);
         if (!(MS_Validate(&x, 0) == MS_OK && ms_eq(&x, &y))) bad++;
     }
@@ -262,41 +265,67 @@ static void t_settings_store(void)
 }
 
 
-/* v0.9.45: the slave load calibration and the Load Source live in bytes 26 to 31 of the settings record, which were always zero: a record written by an older firmware must load as "Master CT, not calibrated", and nothing before byte 26 may move */
+/* v0.9.45 to v0.9.50: the settings record. Version 2 is 48 bytes: bytes 0 to 31 are laid out EXACTLY as in version 1 (32 bytes, firmware up to v0.9.49), byte 32 is the Overheat Restart. A version 1 record must still load, with every setting carried over. */
 static void t_settings_slave_load(void)
 {
-    MStore_t st; MSettings_t a, b; uint8_t raw[32], old[32]; int i, same = 1;
+    MStore_t st, o1; MSettings_t a, b; uint8_t raw[MS_PACK_LEN], def[MS_PACK_LEN], v1[MS_PACK_LEN_V1]; int i, same = 1; uint32_t k;
     MS_Defaults(&a); a.set_v = 235U; a.maxcorr_v = 45U; { uint16_t x1, x2, x3, x4; MS_DefaultLimits(&a, 0, &x1, &x2, &x3, &x4); a.ip_lv = x1; a.ip_hv = x2; a.op_lv = x3; a.op_hv = x4; }
-    a.load_src = 0U; a.sl_zero_ca = 0U; a.sl_gain = 0U; MS_Pack(&a, old);
-    CHECK(old[26] == 0U && old[27] == MS_HEAT_TEMP_DEFAULT && old[28] == 0U && old[29] == 0U && old[30] == 0U && old[31] == 0U, "with the new fields at their defaults only byte 27 (the overheat temperature, 75) differs from what the older firmware wrote: bytes 26, 28 to 31 are zero");
-    a.load_src = 1U; a.sl_zero_ca = 250U; a.sl_gain = 1282U; a.heat_temp = 90U; MS_Pack(&a, raw);
-    for (i = 0; i < 26; i++) if (raw[i] != old[i]) same = 0;
-    CHECK(same, "setting the new fields changes NOTHING in bytes 0 to 25");
-    CHECK(raw[26] == 1U && raw[27] == 90U && (raw[28] | (raw[29] << 8)) == 250 && (raw[30] | (raw[31] << 8)) == 1282, "Load Source at byte 26, the overheat temperature at 27, the zero (hundredths of an ampere) at 28 and 29, the gain at 30 and 31");
-    MS_Unpack(&b, raw); CHECK(b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U && b.heat_temp == 90U && b.set_v == 235U && b.maxcorr_v == 45U, "and they unpack to the same values");
-    /* an OLD record in flash loads fine */
+    MS_Pack(&a, def);
+    CHECK(def[26] == 0U && def[27] == MS_HEAT_TEMP_DEFAULT && def[28] == 0U && def[29] == 0U && def[30] == 0U && def[31] == 0U && def[32] == 65U, "defaults: bytes 26, 28 to 31 are zero, byte 27 = 75 (Overheat Temp), byte 32 = 65 (Overheat Restart)");
+    { int zero = 1; for (k = 33U; k < MS_PACK_LEN; k++) if (def[k] != 0U) zero = 0; CHECK(zero, "bytes 33 to 47 are zero (room for the three-phase calibrations)"); }
+    a.load_src = 1U; a.sl_zero_ca = 250U; a.sl_gain = 1282U; a.heat_temp = 90U; a.heat_reset = 80U; MS_Pack(&a, raw);
+    for (i = 0; i < 26; i++) if (raw[i] != def[i]) same = 0;
+    CHECK(same, "setting the newer fields changes NOTHING in bytes 0 to 25");
+    CHECK(raw[26] == 1U && raw[27] == 90U && (raw[28] | (raw[29] << 8)) == 250 && (raw[30] | (raw[31] << 8)) == 1282 && raw[32] == 80U, "Load Source at byte 26, Overheat Temp at 27, the zero at 28 and 29, the gain at 30 and 31, Overheat Restart at 32");
+    MS_Unpack(&b, raw); CHECK(b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U && b.heat_temp == 90U && b.heat_reset == 80U && b.set_v == 235U && b.maxcorr_v == 45U, "and they unpack to the same values");
+    /* a save and a load of the new record */
     flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    CHECK(MStore_Save(&st, old) == 0, "an old-format record is written"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 235U && b.load_src == 0U && b.sl_zero_ca == 0U && b.sl_gain == 0U && b.heat_temp == MS_HEAT_TEMP_DEFAULT, "and it LOADS (the version and length are unchanged): Master CT, not calibrated, overheat 75 degC, every other setting intact");
-    { uint8_t olde[32]; memcpy(olde, old, sizeof olde); olde[27] = 0U;                                   /* exactly what the older firmware wrote: byte 27 was always zero */
-      flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); CHECK(MStore_Save(&st, olde) == 0, "a record as the OLDER firmware wrote it (byte 27 = 0) is written"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-      CHECK(MS_Load(&st, &b) == 1U && b.heat_temp == 75U && b.set_v == 235U, "and it loads with the default 75 degC (not refused for a zero)"); }
-    flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, old); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    /* the new fields are saved and restored */
     CHECK(MS_Save(&st, &a) == 0, "a record with them is saved"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    CHECK(MS_Load(&st, &b) == 1U && b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U && b.heat_temp == 90U, "and comes back (with the overheat temperature 90)");
+    CHECK(MS_Load(&st, &b) == 1U && ms_eq(&a, &b), "and comes back exactly");
+    /* ---- MIGRATION: a record as firmware up to v0.9.49 wrote it (version 1, 32 bytes) ---- */
+    memcpy(v1, raw, MS_PACK_LEN_V1);                                                      /* the same bytes 0 to 31 */
+    flash_blank(); MStore_Init(&o1, &FL, PG(0), PG(1), MS_VERSION_V1, MS_PACK_LEN_V1); CHECK(MStore_Save(&o1, v1) == 0, "a version 1 record (32 bytes) is written, as the older firmware did");
+    MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 235U && b.maxcorr_v == 45U && b.load_src == 1U && b.sl_zero_ca == 250U && b.sl_gain == 1282U && b.heat_temp == 90U, "it LOADS: every setting is carried over (set voltage, Max Correction, Load Source, the calibration, Overheat Temp)");
+    CHECK(b.heat_reset == 80U && MS_Validate(&b, 0) == MS_OK, "and the Overheat Restart gets its default, 10 degC below the Overheat Temp (%u)", (unsigned)b.heat_reset);
+    CHECK(MS_Save(&st, &b) == 0, "the next save writes the new record");
+    { MStore_t chk; MSettings_t c; MStore_Init(&chk, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); CHECK(MS_Load(&chk, &c) == 1U && ms_eq(&b, &c), "which is what a restart then loads");
+      MStore_Init(&chk, &FL, PG(0), PG(1), MS_VERSION_V1, MS_PACK_LEN_V1); CHECK(MStore_Load(&chk, v1) == 1U, "and the old record was NOT erased by that save: it went into the other page (a power cut during it would have migrated again)"); }
+    /* a record from before v0.9.49: byte 27 was always zero */
+    memcpy(v1, raw, MS_PACK_LEN_V1); v1[27] = 0U; v1[26] = 0U; v1[28] = 0U; v1[29] = 0U; v1[30] = 0U; v1[31] = 0U;
+    flash_blank(); MStore_Init(&o1, &FL, PG(0), PG(1), MS_VERSION_V1, MS_PACK_LEN_V1); (void)MStore_Save(&o1, v1); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 1U && b.set_v == 235U && b.load_src == 0U && b.sl_gain == 0U && b.heat_temp == 75U && b.heat_reset == 65U, "a record from before v0.9.45 loads too: Master CT, not calibrated, Overheat Temp 75, Overheat Restart 65");
+    /* a version 1 record that breaks the rules is not trusted */
+    memcpy(v1, raw, MS_PACK_LEN_V1); v1[27] = 49U;
+    flash_blank(); MStore_Init(&o1, &FL, PG(0), PG(1), MS_VERSION_V1, MS_PACK_LEN_V1); (void)MStore_Save(&o1, v1); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 0U && b.set_v == 230U, "a version 1 record with an Overheat Temp of 49 (breaks the rules) gives the defaults");
     /* what is refused */
+    flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     { MSettings_t x; static const struct { int field; uint16_t v; } BAD[] = { {0, 2}, {0, 255}, {1, 4001}, {1, 65535}, {2, 199}, {2, 5001}, {2, 100}, {2, 65535} };
-      unsigned k; for (k = 0U; k < sizeof BAD / sizeof BAD[0]; k++) { x = a; if (BAD[k].field == 0) x.load_src = (uint8_t)BAD[k].v; else if (BAD[k].field == 1) x.sl_zero_ca = BAD[k].v; else x.sl_gain = BAD[k].v;
-          CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG && MS_Save(&st, &x) != 0, "refused: field %d = %u (%d)", BAD[k].field, (unsigned)BAD[k].v, (int)MS_Validate(&x, 0)); } }
-    { static const uint8_t ht[] = { 49U, 121U, 255U }; unsigned k; MSettings_t x;
-      for (k = 0U; k < sizeof ht; k++) { x = a; x.heat_temp = ht[k]; CHECK(MS_Validate(&x, 0) == MS_BAD_HEAT_TEMP && MS_Save(&st, &x) != 0, "refused: overheat temperature %u", (unsigned)ht[k]); }
-      x = a; x.heat_temp = 50U; CHECK(MS_Validate(&x, 0) == MS_OK, "50 degC is valid"); x.heat_temp = 120U; CHECK(MS_Validate(&x, 0) == MS_OK, "and 120"); }
+      unsigned q; for (q = 0U; q < sizeof BAD / sizeof BAD[0]; q++) { x = a; if (BAD[q].field == 0) x.load_src = (uint8_t)BAD[q].v; else if (BAD[q].field == 1) x.sl_zero_ca = BAD[q].v; else x.sl_gain = BAD[q].v;
+          CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG && MS_Save(&st, &x) != 0, "refused: field %d = %u (%d)", BAD[q].field, (unsigned)BAD[q].v, (int)MS_Validate(&x, 0)); } }
+    { static const uint8_t ht[] = { 49U, 121U, 255U }; unsigned q; MSettings_t x;
+      for (q = 0U; q < sizeof ht; q++) { x = a; x.heat_temp = ht[q]; CHECK(MS_Validate(&x, 0) == MS_BAD_HEAT_TEMP && MS_Save(&st, &x) != 0, "refused: Overheat Temp %u", (unsigned)ht[q]); }
+      x = a; x.heat_temp = 50U; x.heat_reset = 40U; CHECK(MS_Validate(&x, 0) == MS_OK, "Overheat Temp 50 (with a restart of 40) is valid"); x.heat_temp = 120U; x.heat_reset = 110U; CHECK(MS_Validate(&x, 0) == MS_OK, "and 120"); }
+    /* THE OVERHEAT RESTART: at least 35, at most the Overheat Temp - 5 */
+    { static const struct { uint8_t temp, reset; int ok; } RR[] = {
+          {75U, 34U, 0}, {75U, 35U, 1}, {75U, 65U, 1}, {75U, 70U, 1}, {75U, 71U, 0}, {75U, 75U, 0}, {75U, 0U, 0}, {75U, 255U, 0},
+          {50U, 35U, 1}, {50U, 45U, 1}, {50U, 46U, 0}, {50U, 34U, 0}, {120U, 115U, 1}, {120U, 116U, 0}, {120U, 35U, 1}, {90U, 85U, 1}, {90U, 86U, 0}, {60U, 55U, 1}, {60U, 56U, 0} };
+      unsigned q; MSettings_t x;
+      for (q = 0U; q < sizeof RR / sizeof RR[0]; q++)
+      {   x = a; x.heat_temp = RR[q].temp; x.heat_reset = RR[q].reset;
+          CHECK((MS_Validate(&x, 0) == MS_OK) == (RR[q].ok != 0) && (RR[q].ok != 0 || MS_Validate(&x, 0) == MS_BAD_HEAT_RESET), "Overheat Temp %u, Overheat Restart %u: %s (%d)", (unsigned)RR[q].temp, (unsigned)RR[q].reset, RR[q].ok ? "valid" : "refused", (int)MS_Validate(&x, 0)); }
+      { MSettings_t y = a; y.heat_temp = 60U; y.heat_reset = 65U; MS_HeatResetFollow(&y); CHECK(y.heat_reset == 50U && MS_Validate(&y, 0) == MS_OK, "the restart follows a lowered Overheat Temp: 65 with a temperature of 60 becomes 50 (%u)", (unsigned)y.heat_reset);
+        y.heat_temp = 60U; y.heat_reset = 55U; MS_HeatResetFollow(&y); CHECK(y.heat_reset == 55U, "55 with 60 already fits: untouched"); y.heat_temp = 60U; y.heat_reset = 56U; MS_HeatResetFollow(&y); CHECK(y.heat_reset == 50U, "56 with 60 does not: 50");
+        y.heat_temp = 255U; y.heat_reset = 200U; MS_HeatResetFollow(&y); CHECK(y.heat_reset == 200U, "an Overheat Temp that is itself out of range is left to the validation"); }
+      CHECK(MS_HeatResetDefault(75U) == 65U && MS_HeatResetDefault(50U) == 40U && MS_HeatResetDefault(120U) == 110U && MS_HeatResetDefault(45U) == 35U && MS_HeatResetDefault(40U) == 35U, "the default restart is 10 degC below, never below 35 (75 -> %u, 50 -> %u, 45 -> %u)", (unsigned)MS_HeatResetDefault(75U), (unsigned)MS_HeatResetDefault(50U), (unsigned)MS_HeatResetDefault(45U)); }
     { MSettings_t x = a; x.sl_gain = 0U; x.sl_zero_ca = 4000U; CHECK(MS_Validate(&x, 0) == MS_OK, "gain 0 (not calibrated) and a zero of 40.00 A are valid"); x.sl_gain = 200U; CHECK(MS_Validate(&x, 0) == MS_OK, "so are the ends of the gain range, 0.200"); x.sl_gain = 5000U; CHECK(MS_Validate(&x, 0) == MS_OK, "and 5.000"); }
-    /* a record whose NEW bytes are corrupt but whose CRC is right is not trusted either: the defaults */
-    raw[26] = 7U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    /* a version 2 record whose bytes break the rules but whose CRC is good is not trusted either */
+    memcpy(raw, def, MS_PACK_LEN); raw[26] = 7U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     CHECK(MS_Load(&st, &b) == 0U && b.load_src == 0U && b.sl_gain == 0U, "a record with Load Source 7 and a good CRC is not trusted: the defaults");
-    printf("  settings record: Load Source and the slave load calibration in bytes 26 to 31, old records still load, the ranges are enforced\n");
+    memcpy(raw, def, MS_PACK_LEN); raw[32] = 34U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+    CHECK(MS_Load(&st, &b) == 0U && b.heat_reset == 65U, "nor one with an Overheat Restart of 34: the defaults");
+    printf("  settings record: version 2 (48 bytes), bytes 0 to 31 as before, a version 1 record migrates with every setting, the first save does not erase it, the ranges\n");
 }
 
 static void t_settings_powercut(void)

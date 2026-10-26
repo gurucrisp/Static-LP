@@ -5,8 +5,10 @@
 A divider with 1.5 kohm puts the middle of the scale (reading 2048) at an NTC of 1.5 kohm, about 75 degC, so the reading changes by about 33 counts per degree exactly where the trip is.
 
 ## The setting
-Set-Mode item **Overheat Temp** (after Overheat Trip Delay): 50 to 120 degC, default **75**. Saved with the settings (byte 27 of the record; an older record, where that byte was always zero, loads as 75). Factory Reset puts it back to 75.
-* The unit is tripped when the heat sink reaches the Overheat Temp and the delay has passed. It may restart when the heat sink is **10 degC below** it (65 degC with the default): the hysteresis is fixed.
+Set-Mode item **Overheat Temp** (after Overheat Trip Delay): 50 to 120 degC, default **75**. Saved with the settings (byte 27 of the record; an older record, where that byte was always zero, loads as 75). The settings record is now version 2, 48 bytes (the Overheat Restart is byte 32); a record from the older firmware (version 1, 32 bytes) is read and every setting carried over, the restart getting its default. Factory Reset puts it back to 75.
+* The unit is tripped when the heat sink reaches the Overheat Temp and the delay has passed.
+* **Overheat Restart** (Set-Mode, the item after Overheat Temp): the heat-sink temperature at or below which the unit may restart. **At least 35 degC and at most the Overheat Temp minus 5**: with the Overheat Temp at 75 it can be 35 to 70, default **65** (10 below the trip; for any Overheat Temp the default is 10 degC below it, never under 35). A value outside the range is refused with "Invalid Value" at that item. Lowering the Overheat Temp pulls the restart down with it (to 10 degC below the new temperature) if it would otherwise be too close; raising the Overheat Temp never moves the restart. Factory Reset gives 65.
+  The restart needs, as before, the Restart Time and, after three trips within 30 minutes, START (the engine's rules).
 * The reading is filtered (about 160 ms) and converted with a table (tools/gen_ntc_table.py) that is within 1 degC of the beta equation.
 * **In three-phase modes each slave's own NTC** is used: Domestic trips only the unit whose heat sink is hot, Industrial stops all three.
 

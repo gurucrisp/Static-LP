@@ -47,13 +47,23 @@ void MS_Rederive(MSettings_t *s, const MSettings_t *old, const MLimits_t *lim)
     if (s->op_hv > s->ip_hv) s->op_hv = s->ip_hv;
 }
 
+uint8_t MS_HeatResetDefault(uint8_t heat_temp)
+{
+    return (heat_temp >= (uint8_t)(MS_HEAT_RESET_MIN + 10U)) ? (uint8_t)(heat_temp - 10U) : (uint8_t)MS_HEAT_RESET_MIN;
+}
+
+void MS_HeatResetFollow(MSettings_t *s)
+{
+    if ((s->heat_temp >= MS_HEAT_TEMP_MIN) && (s->heat_temp <= MS_HEAT_TEMP_MAX) && ((uint32_t)s->heat_reset + MS_HEAT_RESET_GAP > (uint32_t)s->heat_temp)) s->heat_reset = MS_HeatResetDefault(s->heat_temp);
+}
+
 void MS_Defaults(MSettings_t *s)
 {
     s->mode = (uint8_t)M_MODE_SINGLE; s->set_v = 230U; s->maxcorr_v = 0U;
     MS_DefaultLimits(s, 0, &s->ip_lv, &s->ip_hv, &s->op_lv, &s->op_hv);
     s->volt_cut_delay = 5U; s->ovl_current = MASTER_RATED_CURRENT_A; s->ovl_cut_delay = 10U; s->heat_delay = 10U;
     s->phase_seq = 0U; s->scroll = 1U; s->scroll_time = 5U; s->password = 0U; s->restart_auto = 1U; s->restart_time = 5U;
-    s->load_src = 0U; s->sl_zero_ca = 0U; s->sl_gain = 0U; s->heat_temp = MS_HEAT_TEMP_DEFAULT;
+    s->load_src = 0U; s->sl_zero_ca = 0U; s->sl_gain = 0U; s->heat_temp = MS_HEAT_TEMP_DEFAULT; s->heat_reset = MS_HeatResetDefault(MS_HEAT_TEMP_DEFAULT);
 }
 
 MSErr_t MS_Validate(const MSettings_t *s, const MLimits_t *lim)
@@ -79,6 +89,7 @@ MSErr_t MS_Validate(const MSettings_t *s, const MLimits_t *lim)
     if (s->password > 999U)                                          return MS_BAD_PASSWORD;
     if ((s->restart_time < 1U) || (s->restart_time > 999U))          return MS_BAD_RESTART_TIME;
     if ((s->heat_temp < MS_HEAT_TEMP_MIN) || (s->heat_temp > MS_HEAT_TEMP_MAX)) return MS_BAD_HEAT_TEMP;
+    if ((s->heat_reset < MS_HEAT_RESET_MIN) || ((uint32_t)s->heat_reset + MS_HEAT_RESET_GAP > (uint32_t)s->heat_temp)) return MS_BAD_HEAT_RESET;
     if ((s->phase_seq > 1U) || (s->scroll > 1U) || (s->restart_auto > 1U)) return MS_BAD_FLAG;
     if ((s->load_src > 1U) || (s->sl_zero_ca > 4000U) || ((s->sl_gain != 0U) && ((s->sl_gain < 200U) || (s->sl_gain > 5000U)))) return MS_BAD_FLAG;
     return MS_OK;
@@ -94,6 +105,7 @@ void MS_Pack(const MSettings_t *s, uint8_t o[MS_PACK_LEN])
     w16(&o[5], s->ip_lv); w16(&o[7], s->ip_hv); w16(&o[9], s->op_lv); w16(&o[11], s->op_hv);
     o[13] = s->volt_cut_delay; w16(&o[14], s->ovl_current); o[16] = s->ovl_cut_delay; o[17] = s->heat_delay;
     o[18] = s->phase_seq; o[19] = s->scroll; o[20] = s->scroll_time; w16(&o[21], s->password); o[23] = s->restart_auto; w16(&o[24], s->restart_time);
+    o[32] = s->heat_reset;
     o[26] = s->load_src; o[27] = s->heat_temp; w16(&o[28], s->sl_zero_ca); w16(&o[30], s->sl_gain);       /* bytes 26 to 31 were always zero: old records read as "master CT, not calibrated, overheat 75 degC" */
 }
 
@@ -103,7 +115,7 @@ void MS_Unpack(MSettings_t *s, const uint8_t o[MS_PACK_LEN])
     s->ip_lv = r16(&o[5]); s->ip_hv = r16(&o[7]); s->op_lv = r16(&o[9]); s->op_hv = r16(&o[11]);
     s->volt_cut_delay = o[13]; s->ovl_current = r16(&o[14]); s->ovl_cut_delay = o[16]; s->heat_delay = o[17];
     s->phase_seq = o[18]; s->scroll = o[19]; s->scroll_time = o[20]; s->password = r16(&o[21]); s->restart_auto = o[23]; s->restart_time = r16(&o[24]);
-    s->load_src = o[26]; s->heat_temp = (o[27] == 0U) ? MS_HEAT_TEMP_DEFAULT : o[27]; s->sl_zero_ca = r16(&o[28]); s->sl_gain = r16(&o[30]);
+    s->load_src = o[26]; s->heat_temp = (o[27] == 0U) ? MS_HEAT_TEMP_DEFAULT : o[27]; s->heat_reset = (o[32] == 0U) ? MS_HeatResetDefault(s->heat_temp) : o[32]; s->sl_zero_ca = r16(&o[28]); s->sl_gain = r16(&o[30]);
 }
 
 uint8_t MS_Load(MStore_t *st, MSettings_t *s)
@@ -114,6 +126,18 @@ uint8_t MS_Load(MStore_t *st, MSettings_t *s)
     {
         MSettings_t t; MS_Unpack(&t, b);
         if (MS_Validate(&t, 0) == MS_OK) { *s = t; return 1U; }     /* a record that passes its CRC but not the rules is not trusted either */
+    }
+    {   /* v0.9.50: the record of the firmware up to v0.9.49 (version 1, 32 bytes): every setting is carried over, the Overheat Restart gets its default. The first save writes the new record
+         * into the OTHER page than the old one (the store is told where the newest slot is), so a power cut during that save leaves the old record to be migrated again. */
+        MStore_t old; uint8_t b1[MS_PACK_LEN_V1], bn[MS_PACK_LEN]; uint32_t i;
+        MStore_Init(&old, st->fl, st->addr[0], st->addr[1], MS_VERSION_V1, MS_PACK_LEN_V1);
+        if (MStore_Load(&old, b1) != 0U)
+        {
+            MSettings_t t;
+            for (i = 0U; i < MS_PACK_LEN; i++) bn[i] = (i < MS_PACK_LEN_V1) ? b1[i] : 0U;
+            MS_Unpack(&t, bn);
+            if (MS_Validate(&t, 0) == MS_OK) { *s = t; st->cur = old.cur; st->seq = old.seq; return 1U; }
+        }
     }
     MS_Defaults(s);
     return 0U;

@@ -1000,6 +1000,15 @@ static void t_overheat(void)
     /* 70 degC is below the trip but within 10 degC of it: still hot (hysteresis) */
     hot(70.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "cooling to 70 degC is not enough: the unit stays off (the restart needs 65 degC or less)");
     hot(64.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MApp_Engine(&A)->fault[0] == 0U, "at 64 degC it is cooled: the unit restarts by itself");
+    /* the Overheat Restart setting decides where it is released (not a fixed 10 degC) */
+    fresh(); to_run(); run(9000U); A.settings.heat_reset = 45U; hot(80.0); run(12500U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "restart limit 45: 80 degC trips");
+    hot(60.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "60 degC is below the trip but above 45: still off");
+    { char fr[MUI_ROWS][MUI_COLS + 1U]; MApp_IoutPage(&A, T, fr); CHECK(strstr(fr[3], "OVERHEAT") != NULL, "and the signal is still asserted ('%s')", fr[3]); }
+    hot(44.0); run(60000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MApp_Engine(&A)->fault[0] == 0U, "44 degC is at or below the limit: the unit restarts");
+    fresh(); to_run(); run(9000U); A.settings.heat_reset = 70U; hot(80.0); run(12500U); hot(69.0); run(60000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 1U, "restart limit 70 (the most the 75 allows): 69 degC restarts");
+    fresh(); to_run(); run(9000U); A.settings.heat_reset = 70U; hot(80.0); run(12500U); hot(71.0); run(60000U);
+    CHECK(MApp_Engine(&A)->contactor[0] == 0U, "but 71 degC does not");
     /* the setting decides */
     fresh(); to_run(); run(9000U); A.settings.heat_temp = 90U; hot(80.0); run(30000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "with the Overheat Temp at 90, 80 degC is fine");
     hot(95.0); run(12500U); CHECK(MApp_Engine(&A)->contactor[0] == 0U, "and 95 degC trips");

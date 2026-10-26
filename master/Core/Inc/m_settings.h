@@ -47,11 +47,16 @@ typedef struct
     uint8_t  load_src;         /* 0 = the load current is the master CT's, 1 = the slave's converter current, converted by the slave load calibration (v0.9.45)  */
     uint16_t sl_zero_ca;       /* the slave load calibration's zero: the converter-current PEAK at no load with the unit running, hundredths of an ampere 0..4000 */
     uint16_t sl_gain;          /* its gain, thousandths: load = (peak - zero) x gain / 1000; 0 = not calibrated, else 200..5000 */
+    uint8_t  heat_reset;       /* Overheat Restart: the unit may restart when the heat sink is at or below this, degC, MS_HEAT_RESET_MIN..(Overheat Temp - 5) (v0.9.50). Byte 32 of the record; 0 there means the default */
     uint8_t  heat_temp;        /* Overheat Temp: the heat-sink temperature that trips the unit, degC 50..120 (v0.9.49). Stored in byte 27 of the record; 0 there (an older record) means the default */
 } MSettings_t;
 #define MS_HEAT_TEMP_DEFAULT  75U
 #define MS_HEAT_TEMP_MIN      50U
 #define MS_HEAT_TEMP_MAX     120U
+#define MS_HEAT_RESET_MIN     35U     /* Overheat Restart: the lowest the restart temperature may be set */
+#define MS_HEAT_RESET_GAP      5U     /* ... and it must stay at least this far below the Overheat Temp (restart <= Overheat Temp - 5) */
+uint8_t MS_HeatResetDefault(uint8_t heat_temp);
+void    MS_HeatResetFollow(MSettings_t *s);               /* an Overheat Temp edit that leaves the restart above Overheat Temp - 5 pulls the restart down to the default (10 degC below) */   /* 10 degC below the Overheat Temp, never below the minimum: what an older record gets */
 
 /* what the slave announced in $H (D7, D26) and what the master knows; used to reject cut-offs the slave would never let be reached */
 typedef struct { uint16_t win_lo_v, win_hi_v; uint16_t out_guard_v; } MLimits_t;
@@ -59,11 +64,13 @@ typedef struct { uint16_t win_lo_v, win_hi_v; uint16_t out_guard_v; } MLimits_t;
 typedef enum
 {
     MS_OK = 0, MS_BAD_MODE, MS_BAD_SET_V, MS_BAD_MAXCORR, MS_BAD_IP_LV, MS_BAD_IP_HV, MS_BAD_OP_LV, MS_BAD_OP_HV, MS_BAD_VOLT_DELAY, MS_BAD_OVL_CURRENT,
-    MS_BAD_OVL_DELAY, MS_BAD_HEAT_DELAY, MS_BAD_SCROLL_TIME, MS_BAD_PASSWORD, MS_BAD_RESTART_TIME, MS_BAD_HEAT_TEMP, MS_BAD_FLAG
+    MS_BAD_OVL_DELAY, MS_BAD_HEAT_DELAY, MS_BAD_SCROLL_TIME, MS_BAD_PASSWORD, MS_BAD_RESTART_TIME, MS_BAD_HEAT_TEMP, MS_BAD_HEAT_RESET, MS_BAD_FLAG
 } MSErr_t;
 
-#define MS_PACK_LEN  32U
-#define MS_VERSION   1U       /* the record version: MStore_Init(&st, fl, page_a, page_b, MS_VERSION, MS_PACK_LEN) */
+#define MS_PACK_LEN  48U              /* v0.9.50: 48 bytes (it was 32): bytes 0 to 31 are laid out exactly as before, byte 32 is the Overheat Restart */
+#define MS_PACK_LEN_V1  32U           /* the record of firmware up to v0.9.49: MS_Load reads it and carries the settings over */
+#define MS_VERSION_V1   1U
+#define MS_VERSION   2U       /* the record version: MStore_Init(&st, fl, page_a, page_b, MS_VERSION, MS_PACK_LEN) */
 
 void     MS_Defaults(MSettings_t *s);
 uint16_t MS_WinLo(const MSettings_t *s);      /* the lowest input limit allowed: Set - Max Correction, not below 90 V */

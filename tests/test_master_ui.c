@@ -443,7 +443,7 @@ static void t_overheat_temp_item(void)
           tick(1600U); CHECK(MUI_SetModeOpen(&U) && U.item == 26U, "and Set-Mode stays open on the Overheat Temp item (item %u)", (unsigned)U.item);
       }
       { static const uint8_t good[] = { 50U, 75U, 90U, 120U }; for (b = 0U; b < sizeof good; b++)
-        { int g; ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U); U.work.heat_temp = good[b]; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); }
+        { int g; ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U); U.work.heat_temp = good[b]; U.work.heat_reset = MS_HeatResetDefault(good[b]); for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); }
           CHECK(!MUI_SetModeOpen(&U) && S.heat_temp == good[b], "%u degC is accepted and saved (%u)", (unsigned)good[b], (unsigned)S.heat_temp); } } }
     /* Factory Reset puts it back to 75 */
     ui_reset(M_MODE_SINGLE); to_run(); S.heat_temp = 95U; enter_set(); goto_item(22U); key(MK_START); key(MK_MENU_SHORT); tick(100U);
@@ -489,6 +489,36 @@ static void t_run_temperature(void)
     printf("  run screens: Single status row 'Temp 47C' (not over a fault text or a countdown), Domestic and Industrial per phase\n");
 }
 
+/* ---- v0.9.50: the Overheat Restart item: at least 35, at most the Overheat Temp - 5 ---- */
+static void leave_set_checking(void) { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U) && strstr(row(1), "Invalid Value") == NULL; g++) { key(MK_MENU_SHORT); tick(100U); } }
+static void t_overheat_restart_item(void)
+{
+    uint8_t ids[32]; int n, i, p26 = -1, p27 = -1;
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); n = walk(ids);
+    for (i = 0; i < n; i++) { if (ids[i] == 26U) p26 = i; if (ids[i] == 27U) p27 = i; }
+    CHECK(p26 >= 0 && p27 == p26 + 1, "Overheat Restart (27) sits right after Overheat Temp (26)");
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(27U);
+    CROW(1, "Overheat Restart"); CHECK(strstr(row(2), "065") != NULL && strstr(row(2), "C") != NULL, "it shows 065 C by default (10 below the 75) ('%s')", row(2));
+    { static const struct { uint8_t temp, reset; int ok; } TT[] = { {75U, 34U, 0}, {75U, 35U, 1}, {75U, 65U, 1}, {75U, 70U, 1}, {75U, 71U, 0}, {75U, 75U, 0}, {75U, 0U, 0}, {50U, 45U, 1}, {50U, 46U, 0}, {120U, 115U, 1}, {120U, 116U, 0} }; unsigned q;
+      for (q = 0U; q < sizeof TT / sizeof TT[0]; q++)
+      {
+          ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(27U); U.work.heat_temp = TT[q].temp; U.work.heat_reset = TT[q].reset; leave_set_checking();
+          if (TT[q].ok) CHECK(!MUI_SetModeOpen(&U) && S.heat_temp == TT[q].temp && S.heat_reset == TT[q].reset, "Overheat Temp %u with Overheat Restart %u is accepted and saved (%u / %u)", (unsigned)TT[q].temp, (unsigned)TT[q].reset, (unsigned)S.heat_temp, (unsigned)S.heat_reset);
+          else { CHECK(strstr(row(1), "Invalid Value") != NULL, "Overheat Temp %u with Overheat Restart %u is refused", (unsigned)TT[q].temp, (unsigned)TT[q].reset); tick(1600U); CHECK(MUI_SetModeOpen(&U) && U.item == 27U, "and Set-Mode stays open on the Overheat Restart item (item %u)", (unsigned)U.item); }
+      } }
+    /* the cross rule: lowering the Overheat Temp so that the restart would be too close takes the restart down with it (never up) */
+    ui_reset(M_MODE_SINGLE); to_run(); enter_set(); goto_item(26U); U.work.heat_temp = 60U; { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); } }
+    CHECK(!MUI_SetModeOpen(&U) && S.heat_temp == 60U && S.heat_reset == 50U && MS_Validate(&S, 0) == MS_OK, "Overheat Temp 60 with the restart at 65: saved, and the restart followed down to 50 (%u / %u)", (unsigned)S.heat_temp, (unsigned)S.heat_reset);
+    ui_reset(M_MODE_SINGLE); to_run(); S.heat_temp = 90U; S.heat_reset = 40U; enter_set(); goto_item(26U); U.work.heat_temp = 60U; { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); } }
+    CHECK(S.heat_temp == 60U && S.heat_reset == 40U, "a restart that still fits (40 with the temperature lowered to 60) is left alone (%u / %u)", (unsigned)S.heat_temp, (unsigned)S.heat_reset);
+    ui_reset(M_MODE_SINGLE); to_run(); S.heat_temp = 60U; S.heat_reset = 50U; enter_set(); goto_item(26U); U.work.heat_temp = 100U; { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); } }
+    CHECK(S.heat_temp == 100U && S.heat_reset == 50U, "raising the temperature never moves the restart (%u / %u)", (unsigned)S.heat_temp, (unsigned)S.heat_reset);
+    /* Factory Reset */
+    ui_reset(M_MODE_SINGLE); to_run(); S.heat_temp = 95U; S.heat_reset = 50U; enter_set(); goto_item(22U); key(MK_START); key(MK_MENU_SHORT); tick(100U);
+    CHECK(S.heat_temp == 75U && S.heat_reset == 65U, "Factory Reset gives 75 and 65 (%u / %u)", (unsigned)S.heat_temp, (unsigned)S.heat_reset);
+    printf("  overheat restart item: after the Overheat Temp, 065 C by default, 35 to Overheat Temp - 5 accepted, the rest refused, the cross rule points at it, Factory Reset gives 65\n");
+}
+
 static void t_setmode_nav(void)
 {
     uint8_t ids[32]; int n, m; MSettings_t *w;
@@ -502,7 +532,7 @@ static void t_setmode_nav(void)
     CHECK(ids[0] == 1U && ids[1] == 2U && ids[2] == 3U && ids[3] == 4U && ids[4] == 5U, "the first items are Mode, Calibration, Set Voltage, Max Correction, I/P LV");
     for (m = 0; m < n; m++) if (ids[m] == 13U || ids[m] == 14U || ids[m] == 15U) break;
     CHECK(m == n, "Single mode: Phase Sequence, Display Scroll and Scroll Time are not offered");
-    CHECK(n == 23, "Single mode with Auto restart offers 23 items: the 19 before, Load Source, Overheat Temp, Date and Time (%d)", n);
+    CHECK(n == 24, "Single mode with Auto restart offers 24 items: the 19 before, Load Source, Overheat Temp, Overheat Restart, Date and Time (%d)", n);
     CHECK(ids[n - 1] == 22U, "the last is Factory Reset");
     CHECK(!MUI_SetModeOpen(&U) && MUI_Take(&U, MUI_REQ_SAVE), "one round of the items is complete: the MENU press on the last one LEAVES Set-Mode (saving), it does not start again");
     CHECK(strstr(row(0), "O/P") != NULL, "and Run-Mode is shown");
@@ -511,11 +541,11 @@ static void t_setmode_nav(void)
     ui_reset(M_MODE_INDUSTRIAL); to_run(); enter_set();
     n = walk(ids);
     { int has13 = 0, has14 = 0, has15 = 0; for (m = 0; m < n; m++) { if (ids[m] == 13U) has13 = 1; if (ids[m] == 14U) has14 = 1; if (ids[m] == 15U) has15 = 1; }
-      CHECK(has13 && has14 && has15 && n == 26, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 26 items (%d)", n); }
+      CHECK(has13 && has14 && has15 && n == 27, "Industrial offers Phase Sequence, Display Scroll and Scroll Time: 27 items (%d)", n); }
     /* Domestic: no Phase Sequence */
     ui_reset(M_MODE_DOMESTIC); to_run(); enter_set();
     n = walk(ids);
-    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 25, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 25 items (%d)", n); }
+    { int has13 = 0; for (m = 0; m < n; m++) if (ids[m] == 13U) has13 = 1; CHECK(!has13 && n == 26, "Domestic: Display Scroll and Scroll Time but no Phase Sequence: 26 items (%d)", n); }
     /* Manual restart hides Restart Time; Scroll No hides Scroll Time */
     ui_reset(M_MODE_INDUSTRIAL); S.restart_auto = 0U; S.scroll = 0U; to_run(); enter_set();
     n = walk(ids);
@@ -724,6 +754,7 @@ int main(void)
     t_slave_cal_page();
     t_load_source_item();
     t_overheat_temp_item();
+    t_overheat_restart_item();
     t_run_temperature();
     t_vcal_pages();
     t_log_viewer();

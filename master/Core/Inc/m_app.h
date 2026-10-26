@@ -148,7 +148,6 @@ void    MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t page_set_a, uint32_t p
 /* call every few ms: raw key levels (1 = pressed) and the slave's latest data; fills the frame to draw */
 void    MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);
 uint8_t MApp_SetModeOpen(const MApp_t *a);      /* the output must be off while this is 1 */
-#define MAPP_HEAT_HYST_DC   100     /* the unit may restart when the heat sink is this much (10 degC, in tenths) below the trip temperature */
 void    MApp_SetNtcHeat(MApp_t *a, uint8_t on);                       /* MASTER_NTC_HEAT: 1 = the temperature trips the unit */
 /* the heat-sink temperature of phase ph (0 R, 1 Y, 2 B), tenths of a degC: returns MNTC_OK / MNTC_OPEN / MNTC_SHORT, or 255 = no reading */
 uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc);

@@ -166,11 +166,11 @@ static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; MUI_Notify(&a->ui, l1, l2, now); }
 
 /* The heat-sink temperature of one phase (v0.9.49): the slave's raw reading is filtered (1/16 per step), converted, and turned into the overheat signal the engine takes
- * (its Overheat Trip Delay, the restart when cooled and the three-trips rule are the engine's): asserted at the Overheat Temp, released HYST (10 degC) below it.
+ * (its Overheat Trip Delay, the restart when cooled and the three-trips rule are the engine's): asserted at the Overheat Temp, released at the Overheat Restart (a setting, 35 to Overheat Temp - 5, default 10 degC below).
  * A SHORT reading counts as overheat (fail-safe); an OPEN one (no NTC fitted, a broken wire) is shown but never trips. No fresh reading: no signal. */
 static void ntc_update(MApp_t *a, uint8_t ph, uint8_t valid, uint16_t raw)
 {
-    int16_t t; int32_t trip = (int32_t)a->settings.heat_temp * 10;
+    int16_t t; int32_t trip = (int32_t)a->settings.heat_temp * 10, rst = (int32_t)a->settings.heat_reset * 10;
     if (valid == 0U) { a->ntc_have[ph] = 0U; a->heat_on[ph] = 0U; a->temp_st[ph] = 255U; return; }
     if (a->ntc_have[ph] == 0U) { a->ntc_f16[ph] = (uint32_t)raw * 16U; a->ntc_have[ph] = 1U; }
     else a->ntc_f16[ph] = (uint32_t)((int32_t)a->ntc_f16[ph] + (((int32_t)raw * 16 - (int32_t)a->ntc_f16[ph]) / 16));
@@ -179,7 +179,7 @@ static void ntc_update(MApp_t *a, uint8_t ph, uint8_t valid, uint16_t raw)
     if (a->temp_st[ph] == MNTC_SHORT) a->heat_on[ph] = 1U;
     else if (a->temp_st[ph] == MNTC_OPEN) a->heat_on[ph] = 0U;
     else if ((int32_t)t >= trip) a->heat_on[ph] = 1U;
-    else if ((int32_t)t <= (trip - MAPP_HEAT_HYST_DC)) a->heat_on[ph] = 0U;
+    else if ((int32_t)t <= rst) a->heat_on[ph] = 0U;                                              /* released at the Overheat Restart (Set-Mode, at most the Overheat Temp - 5) */
 }
 void MApp_SetNtcHeat(MApp_t *a, uint8_t on) { a->ntc_heat = on; }
 uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc)
