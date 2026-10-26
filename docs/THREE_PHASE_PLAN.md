@@ -24,7 +24,7 @@
 5. The mains rules of the three-phase modes that need a second phase: one phase missing, phase imbalance, and what Industrial does with a lost link.
 
 ## 4. The order of work (each step tested on the PC first, with mutation checks, like the single-phase work)
-* **S1. The data model:** per-phase data in the master application, the engine fed for R, Y and B, per-phase `$M` frames. Domestic first (three independent units), then Industrial (one unit, all trip).
+* **S1. The data model: DONE (v0.9.48).** Per-phase data in the master application (`MAppData_t.yb[2]`: the Y and B slaves), the engine fed for R, Y and B, and per-phase `$M` content with its own run level and clear counter (`MApp_ControlPh`, `MApp_ControlValidPh`, phase 0 = R, 1 = Y, 2 = B). Domestic (three independent units) and Industrial (one unit, all trip) both behave as the engine specifies; Single mode ignores Y and B. Tested on the PC only: nothing reaches `yb[]` until S2 (the glue) fills it from the Y and B links.
 * **S2. The three links in the glue:** the three receive paths and transmitters, link-lost per slave. (HAL code: not compilable here, as for the single-phase glue; reviewed line by line.)
 * **S3. The three-phase screens fed from the three slaves,** and the per-phase service pages.
 * **S4. Phase sequence and phase-to-phase voltage from the slaves** (section 5): the ARM frame, the SYNC byte, the slave timestamp, the classification.
@@ -56,7 +56,13 @@
 * Three stages on one source: use a current-limited source for the first three-phase run too.
 * Industrial mode trips all three phases together by design; Domestic does not: test Domestic first.
 
-## 7. Decisions needed
-1. (Done) TX-Y is on PC10.
-2. Domestic first (recommended: three independent units, the simplest) or Industrial first?
-3. (Decided) Phase timing from the slaves (section 5): no schematic page is needed for it.
+## 7. Decisions and open points (each with the default I am working to)
+1. (Done) TX-Y on PC10; the three links at 500000 baud.
+2. (Done) Phase sequence from the slaves (section 5).
+3. **Domestic first, then Industrial.** S1 covers both in the application; the glue (S2) comes next.
+4. **Re-tune, three phases:** one phase at a time, never three stages at once (the power-stage risk). Default: Set-Mode item 19 tunes R, then Y, then B one after the other; the screen says which; the other phases' units stay off during a sweep.
+5. **The load current per phase:** from each slave's converter current (the Slave Load Cal page, one calibration per phase). The settings record has 6 spare bytes and three phases need 12: default is to extend the record to 40 bytes with a migration (a 32-byte record from the older firmware still loads, the new bytes read as "not calibrated").
+6. **The transformers:** assumed one single-phase series transformer per phase, each with its own slave and its own profile (three profiles). A single three-phase core would change the autotune: tell me if that is the case.
+7. **Industrial's contactor:** one contactor (the engine drives `contactor[0]`): which master output pin it is has to be as the old firmware had it.
+8. **Overheat:** each slave has its own heat-sink NTC (PA5). Default: the slave decides (trip and reset temperatures with hysteresis) and sets the overheat flag; needs the NTC value and the trip temperature.
+9. **The first bench steps** (the stages UNPOWERED, no mains on the converters): (a) the three links alive: the master shows R, Y and B voltages and the link state of each; (b) Domestic with the output contactors open; (c) one phase at a time with a current-limited source; only then (d) all three, (e) Industrial. The single-phase checks of AUTOTUNE_BENCH.md (the over-current trip lowered, the gate drivers' desaturation, a current-limited source) apply to EACH of the three stages.

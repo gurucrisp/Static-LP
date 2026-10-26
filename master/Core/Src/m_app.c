@@ -377,6 +377,14 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         ld = sl_to_da(&a->settings, d->iout_pk_ca); lok = 1U;
     }
     r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3, now);   /* tenths of an amp, 0.3 A band */
+    for (ph = 0U; ph < 2U; ph++)
+    {   /* the Y and B slaves (v0.9.48): the same readings and display filters as the R slave's */
+        const MAppSlave_t *s = &d->yb[ph];
+        r.have[1U + ph] = s->have;
+        r.vin_dv[1U + ph]  = disp_filter(&a->f_vin_yb[ph],  s->vin_dv,  s->have, 10, 7, now);
+        r.vout_dv[1U + ph] = disp_filter(&a->f_vout_yb[ph], s->vout_dv, s->have, 10, 7, now);
+        r.load_ok[1U + ph] = s->load_ok; r.load_da[1U + ph] = disp_filter(&a->f_load_yb[ph], s->load_da, (uint8_t)(s->have && s->load_ok), 1, 3, now);
+    }
 
     /* the slave's own limits (its $H frame): Set-Mode checks the I/P cut-offs against its window and O/P HV against its output guard (D7, D26) */
     if ((d->h_valid != 0U) && (a->lim_set == 0U))
@@ -386,6 +394,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     }
     /* the clear counter starts from the slave's own, so a master restart never looks like a "clear" */
     if ((d->e_valid != 0U) && (a->clr_synced == 0U)) { a->clr_cnt = d->clr_echo; a->clr_synced = 1U; }
+    for (ph = 0U; ph < 2U; ph++) { const MAppSlave_t *s = &d->yb[ph]; if ((s->e_valid != 0U) && (a->clr_synced_yb[ph] == 0U)) { a->clr_cnt_yb[ph] = s->clr_echo; a->clr_synced_yb[ph] = 1U; } }
 
     /* the engine decides everything: run, the clear pulses, the contactor, the buzzer, what to log */
     {
@@ -401,7 +410,16 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         }
         in.ph[0].heat = d->heat; in.ph[0].ct_peak = (uint8_t)(d->ct_peak | a->ct_peak_on);
         in.ph[0].slave_state = d->state; in.ph[0].state_valid = d->have;                    /* PWM off = load off */
-        /* the Y and B slaves have no link yet: in Industrial and Domestic they count as missing, so those modes do not start */
+        for (k = 0U; k < 2U; k++)
+        {   /* the Y and B slaves (v0.9.48): what the engine needs from each. A slave that is not heard counts as missing, as before. */
+            const MAppSlave_t *s = &d->yb[k]; MPhaseIn_t *pi = &in.ph[1U + k];
+            int32_t dvb = (int32_t)s->vout_dv - (int32_t)(a->settings.set_v * 10U);
+            uint8_t meas = (uint8_t)((s->have != 0U) && (s->state == 2U) && (dvb <= (int32_t)MAPP_BAND_DV) && (dvb >= -(int32_t)MAPP_BAND_DV));
+            pi->link_ok = s->link_ok; pi->vin_dv = s->vin_dv; pi->vout_dv = s->vout_dv; pi->load_da = (s->load_ok != 0U) ? s->load_da : 0U;
+            pi->slave_fault = (uint8_t)((s->have != 0U) ? s->fault : 0U);
+            pi->in_band = (uint8_t)(((s->e_valid != 0U) && (s->in_band != 0U)) || (meas != 0U));
+            pi->heat = s->heat; pi->ct_peak = 0U; pi->slave_state = s->state; pi->state_valid = s->have;
+        }
         in.setmode = (uint8_t)((MUI_SetModeOpen(&a->ui) != 0U) || (a->tune_state != 0U)); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : a->run_min_total;       /* the log time: the real-time clock when it is set, else the running minutes */
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
         {   MSettings_t es = a->settings;                                                /* what the engine judges by */
@@ -412,11 +430,22 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         if (a->eout.clr_pulse[0] != 0U) a->clr_cnt++;
         a->ctl_out.run = a->eout.run[0]; a->ctl_out.clr = a->clr_cnt;
         a->ctl_out.setv_dv = (uint16_t)(a->settings.set_v * 10U); a->ctl_out.maxc_dv = (uint16_t)(a->settings.maxcorr_v * 10U);
+        for (k = 0U; k < 2U; k++)
+        {   /* the $M content for the Y and B slaves: its own run level and clear counter, the same set voltage and Max Correction */
+            if (a->eout.clr_pulse[1U + k] != 0U) a->clr_cnt_yb[k]++;
+            a->ctl_out_yb[k].run = a->eout.run[1U + k]; a->ctl_out_yb[k].clr = a->clr_cnt_yb[k];
+            a->ctl_out_yb[k].setv_dv = a->ctl_out.setv_dv; a->ctl_out_yb[k].maxc_dv = a->ctl_out.maxc_dv;
+        }
     }
 
     /* $M is sent once the slave was heard ($E, the clear counter then in step with its own) OR its $S frames have been arriving for 3 s: a slave whose $E is not understood is still started */
     if (d->have != 0U) { if (a->have_seen == 0U) { a->have_seen = 1U; a->t_first_have = now; } } else a->have_seen = 0U;
     a->ctl_valid = (uint8_t)((a->clr_synced != 0U) || ((a->have_seen != 0U) && ((uint32_t)(now - a->t_first_have) >= 3000UL)));
+    for (ph = 0U; ph < 2U; ph++)
+    {   const MAppSlave_t *s = &d->yb[ph];
+        if (s->have != 0U) { if (a->have_seen_yb[ph] == 0U) { a->have_seen_yb[ph] = 1U; a->t_first_have_yb[ph] = now; } } else a->have_seen_yb[ph] = 0U;
+        a->ctl_valid_yb[ph] = (uint8_t)((a->clr_synced_yb[ph] != 0U) || ((a->have_seen_yb[ph] != 0U) && ((uint32_t)(now - a->t_first_have_yb[ph]) >= 3000UL)));
+    }
     a->last = *d;
     make_status(a, d, now, a->status);
     r.status = a->status;
@@ -477,6 +506,8 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
 
 uint8_t MApp_SetModeOpen(const MApp_t *a) { return MUI_SetModeOpen(&a->ui); }
 const MCtlOut_t *MApp_Control(const MApp_t *a) { return &a->ctl_out; }
+const MCtlOut_t *MApp_ControlPh(const MApp_t *a, uint8_t ph) { return (ph == 1U) ? &a->ctl_out_yb[0] : ((ph == 2U) ? &a->ctl_out_yb[1] : &a->ctl_out); }
+uint8_t MApp_ControlValidPh(const MApp_t *a, uint8_t ph) { return (ph == 1U) ? a->ctl_valid_yb[0] : ((ph == 2U) ? a->ctl_valid_yb[1] : a->ctl_valid); }
 uint8_t MApp_ControlValid(const MApp_t *a) { return a->ctl_valid; }
 void MApp_NoteFrameSent(MApp_t *a) { a->m_sent++; }
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out) { if (a->clk_set_pending == 0U) return 0U; *out = a->clk_set; a->clk_set_pending = 0U; return 1U; }

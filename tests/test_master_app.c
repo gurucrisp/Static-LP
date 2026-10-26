@@ -905,6 +905,79 @@ static void t_slave_load(void)
     printf("  slave load: the conversion, the fallbacks to the master CT, the overload trip following the source, the zero and gain on the page, saved and restored, every refusal\n");
 }
 
+
+/* ---- v0.9.48: THREE PHASES in the application: the Y and B slaves feed the engine, each phase has its own $M content and clear counter ---- */
+static uint8_t last_clr3[3]; static uint32_t clr_at3[3];
+static void yb_set(int i, uint8_t state, uint16_t v_dv)
+{
+    memset(&D.yb[i], 0, sizeof D.yb[i]); D.yb[i].have = 1U; D.yb[i].link_ok = 1U; D.yb[i].e_valid = 1U; D.yb[i].h_valid = 1U; D.yb[i].state = state; D.yb[i].in_band = (uint8_t)(state == 2U);
+    D.yb[i].vin_dv = v_dv; D.yb[i].vout_dv = v_dv; D.yb[i].load_ok = 1U;
+}
+static void yb_gone(int i) { memset(&D.yb[i], 0, sizeof D.yb[i]); }
+/* run with three slaves: a changed clear counter makes that slave drop its fault 200 ms later and echo the counter, as the real slaves do */
+static void run3(uint32_t ms)
+{
+    uint32_t e = T + ms;
+    while (T < e)
+    {
+        int ph;
+        MApp_Step(&A, K[0], K[1], K[2], K[3], &D, T, F);
+        for (ph = 0; ph < 3; ph++)
+        {
+            uint8_t c = MApp_ControlPh(&A, (uint8_t)ph)->clr;
+            if (c != last_clr3[ph]) { last_clr3[ph] = c; clr_at3[ph] = T + 200U; }
+            if ((clr_at3[ph] != 0U) && ((int32_t)(T - clr_at3[ph]) >= 0))
+            {
+                clr_at3[ph] = 0U;
+                if (ph == 0) { D.fault = 0U; if (D.state == 3U) D.state = 2U; D.clr_echo = c; }
+                else { D.yb[ph - 1].fault = 0U; if (D.yb[ph - 1].state == 3U) D.yb[ph - 1].state = 2U; D.yb[ph - 1].clr_echo = c; }
+            }
+        }
+        T += 5U;
+    }
+}
+static void tap3(int key) { K[key] = 1U; run3(100U); K[key] = 0U; run3(120U); }
+static void three_fresh(uint8_t mode)
+{
+    fresh(); memset(last_clr3, 0, sizeof last_clr3); memset(clr_at3, 0, sizeof clr_at3); A.settings.mode = mode; MF_Init(&A.eng, &A.settings, T);       /* a power-up with this mode saved: the engine builds its units for it */
+    yb_set(0, 2U, 2300U); yb_set(1, 2U, 2300U); run3(MUI_SPLASH_MS + 200U);
+}
+static void t_three_phase_app(void)
+{
+    const MFOut_t *o;
+    /* DOMESTIC: three independent units */
+    three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U, "Domestic with the three slaves heard and running: the three contactors close (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
+    CHECK(MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 1U && MApp_ControlPh(&A, 2)->run == 1U && MApp_ControlValidPh(&A, 1) == 1U && MApp_ControlValidPh(&A, 2) == 1U, "each phase gets its own $M content: run = 1 for R, Y and B, and Y and B are ready to be sent");
+    CHECK(MApp_ControlPh(&A, 1)->setv_dv == 2300U && MApp_ControlPh(&A, 2)->maxc_dv == MApp_Control(&A)->maxc_dv, "with the same set voltage (230 V) and Max Correction");
+    D.yb[0].link_ok = 0U; D.yb[0].have = 0U; D.yb[0].state = 0U; run3(3000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] != 0U && o->fault[0] == 0U && o->fault[2] == 0U, "the Y link is lost: ONLY the Y unit trips (contactors %u %u %u, faults %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[0], (unsigned)o->fault[1], (unsigned)o->fault[2]);
+    CHECK(MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 0U && MApp_ControlPh(&A, 2)->run == 1U, "R and B keep their run level, Y's own run level is 0 (%u %u %u)", (unsigned)MApp_ControlPh(&A, 0)->run, (unsigned)MApp_ControlPh(&A, 1)->run, (unsigned)MApp_ControlPh(&A, 2)->run);
+    /* a slave that STOPS without a fault code while its contactor is closed (its inverter is off): only that unit trips */
+    three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U); D.yb[1].state = 0U; D.yb[1].in_band = 0U; run3(4000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[2] == 0U && o->contactor[0] == 1U && o->contactor[1] == 1U && o->fault[2] != 0U, "the B slave stops without a fault code (its inverter is off): only the B unit trips (contactors %u %u %u, faults %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[0], (unsigned)o->fault[1], (unsigned)o->fault[2]);
+    three_fresh((uint8_t)M_MODE_DOMESTIC); yb_gone(1); run3(12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 0U, "the B slave is never heard: R and Y run, B does not (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
+    /* the clear counters are per phase: an inrush trip on Y, START retries only Y */
+    three_fresh((uint8_t)M_MODE_DOMESTIC); run3(12000U);
+    { uint8_t r0 = MApp_ControlPh(&A, 0)->clr, y0 = MApp_ControlPh(&A, 1)->clr, b0 = MApp_ControlPh(&A, 2)->clr;
+      D.yb[0].fault = 1U; D.yb[0].state = 3U; run3(2000U); o = MApp_Engine(&A);
+      CHECK(o->fault[1] == MLOG_T_INRUSH && o->contactor[1] == 0U && o->contactor[0] == 1U && o->contactor[2] == 1U, "an inrush trip of the Y slave: only the Y unit is off (contactors %u %u %u, faults %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[0], (unsigned)o->fault[1], (unsigned)o->fault[2]);
+      tap3(1); run3(1500U);
+      CHECK(MApp_ControlPh(&A, 1)->clr == (uint8_t)(y0 + 1U) && MApp_ControlPh(&A, 0)->clr == r0 && MApp_ControlPh(&A, 2)->clr == b0, "START retries only Y: its clear counter %u -> %u, R stays %u, B stays %u", (unsigned)y0, (unsigned)MApp_ControlPh(&A, 1)->clr, (unsigned)MApp_ControlPh(&A, 0)->clr, (unsigned)MApp_ControlPh(&A, 2)->clr); }
+    /* INDUSTRIAL: one unit, one contactor, all three phases must be there, any trip trips all */
+    three_fresh((uint8_t)M_MODE_INDUSTRIAL); run3(12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 1U && MApp_ControlPh(&A, 2)->run == 1U, "Industrial with the three slaves: the one contactor closes and all three get run = 1");
+    D.yb[1].link_ok = 0U; D.yb[1].have = 0U; D.yb[1].state = 0U; run3(3000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 0U && MApp_ControlPh(&A, 0)->run == 0U && MApp_ControlPh(&A, 1)->run == 0U && MApp_ControlPh(&A, 2)->run == 0U, "the B link is lost: ALL THREE are stopped and the contactor opens");
+    three_fresh((uint8_t)M_MODE_INDUSTRIAL); yb_gone(1); run3(12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 0U && MApp_ControlPh(&A, 0)->run == 0U && MApp_ControlPh(&A, 1)->run == 0U, "Industrial with the B slave never heard: the unit does not start");
+    /* SINGLE: the Y and B data are ignored */
+    fresh(); memset(last_clr3, 0, sizeof last_clr3); yb_set(0, 3U, 0U); D.yb[0].fault = 17U; yb_gone(1); run3(MUI_SPLASH_MS + 200U + 12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->fault[0] == 0U, "Single mode: a fault on a Y slave that is not even used changes nothing (contactor %u)", (unsigned)o->contactor[0]);
+    printf("  three phases in the application: Domestic units independent, a lost or faulty phase touches only itself, Industrial all or nothing, per-phase control frames and clear counters, Single unchanged\n");
+}
+
 static uint32_t rs = 5150U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -962,6 +1035,7 @@ int main(void)
     t_retune_item_keys();
     t_profile_page();
     t_slave_load();
+    t_three_phase_app();
     t_slave_wait();
     t_display_stability();
     t_load_calibration();
