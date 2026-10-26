@@ -857,11 +857,18 @@ static void t_mc_tune_apply(void)
     CHECK(SlaveProfile_Tuned() == 1U && !tn_master_retune_latched() && g_ctrl.fault == 0U && pf.kib_m >= 540U && pf.kib_m <= 720U, "Re-tune with the new transformer: finished, the latch is cleared, the new gain scale is %u (about 1/1.6)", (unsigned)pf.kib_m);
     tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(5000U);
     CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0, "and the unit now runs on the new transformer: %.1f V out, no fault", (double)W.vout);
-    /* ---- the cap of a profile made with a low Max Correction limits the regulator ---- */
+    /* ---- v0.9.47: MAX CORRECTION IS NEVER REDUCED BY THE TUNE. A profile made with the same Max Correction as the setting stopped at 80 % of it: that cap says "verified up to here" and must NOT hold the regulator ---- */
     tn_stop_unit(); tn_do_retune(1.0, 230.0f, 30U); (void)SlaveProfile_Get(&pf);
-    CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U, "a profile made at 230 V with Max Correction 30 V has the cap %u (< 1200)", (unsigned)pf.cap_ticks);
-    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); tn_run(25000U);
-    CHECK(tn.max_eff <= (uint32_t)pf.cap_ticks && g_ctrl.fault == 0U && W.vout < 228.0, "a start from 190 V needs about 1300 ticks but the regulator is capped at the profile's %u: it applied at most %u, the output stays at %.1f V, no fault", (unsigned)pf.cap_ticks, (unsigned)tn.max_eff, (double)W.vout);
+    CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U && pf.knee == 0U, "a profile made at 230 V with Max Correction 30 V (the setting) has the cap %u (< 1200) and no knee", (unsigned)pf.cap_ticks);
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
+    CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0 && tn.max_eff > (uint32_t)pf.cap_ticks, "a start from 190 V needs about 1300 ticks: the regulator is NOT held to the profile's %u: it applied %u, the output is %.1f V, no fault", (unsigned)pf.cap_ticks, (unsigned)tn.max_eff, (double)W.vout);
+    /* ---- a REAL saturation knee (at 14 V of injection, well above the 8 V of noise) DOES cap the regulator: the transformer cannot deliver more ---- */
+    tn_stop_unit();
+    { TuneProfile_t kp; memset(&kp, 0, sizeof kp); kp.version = pf.version; kp.n = 6U; kp.knee = 1U; kp.vin_ref_dv = 2300U; kp.maxc_dv = 1200U; kp.cap_ticks = 512U; kp.kib_m = 1000U; kp.kiu_m = 1000U;
+      kp.ticks[0] = 16U; kp.ticks[1] = 32U; kp.ticks[2] = 64U; kp.ticks[3] = 128U; kp.ticks[4] = 256U; kp.ticks[5] = 512U; kp.dv_dv[0] = 5; kp.dv_dv[1] = 10; kp.dv_dv[2] = 20; kp.dv_dv[3] = 41; kp.dv_dv[4] = 81; kp.dv_dv[5] = 162;
+      CHECK(Tune_ProfileValid(&kp) == 1U && SlaveProfile_Save(&kp) == 0, "a profile with a real knee (cap 512 ticks, about 16 V of injection) is stored");
+      memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.0; tn_start_at(190.0f); tn_run(25000U);
+      CHECK(tn.max_eff <= 512U && g_ctrl.fault == 0U && W.vout < 215.0, "a start from 190 V needs about 1300 ticks but a real knee caps the regulator at 512: it applied at most %u, the output stays at %.1f V, no fault", (unsigned)tn.max_eff, (double)W.vout); }
     /* ---- a profile limited only by the OUTPUT HEADROOM (tuned at a high input) is not a limit of the transformer: its cap is NOT applied ---- */
     tn_stop_unit(); tn_do_retune(1.0, 230.0f, 120U); (void)SlaveProfile_Get(&pf);
     CHECK(SlaveProfile_Tuned() == 1U && pf.cap_ticks < 1200U && pf.maxc_dv < 1200U && pf.knee == 0U, "a profile made at 230 V with Max Correction 120 V is limited by the headroom: cap %u, made with %u (tenths of a volt), no knee", (unsigned)pf.cap_ticks, (unsigned)pf.maxc_dv);

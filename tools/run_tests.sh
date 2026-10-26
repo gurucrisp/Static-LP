@@ -48,6 +48,7 @@ gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$MC_/Inc" test_master_hours.c "$MC_/S
 if grep -qE "^#define[[:space:]]+SLAVE_INJ_GUARD[[:space:]]+1" "$ROOT/slave/Core/Inc/slave_features.h" && grep -qE "^#define[[:space:]]+MASTER_TEST_NO_VOLTAGE_CUTS[[:space:]]+0" "$ROOT/master/Core/Inc/master_monitor.h"; then line "safe defaults: injection guard ON, master voltage cuts ON" PASS; else line "safe defaults (SLAVE_INJ_GUARD 1, MASTER_TEST_NO_VOLTAGE_CUTS 0)" FAIL; fail=1; fi
 gcc -O1 -w $INC test_mon_state.c "$S/Src/link_proto.c" -o $OUT/mon && r=$($OUT/mon | grep -E "RESULT") ; ok "$r" && line "master display text" PASS || { line "master display text" FAIL; fail=1; }
 
+r=$(sh "$T/check_defaults.sh" "$S" 2>&1 | tail -1); echo "$r" | grep -q "ALL PASSED" && line "slave: the autotune switches' DEFAULTS (production on, any other build off, overrides, refused contradictions)" PASS || { line "slave: the autotune switches' DEFAULTS (production on, any other build off, overrides, refused contradictions)" FAIL; fail=1; }
 # ready-made configs (configs/*.h): the structure checker must pass, and SLAVE_BENCH_AUTORUN must match the file name (a "...autorun0" file is the only one that
 # may NOT start by itself: a generator slip once shipped files with autorun 0 that would never have started the converter)
 cfg_bad=0; cfg_n=0
@@ -142,9 +143,18 @@ echo "s2_conv_swap -DSLAVE_POWER_STAGE=2 -DSLAVE_RELAYS_MODE=1 -DSLAVE_RELAY_SH_
 NPROC=${NPROC:-$(nproc 2>/dev/null || echo 4)}      # override with: NPROC=8 tools/run_tests.sh
 echo "  running $(wc -l < "$JOBS") sequencer / relay-rule builds ($MODE mode, $NPROC in parallel) ..."
 # run the builds in parallel batches (POSIX sh: background jobs + wait)
+# v0.9.47: the autotune switches are ON by default in a production build (stage 3, master control, link v2). A job that does not ask for the feature keeps the old behaviour: every switch it does not set itself is pinned to 0.
+pin_off() {
+  flags=""
+  for X in SLAVE_AUTOTUNE SLAVE_TUNE_MODE SLAVE_TUNE_APPLY SLAVE_TUNE_ENFORCE SLAVE_IOUT; do
+    case " $* " in *" -D$X="*) ;; *) flags="$flags -D$X=0";; esac
+  done
+  echo "$flags"
+}
 run_one() {
   name=$1; shift
-  if gcc -O1 -w $INC -DBRINGUP_REPORT_MODE=2 "$@" test_ctrl.c $SRC -o "$OUT/$name" -lm 2>/dev/null; then
+  PIN=$(pin_off "$@")
+  if gcc -O1 -w $INC -DBRINGUP_REPORT_MODE=2 "$@" $PIN test_ctrl.c $SRC -o "$OUT/$name" -lm 2>/dev/null; then
     # the low-voltage job changes the input window, so only its own test applies (older tests assume the 140 V default)
     only=""; [ "$name" = "s1_quick_retry" ] && only="quick retry"; [ "$name" = "s3_master_control" ] && only="master control"; [ "$name" = "s3_tune_mode" ] && only="tune mode"; [ "$name" = "s3_tune_apply" ] && only="tune apply"; [ "$name" = "s3_fast_correction" ] && only="master control"; [ "$name" = "s3_fast_correction_100" ] && only="master control"; [ "$name" = "s3_no_voltage_cuts" ] && only="no voltage cuts"; [ "$name" = "s3_input_steps" ] && only="input steps"; [ "$name" = "s3_glitch_skip" ] && only="glitch skip"; [ "$name" = "s3_flip_standalone" ] && only="flip standalone"; { [ "$name" = "s3_legacy_softstart" ] || [ "$name" = "s3_legacy_fast_start" ]; } && only="soft start"; [ "$name" = "s1_low_voltage" ] && only="low input voltage"; [ "$name" = "s1_settle5" ] && only="longer W-RLY settle"
     if [ "$MODE" = "full" ]; then r=$(ONLY="$only" timeout 900 "$OUT/$name" 2>&1); else r=$(ONLY="$only" SKIP_SLOW=1 timeout 900 "$OUT/$name" 2>&1); fi

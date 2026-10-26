@@ -48,24 +48,32 @@
 /* 1 = the controller's TUNE MODE (for the transformer autotune): on a TUNE command the unit starts by itself through the normal start sequence (SYNC, RECT, INVERTER, UNSHUNT) and in RUN, instead of the regulator, applies the sweep's
  * requested duty as an OPEN-LOOP BOOST (slew-limited, never above CTRL_STAGE3_MAX_EFF_TICKS, never more than Max Correction + 8 V of injection), with every normal protection still active. The master keeps the output contactor open. Needs SLAVE_AUTOTUNE 1,
  * SLAVE_MASTER_CONTROL 1 and SLAVE_POWER_STAGE >= 3. 0 = a TUNE command is refused ("no tune mode"). OFF until the first bench run has been done. */
+/* v0.9.47: THE AUTOTUNE SWITCHES ARE ON BY DEFAULT in the production build (power stage 3 with a master over link v2) and OFF in any other build (a bench build without a master, a smaller power stage). ONE default feeds
+ * SLAVE_AUTOTUNE and the others follow it (TUNE_MODE and APPLY follow AUTOTUNE, ENFORCE follows APPLY and TUNE_MODE), so a config that switches AUTOTUNE off switches them all off and none of the checks below can fire by accident.
+ * A config can still set any of them. The converter-current channel (SLAVE_IOUT) follows the same default: the sweep needs it (TUNE_REQUIRE_IOUT). With ENFORCE on, a unit WITHOUT a valid profile does not run until it has been tuned (Set-Mode, Re-tune). */
+#if (SLAVE_POWER_STAGE >= 3) && (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 != 0)
+#define SLAVE_TUNE_DEFAULT     1
+#else
+#define SLAVE_TUNE_DEFAULT     0
+#endif
+#ifndef SLAVE_AUTOTUNE
+#define SLAVE_AUTOTUNE         SLAVE_TUNE_DEFAULT
+#endif
 #ifndef SLAVE_TUNE_MODE
-#define SLAVE_TUNE_MODE        0
+#define SLAVE_TUNE_MODE        SLAVE_AUTOTUNE
 #endif
 
 /* 1 = USE the stored transformer profile (the autotune's result): the regulator is capped at the profile's cap, its integral gain is scaled by the profile's gain scale (boost and buck), and at every start in BOOST the injection that is really
  * measured is compared with the one the profile predicts (slave_tunechk.h): a different transformer gives fault 19 (latched, the master shows "Re-tune Required"). 0 = the profile is stored but ignored (the regulator is exactly as before).
  * Needs SLAVE_AUTOTUNE 1, SLAVE_MASTER_CONTROL 1, SLAVE_POWER_STAGE >= 3. OFF until the sweep has been run on a real unit and the tolerances have been checked. */
 #ifndef SLAVE_TUNE_APPLY
-#define SLAVE_TUNE_APPLY       0
+#define SLAVE_TUNE_APPLY       SLAVE_AUTOTUNE
 #endif
 /* 1 = REFUSE TO RUN without a valid profile: a start raises fault 18 (latched, "Re-tune Required"). The Re-tune item still works from that state. Needs SLAVE_TUNE_APPLY 1. */
 #ifndef SLAVE_TUNE_ENFORCE
-#define SLAVE_TUNE_ENFORCE     0
+#define SLAVE_TUNE_ENFORCE     ((SLAVE_TUNE_APPLY != 0) && (SLAVE_TUNE_MODE != 0))
 #endif
 
-#ifndef SLAVE_AUTOTUNE
-#define SLAVE_AUTOTUNE         0
-#endif
 #if (SLAVE_TUNE_MODE != 0) && (SLAVE_AUTOTUNE == 0)
 #error "SLAVE_TUNE_MODE 1 needs SLAVE_AUTOTUNE 1: the link commands that start a sweep are part of the autotune"
 #endif
@@ -82,7 +90,7 @@
 /* 1 = the converter-side CURRENT (net I-OUT, connector pin 32, PA2 = ADC1_IN2) is sampled as a 4th ADC channel together with AC_IN, AC_OUT and the NTC, its AC RMS and peak are computed (slave_iout.h) and sent to the master in $E.
  * The channel is read after the NTC, so the other three keep their places. 0 = the ADC has the 3 channels it always had and nothing changes. (If the project is regenerated with CubeMX, set PA2 as ADC1_IN2 there too.) */
 #ifndef SLAVE_IOUT
-#define SLAVE_IOUT             0
+#define SLAVE_IOUT             SLAVE_TUNE_DEFAULT      /* on in the production build: the sweep needs it, and the master's Slave Load Cal page */
 #endif
 
 #ifndef SLAVE_WATCHDOG
@@ -113,7 +121,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       946UL
+#define SLAVE_FW_VERSION       947UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

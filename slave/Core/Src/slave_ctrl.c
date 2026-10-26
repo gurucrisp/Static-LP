@@ -1140,13 +1140,12 @@ void SlaveCtrl_Service(void)
             s_prof_ok = (uint8_t)(SlaveProfile_Get(&s_prof) == 1U);                                            /* the stored profile, validated, at EVERY start */
             s_cap_ticks = (float)CTRL_STAGE3_MAX_EFF_TICKS;
             if (s_prof_ok != 0U)
-            {   /* the profile's cap limits the regulator only if it is a REAL limit: a saturation knee that was measured, or a sweep that went as far as the installer's own Max Correction. A sweep that was stopped EARLY by the output
-                 * headroom (tuned at a high input, see slave_tune_link.h) says nothing about what the transformer can do: its cap is NOT applied, or a profile made at 230 V would hold the regulator to about 32 V of boost. */
+            {   /* v0.9.47: the profile's cap limits the regulator ONLY if it is a measured SATURATION KNEE (the transformer truly cannot deliver more). A sweep that stopped at 80 % of Max Correction, or that the output headroom stopped early (tuned at a high input),
+                 * only says "verified up to here": its cap is NOT applied. MAX CORRECTION IS THE INSTALLER'S AND IS NEVER REDUCED BY THE TUNE; the gain scale is always applied. */
                 {   /* a REAL knee is one that sits at a real injection (TUNE_KNEE_MIN_V, 8 V): profiles stored by v0.9.38 and earlier can hold a "knee" at 4 V (noise and the converter's low-duty region), which would hold the regulator to a few volts of correction */
                     const float inj_cap = Tune_PredictDv(&s_prof, (float)s_prof.cap_ticks, (float)s_prof.vin_ref_dv * 0.1f);
                     const uint8_t real_knee = (uint8_t)((s_prof.knee != 0U) && (inj_cap >= TUNE_KNEE_MIN_V));
-                    const uint8_t reached_maxc = (uint8_t)((s_prof.knee == 0U) && (s_prof.maxc_dv >= s_mc_maxc_dv));
-                    if (((real_knee != 0U) || (reached_maxc != 0U)) && ((float)s_prof.cap_ticks < s_cap_ticks)) s_cap_ticks = (float)s_prof.cap_ticks;
+                    if ((real_knee != 0U) && ((float)s_prof.cap_ticks < s_cap_ticks)) s_cap_ticks = (float)s_prof.cap_ticks;       /* v0.9.47: ONLY a measured knee caps the regulator; MAX CORRECTION IS NEVER REDUCED by the tune: a sweep that stopped at 80 % of it (or was stopped by the headroom) only says "verified up to here" */
                 }
                 Reg_SetGainScale((float)s_prof.kib_m * 0.001f, (float)s_prof.kiu_m * 0.001f);
             }
