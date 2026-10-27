@@ -3,7 +3,7 @@
   * @brief   The CONVERTER-SIDE CURRENT (net I-OUT, connector pin 32, MCU pin PA2 = ADC1_IN2) from the power board's CT2500 sense chain. PURE LOGIC: counts in, amperes out.
   *
   *          THE CIRCUIT (schematic 22122016-EB, read from the drawing, confirmed by the builder): the CT2500 secondary (2500 turns) works into THREE EQUAL RESISTORS IN PARALLEL (R42, R43, R44) that form the burden. The drawing has 180 ohm each (60 ohm
-  *          in all); THIS BOARD HAS 68 ohm each (22.67 ohm in all): IOUT_BURDEN_R_EACH_OHM below, change it in slave_config.h if the resistors change. A differential stage (U8C, MCP6004) with R46 = 1k, R47 = 6k8 (gain 6.8) amplifies the burden
+  *          in all); the first boards had 68 ohm each (22.67 ohm in all); v0.9.58: 180 ohm is the default again: IOUT_BURDEN_R_EACH_OHM below, change it in slave_config.h if the resistors change. A differential stage (U8C, MCP6004) with R46 = 1k, R47 = 6k8 (gain 6.8) amplifies the burden
   *          voltage around a 1.65 V midpoint (VCC/2, from R37 .. R40). So   V(I-OUT) = 1.65 V +- 6.8 x R_burden x I_secondary,   I_secondary = I_primary / 2500:
   *                                  burden 22.67 ohm (68 x 3, this board):  0.0617 V per ampere, clips at +-26.8 A peak (18.9 A RMS), 13.1 mA per ADC count
   *                                  burden 60 ohm (180 x 3, the drawing):  0.1632 V per ampere, clips at +-10.1 A peak (7.1 A RMS),  4.9 mA per ADC count
@@ -24,7 +24,7 @@ extern "C" {
 #define IOUT_ADC_FULL        4095.0f
 #define IOUT_CT_TURNS        2500.0f           /* CT2500 */
 #ifndef IOUT_BURDEN_R_EACH_OHM
-#define IOUT_BURDEN_R_EACH_OHM  68.0f          /* R42, R43, R44, each (180 on the drawing) */
+#define IOUT_BURDEN_R_EACH_OHM  180.0f         /* R42, R43, R44, each: 180 ohm (the drawing; v0.9.58, the boards change from 68 ohm). slave_config.h sets it too */
 #endif
 #define IOUT_BURDEN_PARALLEL 3.0f
 #define IOUT_BURDEN_OHM      (IOUT_BURDEN_R_EACH_OHM / IOUT_BURDEN_PARALLEL)

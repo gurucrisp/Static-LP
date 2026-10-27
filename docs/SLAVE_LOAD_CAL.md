@@ -38,3 +38,6 @@ The master's CT serves one phase (R). The Y and B phases get their load ONLY fro
 * Until a phase is calibrated, or while its slave sends no current reading, or the reading is clipped, that phase shows `--.-A` and has **no overload protection**. Once calibrated, its load is on the Run page and its own overload trip works (Domestic: only that phase's unit; Industrial: the whole unit).
 * R keeps the Load Source choice (Master CT or Slave) as before.
 * Stored in the settings record, bytes 33 to 40 (Y zero, Y gain, B zero, B gain). An older record reads as "not calibrated". Factory Reset keeps them.
+
+## v0.9.58
+* The gain needs the converter peak at least **0.5 A** above the zero (it was 1 A). When it is less, the message says both numbers: `Load Too Low` / `Pk 2.90 Zero 2.50` (the peak now and the stored zero, amperes). A zero taken with the load already on, a load on another phase's output, or a converter that hardly works at this input voltage (its current follows the CORRECTION it makes, so near 230 V in it barely moves) all show up there. Calibrate with the input well away from the set voltage (a variac) and the load on THAT phase's output.

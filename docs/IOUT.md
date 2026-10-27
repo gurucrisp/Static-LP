@@ -39,3 +39,9 @@ The current in the conductor that passes through the CT. The drawing does not sh
 ## What it will be used for next
 * The ratio gives a load current from the slave, an independent cross-check of the master's CT (overload, inrush).
 * The autotune sweep has no load: the current is then the magnetizing current, which spikes when the core saturates. That is an earlier and safer stop than the slope of the voltage, and a limit far below the 41 A hardware trip.
+
+## v0.9.58: 180 ohm x 3 is the default again
+The boards change to 180 ohm x 3 (60 ohm, the drawing's value). `IOUT_BURDEN_R_EACH_OHM` is 180.0f in the default `slave_config.h`, the production config, the other I-OUT configs and `slave_iout.h`. A board that still has 68 ohm resistors needs `#define IOUT_BURDEN_R_EACH_OHM 68.0f` in its `slave_config.h`, or every converter-current reading is 2.65 times too low.
+* Resolution 4.9 mA per count (was 13.1); the channel clips at +-10.1 A peak (was 26.8); the hardware comparators trip at about +-41 A peak (was 108).
+* At the converter peaks measured on the bench (7.8 A of peak at 10 A of load) the load reading clips from about 13 A of load. Above that the slave's load reading is "clipped": R falls back to the master CT, **Y and B have no load reading and no overload trip**. Check the clip and the 41 A trip against your largest normal load and inrush.
+* Redo the Slave Load Cal (zero and gain) of every phase after the resistors change.

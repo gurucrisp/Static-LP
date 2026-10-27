@@ -265,7 +265,17 @@ static void slcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
     }
     {   /* THE GAIN: the typed load against the peak above the zero */
         uint32_t delta = (pk > *zp) ? (uint32_t)(pk - *zp) : 0U, g;
-        if (delta < MAPP_SL_MIN_DELTA_CA) { MUI_Notify(&a->ui, "Load Too Low", "Min 1 A Above Zero", now); return; }
+        if (delta < MAPP_SL_MIN_DELTA_CA)
+        {   /* v0.9.58: say the two numbers, so a zero taken with the load on, a load on another phase or a converter that hardly works at this input can be told apart: "Pk 2.80 Zero 2.50" */
+            char t[21]; uint32_t n = 0U; uint16_t v[2]; uint32_t k; v[0] = (pk > 9999U) ? 9999U : pk; v[1] = (*zp > 9999U) ? 9999U : *zp;
+            for (k = 0U; k < 2U; k++)
+            {   const char *lb = (k == 0U) ? "Pk " : " Zero "; uint32_t i = 0U, w = v[k] / 100U;
+                while (lb[i] != '\0') t[n++] = lb[i++];
+                if (w >= 10U) t[n++] = (char)('0' + (w / 10U));
+                t[n++] = (char)('0' + (w % 10U)); t[n++] = '.'; t[n++] = (char)('0' + ((v[k] / 10U) % 10U)); t[n++] = (char)('0' + (v[k] % 10U));
+            }
+            t[n] = '\0'; MUI_Notify(&a->ui, "Load Too Low", t, now); return;
+        }
         if ((entered < MAPP_CT_MIN_CAL_DA) || (entered > 1800U)) { MUI_Notify(&a->ui, "Enter 2.0-180.0 A", "", now); return; }
         g = (entered * 10000U + (delta / 2U)) / delta;
         if ((g < 200U) || (g > 5000U)) { MUI_Notify(&a->ui, "Out Of Range", "Check The Load", now); return; }

@@ -39,7 +39,10 @@ static void run(uint32_t ms)
 static void tap(int key, uint32_t down_ms) { K[key] = 1U; run(down_ms); K[key] = 0U; run(120U); }      /* 0 MENU, 1 START, 2 STOP, 3 LOG */
 static void combo(void) { K[0] = K[3] = 1U; run(2150U); K[0] = K[3] = 0U; run(200U); }
 static const char *row(int r) { static char b[4][22]; int n; strcpy(b[r], F[r]); n = (int)strlen(b[r]); while (n > 0 && b[r][n - 1] == ' ') b[r][--n] = '\0'; return b[r]; }
-static int crow_ok(int r, const char *txt) { char b[24]; int n = (int)strlen(txt), i, c = (20 - n) / 2; for (i = 0; i < c; i++) b[i] = ' '; strcpy(&b[c], txt); return strcmp(row(r), b) == 0; }
+static int crow_ok(int r, const char *txt) { char b[24]; const char *g = row(r); int n = (int)strlen(txt), i, c = (20 - n) / 2; for (i = 0; i < c; i++) b[i] = ' '; strcpy(&b[c], txt);
+    if (strlen(g) != strlen(b)) return 0;
+    for (i = 0; b[i] != '\0'; i++) if ((g[i] != b[i]) && !((r == 2) && (g[i] == '_') && (b[i] >= '0') && (b[i] <= '9'))) return 0;      /* v0.9.57: the Set-Mode digit being edited blinks in place */
+    return 1; }
 #define CROW(r, txt) CHECK(crow_ok(r, txt), "row %d is '%s' (expected '%s' centred)", r, row(r), txt)
 #define ROW(r, txt) CHECK(strcmp(row(r), txt) == 0, "row %d is '%s' (expected '%s')", r, row(r), txt)
 static void to_run(void) { run(MUI_SPLASH_MS + 200U); }
@@ -664,8 +667,8 @@ static void t_ct_peak(void)
     D.ct_max_x16 = x16_for_da(700U); run(40U);
     CHECK(MApp_Engine(&A)->contactor[0] == 0U && MLog_Count(&A.log) >= 1U && MLog_Get(&A.log, 0, &rec) == 0 && rec.type == MLOG_T_INRUSH, "70 A for 40 ms (the limit is 60 A): the contactor opens and an Inrush is logged");
     D.ct_max_x16 = 0U; run(500U);
-    /* the same reading with the default 99 A overload setting: 70 A is nothing */
-    fresh(); to_run(); run(12000U); D.ct_max_x16 = x16_for_da(700U); run(2000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "Overload Current 99 A: 70 A is no peak");
+    /* the same reading with a 99 A overload setting: 70 A is nothing (v0.9.58: set here; the default is 25 A since v0.9.55) */
+    fresh(); A.settings.ovl_current = 99U; to_run(); run(12000U); D.ct_max_x16 = x16_for_da(700U); run(2000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "Overload Current 99 A: 70 A is no peak");
     /* the full scale of the ADC (4000 counts and more) is a peak whatever the setting is */
     D.ct_max_x16 = (uint16_t)(MAPP_CT_FULL_X16 - 16U); run(500U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "just under the full scale (3999 counts): no trip");
     D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(60U); CHECK(MApp_Engine(&A)->contactor[0] == 0U && MLog_Get(&A.log, 0, &rec) == 0 && rec.type == MLOG_T_INRUSH, "the ADC at its full scale: the contactor opens, an Inrush is logged");
@@ -881,6 +884,14 @@ static void t_slave_load(void)
     CHECK(A.settings.sl_zero_ca == 250U && strstr(row(1), "Zero Set") != NULL, "00.0 and LOG at no load: the peak (2.50 A) is the zero (%u) ('%s')", (unsigned)A.settings.sl_zero_ca, row(1));
     run(3000U); D.iout_pk_ca = 1030U; run(300U); A.ui.cal_val = 100U; tap(3, 100U);
     CHECK(A.settings.sl_gain == 1282U && strstr(row(1), "Calibrated") != NULL, "10.0 A typed with a peak of 10.30 A: gain = 10.0 / (10.30 - 2.50) = 1.282 (%u) ('%s')", (unsigned)A.settings.sl_gain, row(1));
+    /* v0.9.58: too little above the zero: the message gives both numbers; 0.5 A above it is enough now */
+    run(3000U); D.iout_pk_ca = 290U; run(300U); A.ui.cal_val = 30U; tap(3, 100U);
+    CHECK(A.settings.sl_gain == 1282U && strstr(row(1), "Load Too Low") != NULL && strstr(row(2), "Pk 2.90 Zero 2.50") != NULL, "0.40 A above the zero: refused, and it says 'Pk 2.90 Zero 2.50' ('%s')", row(2));
+    run(3000U); A.settings.sl_zero_ca = 1250U; D.iout_pk_ca = 1290U; run(300U); A.ui.cal_val = 30U; tap(3, 100U);
+    CHECK(strstr(row(2), "Pk 12.90 Zero 12.50") != NULL, "two-digit numbers fit ('%s')", row(2));
+    run(3000U); A.settings.sl_zero_ca = 250U; D.iout_pk_ca = 310U; run(300U); A.ui.cal_val = 30U; tap(3, 100U);
+    CHECK(A.settings.sl_gain == 5000U && strstr(row(1), "Calibrated") != NULL, "0.60 A above the zero for 3.0 A: accepted, gain 5.000 (%u) ('%s')", (unsigned)A.settings.sl_gain, row(1));
+    run(3000U); D.iout_pk_ca = 1030U; run(300U); A.ui.cal_val = 100U; tap(3, 100U); CHECK(A.settings.sl_gain == 1282U, "(put back: 1.282)");
     boot(); CHECK(A.settings.sl_zero_ca == 250U && A.settings.sl_gain == 1282U && A.settings_from_flash, "after a restart the calibration is still there (zero %u, gain %u)", (unsigned)A.settings.sl_zero_ca, (unsigned)A.settings.sl_gain);
     /* the refusals, each with its words, and nothing changes */
     { static const struct { int what; const char *l1; } E[] = { {0, "Run The Unit"}, {1, "No Converter"}, {2, "Reading Clipped"}, {3, "Load Too Low"}, {4, "Enter 2.0-180.0 A"}, {5, "Out Of Range"}, {6, "Save Failed"} };
@@ -1027,7 +1038,9 @@ static void t_overheat(void)
     CHECK(MApp_Engine(&A)->contactor[0] == 1U, "80 degC for 4 s, then 60 for 4 s, again and again: never trips (the delay restarts each time)");
     /* THREE PHASES: only the hot phase's unit trips */
     three_fresh((uint8_t)M_MODE_DOMESTIC); A.settings.scroll = 0U; run3(12000U); D.yb[0].ntc_valid = 1U; D.yb[0].ntc_raw = raw_of(85.0); D.yb[1].ntc_valid = 1U; D.yb[1].ntc_raw = raw_of(50.0); run3(12500U);
-    run3(300U);                                                                          /* (Display Scroll is off here: the page with the per-phase readings stays up) */
+    run3(300U);
+    CHECK(A.ui.page == MUI_PG_STATUS && strstr(F[1], "Y : Heat Appear 85C!") != NULL, "v0.9.57: Y's heat warning reaches the screen: the status page, 'Y : Heat Appear 85C!' ('%s')", F[1]);
+    A.ui.page = 0U; run3(300U);                                                          /* back to the page with the per-phase readings (Display Scroll is off here) */
     CHECK(strstr(F[1], "Y:") != NULL && strstr(F[1], "85C!") != NULL && strstr(F[2], "B:") != NULL && strstr(F[2], "50C") != NULL && strstr(F[0], "C") == NULL, "Domestic Run screen: Y shows '85C!', B '50C', R (no reading) nothing ('%s' / '%s' / '%s')", F[0], F[1], F[2]);
     { const MFOut_t *o = MApp_Engine(&A); int16_t dy, db; uint8_t sy = MApp_TempDeci(&A, 1U, &dy), sb = MApp_TempDeci(&A, 2U, &db);
       CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_HEAT && sy == MNTC_OK && sb == MNTC_OK && dy > 840 && db > 490 && db < 510, "Domestic: the Y heat sink is at 85 degC: ONLY the Y unit trips (contactors %u %u %u, Y %d, B %d)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (int)dy, (int)db); }

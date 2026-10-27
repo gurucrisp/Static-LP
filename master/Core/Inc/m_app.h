@@ -190,7 +190,7 @@ typedef struct { uint8_t id, cmd; int32_t num; char letter; uint8_t ph; } MCalK_
 #define MAPP_KCMD_CALV  1U            /* num = the true input voltage, tenths of a volt   */
 #define MAPP_KCMD_CALO  2U            /* num = the true output voltage, tenths of a volt  */
 #define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
-#define MAPP_SL_MIN_DELTA_CA 100U   /* the slave load calibration needs the peak at least 1 A above the zero (hundredths of an ampere) */
+#define MAPP_SL_MIN_DELTA_CA 50U    /* the slave load calibration needs the peak at least 0.5 A above the zero (hundredths of an ampere). v0.9.58: was 1 A; the 180 ohm burden reads 4.9 mA per count */
 #define MAPP_KCMD_TUNE  4U            /* start the transformer autotune                    */
 #define MAPP_KCMD_TABORT 5U           /* stop it                                           */
 #define MAPP_TUNE_FRAME_TIMEOUT_MS 8000UL   /* no $T frame for this long while tuning: the slave is lost, the master aborts          */

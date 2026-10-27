@@ -290,9 +290,10 @@
 
 /* ======================= + CONVERTER-SIDE CURRENT (I-OUT on PA2) =======================
  * This config = the 100 V/s fast-correction profile above + the 4th ADC channel for the CT2500 sense chain (net I-OUT, PA2): its AC RMS and peak go to the master in $E and are shown on the Converter Current page (LOG, MENU x7).
- * Confirmed on the bench (v0.9.31): the voltages read as before and the current agrees with a clamp meter. The burden of THIS board is 68 ohm x 3 (the drawing has 180): 0.0617 V per ampere, the channel clips at +-26.8 A peak;
- * the hardware short-circuit comparators then trip at about +-108 A peak. See docs/IOUT.md. */
+ * Confirmed on the bench (v0.9.31) with a 68 ohm x 3 burden. v0.9.58: the burden is 180 ohm x 3 = 60 ohm (the drawing's value): 0.1632 V per ampere, 4.9 mA per count, the channel CLIPS at +-10.1 A peak
+ * (a load of roughly 13 A at the converter peaks measured on the bench: above it the slave's load reading is "clipped" and the Y / B overload trip has no reading), and the hardware
+ * short-circuit comparators trip at about +-41 A peak (it was 108 A with 68 ohm). With 68 ohm resistors fitted put 68.0f back here. See docs/IOUT.md. */
 #define SLAVE_IOUT 1
-#define IOUT_BURDEN_R_EACH_OHM 68.0f
+#define IOUT_BURDEN_R_EACH_OHM 180.0f
 
 #endif /* SLAVE_CONFIG_H */

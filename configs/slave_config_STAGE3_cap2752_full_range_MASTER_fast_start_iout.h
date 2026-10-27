@@ -283,6 +283,7 @@
 #define SLAVE_IOUT 1
 /* The burden of the CT2500: R42, R43, R44 in parallel. The drawing has 180 ohm each; THIS BOARD HAS 68 ohm each (22.67 ohm in all): 0.0617 V per ampere of primary current, the channel clips at +-26.8 A peak (18.9 A RMS).
  * NOTE the hardware short-circuit comparators have FIXED thresholds across the burden: with 68 ohm x 3 they trip at about +-108 A peak (41 A with 180 ohm x 3). If the resistors change, change this number. */
-#define IOUT_BURDEN_R_EACH_OHM 68.0f
+/* v0.9.58: the boards change to 180 ohm x 3 (60 ohm): clips at +-10.1 A peak, hardware trip about +-41 A peak. Put 68.0f back if 68 ohm resistors are fitted. */
+#define IOUT_BURDEN_R_EACH_OHM 180.0f
 
 #endif /* SLAVE_CONFIG_H */
