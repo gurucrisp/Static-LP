@@ -139,6 +139,7 @@ typedef struct
     uint16_t     rec_peak, rec_s10, rec_pk_v;   /* the largest error so far (tenths of a volt); the last recovery time (tenths of a second); its largest error (volts) */
     uint32_t     rec_t0;
     uint8_t      vcal_ph;                          /* v0.9.55: the phase whose slave the calibration command goes to (0 R, 1 Y, 2 B) */
+    uint8_t      no_ct;                            /* v0.9.60: no master CT fitted (MApp_SetCtFitted(a, 0)): the CT is never used, whatever the Load Source setting */
     uint8_t      vcal_wait, vcal_due, vcal_id, vcal_cmd, vcal_ch, vcal_tx_n;   /* a calibration command is out: waiting for its $R; a (re)send is due; its id, command, channel, transmissions so far */
     int32_t      vcal_num; char vcal_letter; uint32_t vcal_t0, vcal_t_tx, t_now;
     uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */
@@ -217,7 +218,8 @@ uint8_t MApp_NextKId(MApp_t *a);                                              /*
 uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now);             /* 1 = a $K frame is due now (first send or a retry): build and send it */
 void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived on the R link */
 void    MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t value);   /* v0.9.54: a $R on link ph (0 R, 1 Y, 2 B): only the Re-tune of that phase takes it from the Y and B links */
-uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i);                               /* v0.9.54: 1 once when the Y (0) or B (1) slave must be asked for its hello again (a Re-tune stored a new profile) */
+uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i);
+void    MApp_SetCtFitted(MApp_t *a, uint8_t fitted);                          /* v0.9.60: 0 = no master CT: no CT load, no CT inrush backup, the Load Source item and the Load Calibration page hidden */                               /* v0.9.54: 1 once when the Y (0) or B (1) slave must be asked for its hello again (a Re-tune stored a new profile) */
 /* a Date or Time saved in Set-Mode: returns 1 once, with the value to write to the real-time clock (seconds are set to 0 by the glue) */
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */

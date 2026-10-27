@@ -284,10 +284,10 @@ static void t_wait_row(void)
 {
     /* an automatic restart is counting down: the short name at the left, "Rst m:ss" at the right; the code is dropped while it counts */
     ui_reset(M_MODE_SINGLE); to_run();
-    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 272U; tick(100U); ROW(3, "Inrush      Rst 4:32");
+    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 272U; tick(100U); ROW(3, "Inrush F02  Rst 4:32");      /* v0.9.60: the slave's code next to it */
     D.fault[0] = MLOG_T_POWER_STAGE; D.fcode[0] = 7U; D.wait_s[0] = 30U; tick(100U); ROW(3, "Power Stage Rst 0:30");
     D.fault[0] = MLOG_T_HEAT; D.wait_s[0] = 5U; tick(100U); ROW(3, "Heat        Rst 0:05");
-    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 300U; tick(100U); ROW(3, "Inrush      Rst 5:00");
+    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; D.wait_s[0] = 300U; tick(100U); ROW(3, "Inrush F02  Rst 5:00");
     D.wait_s[0] = 0U; tick(100U); ROW(3, "Inrush           F02");                     /* nothing counting (latched): the text and the code, as before */
     D.fault[0] = MLOG_T_OVERLOAD; D.wait_s[0] = 12U; tick(100U); ROW(3, "Overload");                    /* only Inrush, Power Stage and Heat count down */
     printf("  restart countdown on the status row: Inrush, Power Stage and Heat show Rst m:ss, a latch shows its code\n");
@@ -829,8 +829,34 @@ static void t_missing_screen(void)
     D.fault[1] = 0U; tick(100U);
     printf("  missing phase screen: Industrial alone in the middle (one or two phases), Domestic on its row\n");
 }
+
+/* v0.9.60: no master CT: the Load Source item and the Load Calibration page are not shown; an Inrush says which protection tripped */
+static void t_no_ct_and_codes(void)
+{
+    int i, seen25 = 0; uint8_t ids[32]; int n;
+    ui_reset(M_MODE_SINGLE); MUI_SetFeatures(&U, MUI_FEAT_RETUNE | MUI_FEAT_NO_CT); to_run(); enter_set(); n = walk(ids);
+    for (i = 0; i < n; i++) if (ids[i] == 25U) seen25 = 1;
+    CHECK(seen25 == 0 && n > 10, "no CT: Set-Mode walks %d items, never Load Source", n);
+    ui_reset(M_MODE_SINGLE); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set(); n = walk(ids); seen25 = 0; for (i = 0; i < n; i++) if (ids[i] == 25U) seen25 = 1;
+    CHECK(seen25 == 1, "with a CT: Load Source is there");
+    ui_reset(M_MODE_SINGLE); MUI_SetFeatures(&U, MUI_FEAT_NO_CT); to_run(); key(MK_LOG_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT);
+    CHECK(!MUI_ShowsCal(&U) && MUI_ShowsClock(&U), "no CT, Single: LOG, MENU x3 skips Load Calibration (the clock page)");
+    ui_reset(M_MODE_DOMESTIC); S.scroll = 0U; MUI_SetFeatures(&U, MUI_FEAT_NO_CT); to_run(); key(MK_LOG_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT);
+    CHECK(!MUI_ShowsCal(&U) && MUI_ShowsClock(&U), "and three-phase too");
+    MUI_SetFeatures(&U, 0U);
+    /* the Inrush code: the status page and the log */
+    ui_reset(M_MODE_DOMESTIC); S.scroll = 0U; to_run(); { int p; for (p = 0; p < 3; p++) D.have[p] = 1U; }
+    D.fault[0] = MLOG_T_INRUSH; D.fcode[0] = 2U; tick(100U); CHECK(strcmp(row(0), "R : INRUSH F02") == 0, "the status page: 'R : INRUSH F02' (the slave's over-current trip) ('%s')", row(0));
+    D.fcode[0] = 0U; tick(100U); CHECK(strcmp(row(0), "R : INRUSH") == 0, "no code: 'R : INRUSH' (the master CT) ('%s')", row(0));
+    D.fault[0] = 0U; tick(100U);
+    { MLogRec_t r; memset(&r, 0, sizeof r); r.type = MLOG_T_INRUSH; r.phase = 0U; r.slave_code = 1U; r.vin_dv = 2300U; r.vout_dv = 2300U; (void)MLog_Append(&LG, &r); }
+    key(MK_LOG_SHORT); CHECK(strstr(row(1), "Inrush") != NULL && strstr(row(1), "F01") != NULL, "the log: 'R Inrush ... F01' ('%s')", row(1));
+    key(MK_LOG_SHORT);
+    printf("  no master CT: Load Source and Load Calibration hidden; an Inrush shows F01 / F02 (the slave) or nothing (the master CT)\n");
+}
 int main(void)
 {
+    t_no_ct_and_codes();
     t_missing_screen();
     t_three_service();
     t_keys();

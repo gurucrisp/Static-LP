@@ -893,6 +893,22 @@ static void t_slave_load(void)
     CHECK(A.settings.sl_gain == 5000U && strstr(row(1), "Calibrated") != NULL, "0.60 A above the zero for 3.0 A: accepted, gain 5.000 (%u) ('%s')", (unsigned)A.settings.sl_gain, row(1));
     run(3000U); D.iout_pk_ca = 1030U; run(300U); A.ui.cal_val = 100U; tap(3, 100U); CHECK(A.settings.sl_gain == 1282U, "(put back: 1.282)");
     boot(); CHECK(A.settings.sl_zero_ca == 250U && A.settings.sl_gain == 1282U && A.settings_from_flash, "after a restart the calibration is still there (zero %u, gain %u)", (unsigned)A.settings.sl_zero_ca, (unsigned)A.settings.sl_gain);
+    /* v0.9.60: NO MASTER CT FITTED (the build switch): whatever Load Source says, the CT is never used */
+    {   fresh(); MApp_SetCtFitted(&A, 0U); A.settings.load_src = MS_LOADSRC_CT; A.settings.ovl_current = 20U; to_run(); run(12000U);
+        D.ct_raw = 1U; D.ct_x16 = x16_for_da(900U); D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(3000U);
+        CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U && strstr(row(2), "--.-A") != NULL, "no CT fitted, Load Source still 'Master CT' in the settings: a full-scale CT input is no inrush and no load ('%s')", row(2));
+        A.settings.sl_zero_ca = 100U; A.settings.sl_gain = 1000U; D.iout_valid = 1U; D.iout_pk_ca = 600U; run(1500U);
+        CHECK(strstr(row(2), " 5.0A") != NULL, "the load is the slave's (calibrated): 5.0 A ('%s')", row(2));
+        CHECK((A.ui.features & MUI_FEAT_NO_CT) != 0U && (A.ui.features & MUI_FEAT_RETUNE) != 0U, "the display is told: no CT (Re-tune kept)");
+        MApp_InitCal(&A, CALA, CALB); CHECK((A.ui.features & MUI_FEAT_NO_CT) != 0U, "and it stays so after the calibration is opened");
+        MApp_SetCtFitted(&A, 1U); CHECK((A.ui.features & MUI_FEAT_NO_CT) == 0U, "a CT fitted: shown again"); }
+    /* v0.9.60: the Converter Current page shows R, Y and B in turn in the three-phase modes */
+    {   char fr[MUI_ROWS][MUI_COLS + 1U]; fresh(); A.settings.mode = (uint8_t)M_MODE_DOMESTIC; to_run(); run(2000U);
+        D.iout_valid = 1U; D.iout_pk_ca = 111U; D.iout_rms_ca = 55U; D.yb[0].have = 1U; D.yb[0].iout_valid = 1U; D.yb[0].iout_pk_ca = 222U; D.yb[1].have = 1U; D.yb[1].iout_valid = 0U; run(100U);
+        MApp_IoutPage(&A, 0U, fr); CHECK(strstr(fr[0], "Converter Current R") != NULL && strstr(fr[2], "1.11") != NULL, "R in its turn ('%s' / '%s')", fr[0], fr[2]);
+        MApp_IoutPage(&A, 3000U, fr); CHECK(strstr(fr[0], "Converter Current Y") != NULL && strstr(fr[2], "2.22") != NULL, "Y in its turn: Y's own reading ('%s' / '%s')", fr[0], fr[2]);
+        MApp_IoutPage(&A, 6000U, fr); CHECK(strstr(fr[0], "Converter Current B") != NULL && strstr(fr[2], "--.--") != NULL, "B with no reading: dashes ('%s')", fr[2]);
+        A.settings.mode = (uint8_t)M_MODE_SINGLE; MApp_IoutPage(&A, 3000U, fr); CHECK(strstr(fr[0], "Converter Current") != NULL && strstr(fr[0], " Y") == NULL && strstr(fr[2], "1.11") != NULL, "Single: R only, as before"); }
     /* v0.9.59: Load Source = Slave, No CT: the master CT is never read */
     {   fresh(); A.settings.load_src = MS_LOADSRC_SLAVE_NOCT; A.settings.ovl_current = 20U; to_run(); run(12000U); D.ct_raw = 1U; D.ct_x16 = x16_for_da(900U); D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(3000U);
         CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "Slave, No CT: the CT input at full scale (noise on an unconnected input) is NOT an inrush, and its 90 A is not a load");

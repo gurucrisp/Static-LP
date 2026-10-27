@@ -46,6 +46,7 @@ extern "C" {
 /* what the app can do: a request the app cannot serve is answered "Not Available" on the screen */
 #define MUI_FEAT_CALIBRATE  0x01U
 #define MUI_FEAT_RETUNE     0x02U
+#define MUI_FEAT_NO_CT      0x04U     /* v0.9.60: no master CT fitted: the Load Source item and the Load Calibration page are not shown */
 
 typedef struct
 {

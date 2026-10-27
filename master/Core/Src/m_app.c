@@ -69,7 +69,7 @@ void MApp_InitCal(MApp_t *a, uint32_t pa, uint32_t pb)
         uint16_t z = (uint16_t)(b[0] | (b[1] << 8)), g = (uint16_t)(b[2] | (b[3] << 8));
         if ((g >= 200U) && (g <= 5000U) && (z <= (uint16_t)(4095U * 16U))) { a->cal.zero_x16 = z; a->cal.gain_x1000 = g; a->cal.from_flash = 1U; }
     }
-    MUI_SetFeatures(&a->ui, (uint8_t)(MUI_FEAT_CALIBRATE | MUI_FEAT_RETUNE));            /* calibration is available now; Re-tune stays available (MUI_SetFeatures ASSIGNS: it must not drop the flag MApp_Init set) */
+    MUI_SetFeatures(&a->ui, (uint8_t)(MUI_FEAT_CALIBRATE | MUI_FEAT_RETUNE | ((a->no_ct != 0U) ? MUI_FEAT_NO_CT : 0U)));            /* calibration is available now; Re-tune stays available (MUI_SetFeatures ASSIGNS: it must not drop the flag MApp_Init set) */
 }
 
 
@@ -132,7 +132,7 @@ void MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t sa, uint32_t sb, uint32_t
     a->k_id = 1U;                                    /* power-up: Auto waits the Restart Time, Manual waits for START */
     MUI_Init(&a->ui, &a->settings, &a->log, now);
     MUI_SetLimits(&a->ui, 0);                                              /* the slave's window and output guard come with its $H frame (stage 7c) */
-    MUI_SetFeatures(&a->ui, MUI_FEAT_RETUNE);                              /* Re-tune starts a transformer sweep (behind the Set-Mode password; a slave that cannot answers "Not Supported"); calibration is added by MApp_InitCal */
+    MUI_SetFeatures(&a->ui, (uint8_t)(MUI_FEAT_RETUNE | ((a->no_ct != 0U) ? MUI_FEAT_NO_CT : 0U)));                              /* Re-tune starts a transformer sweep (behind the Set-Mode password; a slave that cannot answers "Not Supported"); calibration is added by MApp_InitCal */
 }
 
 /* The response timer: while the unit runs with the contactor closed, an output more than 5 V from the set voltage starts the clock; back within 1 V stops it. The last result is shown on the diagnostics page
@@ -156,7 +156,7 @@ static void rec_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
     uint8_t hi = 0U;
-    if ((d->ct_max_x16 != 0U) && (a->settings.load_src != MS_LOADSRC_SLAVE_NOCT))          /* v0.9.59: no master CT fitted: its input is noise, never a peak */
+    if ((d->ct_max_x16 != 0U) && (a->settings.load_src != MS_LOADSRC_SLAVE_NOCT) && (a->no_ct == 0U))          /* v0.9.59: no master CT fitted: its input is noise, never a peak */
     {
         uint32_t lim_da = (uint32_t)a->settings.ovl_current * 10U * MAPP_CT_PEAK_FACTOR;
         if ((d->ct_max_x16 >= MAPP_CT_FULL_X16) || ((uint32_t)ct_to_da(&a->cal, d->ct_max_x16) > lim_da)) hi = 1U;
@@ -507,8 +507,8 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     r.vout_dv[0] = disp_filter(&a->f_vout, d->vout_dv, d->have, 10, 7, now);
     ld = d->load_da; lok = d->load_ok;
     if (d->ct_raw != 0U) { ld = ct_to_da(&a->cal, d->ct_x16); lok = 1U; }                      /* from the CT count and the calibration */
-    if (a->settings.load_src == MS_LOADSRC_SLAVE_NOCT) { ld = 0U; lok = 0U; }                  /* v0.9.59: no master CT: the slave's reading below, or none (--.-A, no overload trip) */
-    if ((a->settings.load_src != MS_LOADSRC_CT) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
+    if ((a->settings.load_src == MS_LOADSRC_SLAVE_NOCT) || (a->no_ct != 0U)) { ld = 0U; lok = 0U; }                  /* v0.9.59: no master CT: the slave's reading below, or none (--.-A, no overload trip) */
+    if (((a->settings.load_src != MS_LOADSRC_CT) || (a->no_ct != 0U)) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
     {   /* "Load Source = Slave": the slave's converter current, calibrated. NOT calibrated, no reading or a clipped one: the master CT stays in charge (the overload trip must never depend on a reading that is not there). */
         ld = sl_to_da(a->settings.sl_zero_ca, a->settings.sl_gain, d->iout_pk_ca); lok = 1U;
     }
@@ -841,6 +841,11 @@ void MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t
     if ((a->tune_state != TS_IDLE) && (a->tune_ph == ph) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }      /* the Y and B links: only the answer to that phase's TUNE or TABORT */
     if ((a->vcal_wait != 0U) && (a->vcal_ph == ph) && (id == a->vcal_id)) { a->vcal_wait = 0U; a->vcal_due = 0U; vcal_message(a, status, value); }      /* v0.9.55: or to its voltage calibration */
 }
+void MApp_SetCtFitted(MApp_t *a, uint8_t fitted)
+{
+    a->no_ct = (uint8_t)(fitted == 0U);
+    MUI_SetFeatures(&a->ui, (uint8_t)((a->ui.features & (uint8_t)~MUI_FEAT_NO_CT) | ((a->no_ct != 0U) ? MUI_FEAT_NO_CT : 0U)));
+}
 uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i) { if ((i > 1U) || (a->hello_yb[i] == 0U)) return 0U; a->hello_yb[i] = 0U; return 1U; }
 
 uint8_t MApp_ShowsProfile(const MApp_t *a) { return MUI_ShowsProfile(&a->ui); }
@@ -884,21 +889,26 @@ uint8_t MApp_ShowsIout(const MApp_t *a) { return MUI_ShowsIout(&a->ui); }
 
 /* The converter-side current page (LOG, then MENU x7): what the slave's CT2500 chain (net I-OUT) measures, to check the scaling against a clamp meter on the same conductor. It is the CT PRIMARY current. */
 /* the last row of the Converter Current page: the R slave's heat-sink temperature (v0.9.49) */
-static void heat_row(const MApp_t *a, char *t)
+static void heat_row(const MApp_t *a, uint8_t ph, char *t)
 {
-    int16_t dc; uint8_t st = MApp_TempDeci(a, 0U, &dc); uint32_t v;
+    int16_t dc; uint8_t st = MApp_TempDeci(a, ph, &dc); uint32_t v;
     if (st == 255U)       { copy(t, "Heat Sink  ---"); return; }
     if (st == MNTC_OPEN)  { copy(t, "Heat Sink: no NTC"); return; }
     if (st == MNTC_SHORT) { copy(t, "OVERHEAT: NTC short"); return; }
-    copy(t, (a->heat_on[0] != 0U) ? "OVERHEAT  000.0 C" : "Heat Sink 000.0 C");
+    copy(t, (a->heat_on[ph] != 0U) ? "OVERHEAT  000.0 C" : "Heat Sink 000.0 C");
     v = (dc < 0) ? (uint32_t)(-(int32_t)dc) : (uint32_t)dc;
     t[10] = (dc < 0) ? '-' : (char)('0' + ((v / 1000U) % 10U)); t[11] = (char)('0' + ((v / 100U) % 10U)); t[12] = (char)('0' + ((v / 10U) % 10U)); t[14] = (char)('0' + (v % 10U));
 }
 void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
 {
-    const MAppData_t *d = &a->last; uint32_t r, c, n; char t[24]; (void)now;
+    const MAppData_t *dd = &a->last; uint32_t r, c, n; char t[24];
+    struct { uint8_t iout_valid, iout_clip; uint16_t iout_rms_ca, iout_pk_ca; } cv, *d = &cv;
+    uint8_t ph = (uint8_t)((a->settings.mode == (uint8_t)M_MODE_SINGLE) ? 0U : ((now / 3000U) % 3U));      /* v0.9.60: Industrial and Domestic show R, Y and B in turn, 3 s each */
+    if (ph == 0U) { cv.iout_valid = dd->iout_valid; cv.iout_clip = dd->iout_clip; cv.iout_rms_ca = dd->iout_rms_ca; cv.iout_pk_ca = dd->iout_pk_ca; }
+    else { const MAppSlave_t *s = &dd->yb[ph - 1U]; cv.iout_valid = (uint8_t)(s->have && s->iout_valid); cv.iout_clip = s->iout_clip; cv.iout_rms_ca = s->iout_rms_ca; cv.iout_pk_ca = s->iout_pk_ca; }
     for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
-    copy(t, "Converter Current"); for (n = 0U; t[n] != '\0'; n++) frame[0][1U + n] = t[n];
+    if (a->settings.mode == (uint8_t)M_MODE_SINGLE) { copy(t, "Converter Current"); for (n = 0U; t[n] != '\0'; n++) frame[0][1U + n] = t[n]; }
+    else { copy(t, (ph == 0U) ? "Converter Current R" : ((ph == 1U) ? "Converter Current Y" : "Converter Current B")); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n]; }
     if (d->iout_valid != 0U)
     {
         uint32_t rms = (d->iout_rms_ca > 9999U) ? 9999U : d->iout_rms_ca, pk = (d->iout_pk_ca > 9999U) ? 9999U : d->iout_pk_ca;
@@ -906,9 +916,9 @@ void MApp_IoutPage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS 
         for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
         copy(t, "Peak  00.00 A"); t[6] = (char)('0' + ((pk / 1000U) % 10U)); t[7] = (char)('0' + ((pk / 100U) % 10U)); t[9] = (char)('0' + ((pk / 10U) % 10U)); t[10] = (char)('0' + (pk % 10U)); if (t[6] == '0') t[6] = ' ';
         for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
-        if (d->iout_clip != 0U) copy(t, "OVER RANGE (clipped)"); else heat_row(a, t);
+        if (d->iout_clip != 0U) copy(t, "OVER RANGE (clipped)"); else heat_row(a, ph, t);
     }
-    else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; heat_row(a, t); }
+    else { copy(t, "RMS    --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n]; copy(t, "Peak   --.-- A"); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n]; heat_row(a, ph, t); }
     for (n = 0U; (t[n] != '\0') && (n < MUI_COLS); n++) frame[3][n] = t[n];
 }
 

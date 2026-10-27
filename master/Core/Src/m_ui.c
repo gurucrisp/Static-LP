@@ -81,7 +81,10 @@ static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
     case MLOG_T_IP_LV: s = "IP LV Appear"; break;   case MLOG_T_IP_HV: s = "IP HV Appear"; break;
     case MLOG_T_OP_LV: s = "OP LV Appear"; break;   case MLOG_T_OP_HV: s = "OP HV Appear"; break;
     case MLOG_T_OVERLOAD: s = "OL Appear"; break;   case MLOG_T_HEAT: s = "Heat Appear"; break;
-    case MLOG_T_FLIP: s = "TRF Flip"; break;        case MLOG_T_INRUSH: s = "INRUSH"; break;
+    case MLOG_T_FLIP: s = "TRF Flip"; break;
+    case MLOG_T_INRUSH: { const char *p = "INRUSH"; uint32_t n = 0U; while (p[n] != '\0') { o[n] = p[n]; n++; }
+        if (code != 0U) { o[n++] = ' '; o[n++] = 'F'; o[n++] = (char)('0' + ((code / 10U) % 10U)); o[n++] = (char)('0' + (code % 10U)); }      /* v0.9.60: F01 / F02 = the slave's over-current trip; none = the master CT */
+        o[n] = '\0'; return; }
     case MLOG_T_PHASE_SEQ: s = (seq == 2U) ? "PH SEQ SAME" : "PH SEQ REVERSE"; break;
     case MLOG_T_RETUNE: s = "RETUNE REQ"; break;    case MLOG_T_LINK_LOST: s = "LINK LOST"; break;
     case MLOG_T_WDG_RESET: s = "WDG RESET"; break;   case MLOG_T_PHASE_MISS: s = "PH MISSING"; break;
@@ -112,10 +115,12 @@ static const MItem_t ITEMS[N_ITEMS] =
 };
 
 static uint8_t is_action(uint8_t id) { return (id == 2U) || (id == 19U) || (id == 20U) || (id == 21U) || (id == 22U); }
+static uint8_t s_ct_fitted = 1U;                 /* v0.9.60: MUI_FEAT_NO_CT clears it (one display, one master) */
 static uint8_t visible(const MSettings_t *w, uint8_t id)
 {
     switch (id)
     {
+    case 25: return s_ct_fitted;                                                              /* Load Source: only with a master CT (without one the load is always the slave's) */
     case 13: return (uint8_t)(w->mode == (uint8_t)M_MODE_INDUSTRIAL);                         /* Phase Sequence: Industrial only */
     case 14: return (uint8_t)(w->mode != (uint8_t)M_MODE_SINGLE);                             /* Display Scroll: three-phase only */
     case 15: return (uint8_t)((w->mode != (uint8_t)M_MODE_SINGLE) && (w->scroll != 0U));      /* Scroll Time: only if scrolling */
@@ -215,7 +220,7 @@ void MUI_Init(MUI_t *u, MSettings_t *live, MLog_t *log, uint32_t now)
     u->live = live; u->log = log; u->screen = (uint8_t)MUI_SPLASH; u->t0 = now; u->t_key = now; u->t_page = now;
 }
 void MUI_SetLimits(MUI_t *u, const MLimits_t *lim) { u->lim = lim; }
-void MUI_SetFeatures(MUI_t *u, uint8_t feat) { u->features = feat; }
+void MUI_SetFeatures(MUI_t *u, uint8_t feat) { u->features = feat; s_ct_fitted = (uint8_t)((feat & MUI_FEAT_NO_CT) == 0U); }
 uint8_t MUI_SetModeOpen(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_SET) || (u->screen == (uint8_t)MUI_PW)); }
 uint8_t MUI_Take(MUI_t *u, uint16_t req) { if ((u->req & req) != 0U) { u->req = (uint16_t)(u->req & ~req); return 1U; } return 0U; }
 void MUI_Notify(MUI_t *u, const char *l1, const char *l2, uint32_t now) { msg_set(u, l1, l2, now, 0U); }
@@ -337,10 +342,10 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         {
             if (u->live->mode == (uint8_t)M_MODE_SINGLE)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
-                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 10U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
+                if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 10U); if ((u->page == 3U) && (s_ct_fitted == 0U)) u->page = 4U; if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if ((u->svc != 0U) && ((u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) && (u->cal_ph < 2U)) { u->cal_ph++; u->cal_init = 1U; u->cal_cursor = 2U; }      /* v0.9.55: the calibration pages for R, then Y, then B */
-            else if (u->svc != 0U) { u->cal_ph = 0U; u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
+            else if (u->svc != 0U) { u->cal_ph = 0U; u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) && (s_ct_fitted == 0U)) u->svc = 4U; if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % MUI_RUN3_PAGES); u->t_page = now; }
         }
         else if ((ev == MK_START) && ((sp(u) == 3U) || (sp(u) == 5U) || (sp(u) == 6U) || (sp(u) == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
@@ -465,6 +470,7 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
             char w[10]; uint32_t m = d->wait_s[0] / 60U, sec = d->wait_s[0] % 60U, k = 0U, i;
             f_put(f, 3U, 0U, "                    ");
             f_put(f, 3U, 0U, (d->fault[0] == (uint8_t)MLOG_T_INRUSH) ? "Inrush" : ((d->fault[0] == (uint8_t)MLOG_T_POWER_STAGE) ? "Power Stage" : "Heat"));
+            if ((d->fault[0] == (uint8_t)MLOG_T_INRUSH) && (d->fcode[0] != 0U)) { char cd[5] = { 'F', (char)('0' + ((d->fcode[0] / 10U) % 10U)), (char)('0' + (d->fcode[0] % 10U)), '\0', '\0' }; f_put(f, 3U, 7U, cd); }      /* v0.9.60: "Inrush F02  Rst 0:20" */
             w[k++] = 'R'; w[k++] = 's'; w[k++] = 't'; w[k++] = ' ';
             if (m >= 10U) w[k++] = (char)('0' + ((m / 10U) % 10U));
             w[k++] = (char)('0' + (m % 10U)); w[k++] = ':'; w[k++] = (char)('0' + (sec / 10U)); w[k++] = (char)('0' + (sec % 10U)); w[k] = '\0';
@@ -547,8 +553,8 @@ static void render_log(const MUI_t *u, Frame_t f)
     {   char b[12]; uint32_t c = 0U; static const char P[4] = { 'R', 'Y', 'B', '*' };
         f_put(f, 0U, 0U, "Fault Log "); fmt_zero(b, u->log_idx, 2U); f_put(f, 0U, 10U, b); f_put(f, 0U, 12U, "/"); fmt_zero(b, (uint32_t)(n - 1U), 2U); f_put(f, 0U, 13U, b);
         { char pc[3] = { P[r.phase & 3U], ' ', '\0' }; f_put(f, 1U, 0U, pc);
-          if ((r.type == MLOG_T_MAINS) || (r.type == MLOG_T_POWER_STAGE))
-          {   char cd[6]; f_put(f, 1U, 2U, (r.type == MLOG_T_MAINS) ? "Mains Unstable" : "Power Stage"); cd[0] = 'F'; cd[1] = (char)('0' + ((r.slave_code / 10U) % 10U)); cd[2] = (char)('0' + (r.slave_code % 10U)); cd[3] = '\0'; f_put_right(f, 1U, cd); }
+          if ((r.type == MLOG_T_MAINS) || (r.type == MLOG_T_POWER_STAGE) || ((r.type == MLOG_T_INRUSH) && (r.slave_code != 0U)))      /* v0.9.60: an Inrush from the slave says F01 / F02 */
+          {   char cd[6]; f_put(f, 1U, 2U, (r.type == MLOG_T_MAINS) ? "Mains Unstable" : ((r.type == MLOG_T_INRUSH) ? "Inrush" : "Power Stage")); cd[0] = 'F'; cd[1] = (char)('0' + ((r.slave_code / 10U) % 10U)); cd[2] = (char)('0' + (r.slave_code % 10U)); cd[3] = '\0'; f_put_right(f, 1U, cd); }
           else f_put(f, 1U, 2U, full_text(r.type)); }
         f_put(f, 2U, 0U, "I"); int_put(f, 2U, 1U, r.vin_dv, 4U, 1U); f_put(f, 2U, 6U, "O"); int_put(f, 2U, 7U, r.vout_dv, 4U, 1U);
         f_put(f, 2U, 12U, "L"); tenths_put(f, 2U, 13U, r.load_da, 5U, 1U); f_put(f, 2U, 18U, "A");                  /* the load at the trip */

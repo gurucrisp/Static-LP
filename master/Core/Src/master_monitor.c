@@ -554,12 +554,14 @@ extern uint32_t ADC_Read(uint32_t channel);       /* the original firmware's sin
 static const MHoursIo_t s_hours_io = { MRtc_BkpRead, MRtc_BkpWrite };
 #endif
 
+#if (MASTER_CT_FITTED == 1)
 static uint16_t ct_read_x16(void)
 {
     uint32_t sum = 0U, i;
     for (i = 0U; i < MASTER_CT_SAMPLES; i++) sum += ADC_Read(ADC_CHANNEL_0);
     return (uint16_t)((sum * 16U) / MASTER_CT_SAMPLES);
 }
+#endif
 
 static uint8_t key_down(GPIO_TypeDef *port, uint16_t pin) { return (HAL_GPIO_ReadPin(port, pin) == GPIO_PIN_RESET) ? 1U : 0U; }     /* active low */
 
@@ -570,7 +572,10 @@ void MasterApp_Run(void)
     static char   want[MON_LCD_ROWS][MON_LCD_COLS + 1U];
     MonLcd_t      lcd;
     uint32_t      t_step = 0U, t_tx = 0U, t_ct = 0U;
-    uint16_t      ct_x16 = 0U, ct_fast_max = 0U;
+    uint16_t      ct_x16 = 0U;
+#if (MASTER_CT_PEAK == 1)
+    uint16_t      ct_fast_max = 0U;
+#endif
     MDateTime_t   clk = { 0U, 0U, 0U, 0U, 0U }; uint8_t clk_ok = 0U, rtc_src = 0U; uint16_t rtc_bd = 0U, rtc_ic = 0U; uint32_t t_clk = 0U;      /* the real-time clock as last read, and when */
     uint8_t       seq_tx = 0U, have_last = 0U; uint32_t r_seen = 0U;
     MCtlOut_t     last;
@@ -595,6 +600,7 @@ void MasterApp_Run(void)
     MApp_BootReset(&app, g_mon.rst_wdg);                                         /* a restart by the watchdog is logged */
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
     MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
+    MApp_SetCtFitted(&app, (uint8_t)MASTER_CT_FITTED);                                 /* v0.9.60: without a CT the application never uses one */
     MApp_SetNtcHeat(&app, (uint8_t)MASTER_NTC_HEAT);                              /* the heat-sink temperature trips the unit (the Overheat Temp in Set-Mode) */
     rx_start();
 #if (MASTER_TEST_NO_VOLTAGE_CUTS != 0)
@@ -643,10 +649,12 @@ void MasterApp_Run(void)
                 d.wait_ctx   = (uint8_t)((g_mon.last.flags >> 8) & 0x7FU);
                 d.h_valid = g_mon.h_valid; d.win_lo_dv = g_mon.h_win_lo_dv; d.win_hi_dv = g_mon.h_win_hi_dv; d.vout_max_dv = g_mon.h_vout_max_dv;
             }
+#if (MASTER_CT_FITTED == 1)
             if ((uint32_t)(now - t_ct) >= 200U)
             {   /* the load current, every 200 ms (the averaging takes a few milliseconds: the receive DMA ring has 12.8 ms and the slave's frames come every 10 ms, so nothing is lost) */
                 t_ct = now; ct_x16 = ct_read_x16();
             }
+#endif
 #if (MASTER_CT_PEAK == 1)
             d.ct_max_x16 = ct_fast_max; ct_fast_max = 0U;
 #else
