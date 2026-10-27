@@ -695,10 +695,10 @@ void MasterApp_Run(void)
             {   uint8_t sq_round; (void)MApp_TakeSeqAction(&app, &sq_round); }                          /* no Y and B links: no measurement */
 #endif
             if (MApp_ShowsMonitor(&app) != 0U)
-            {   /* the monitor diagnostics, one MENU press away. In Industrial and Domestic mode it shows the R, Y and B links in turn, 3 s each: row 0 names the phase letter the slave on that cable reports (a Y board on the B cable says "SLAVE Y" in the B turn). */
+            {   /* the monitor diagnostics, one MENU press away. In Industrial and Domestic mode it shows the R, Y and B links in turn, 3 s each: row 0 names the PORT's phase (the slaves have no letter of their own). */
                 const MasterMon_t *mm = &g_mon;
 #if (MASTER_YB_LINKS == 1)
-                static MasterMon_t s_mon_view;                                                        /* the Y or B link for the monitor page: a board that says R is shown with its PORT's letter */
+                static MasterMon_t s_mon_view;                                                        /* the Y or B link for the monitor page, named with its PORT's letter */
                 if (app.settings.mode != (uint8_t)M_MODE_SINGLE) { uint32_t sel = (now / 3000U) % 3U; if (sel == 1U) { MLinks_DisplayMon(0U, &s_mon_view); mm = &s_mon_view; } else if (sel == 2U) { MLinks_DisplayMon(1U, &s_mon_view); mm = &s_mon_view; } }
 #endif
                 Mon_Compose(mm, now, want);

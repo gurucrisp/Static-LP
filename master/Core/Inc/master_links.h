@@ -8,9 +8,8 @@
   * DMA are in master_monitor.c): it decodes the bytes of each link, turns the state of a link into the application's data (MAppSlave_t), and decides when a
   * $M frame or a hello request is due, so all of it is tested on the PC.
   *
-  * The identity of a slave is its PORT (v0.9.52): the slave on the Y link is the Y slave, the one on the B link the B slave, whatever phase letter its board was built with, so all three
-  * boards of a unit can run the SAME firmware. A board that says 'R' (the default) is accepted on any port. Only an explicit letter of ANOTHER phase (a board built as 'B' on the Y cable)
-  * is treated as if NOTHING were heard, so a board that was given a letter still protects against swapped cables.
+  * The identity of a slave is its PORT only (v0.9.53): the slave on the Y link is the Y slave, the one on the B link the B slave. The phase letter in its $S frames is ignored
+  * (the slaves no longer have a SLAVE_PHASE_ID), so all three boards of a unit run the SAME firmware.
   ******************************************************************************
   */
 #ifndef MASTER_LINKS_H
@@ -31,7 +30,7 @@ extern "C" {
 void MLinks_Init(void);
 /* bytes ring[*rd .. wr) of link i go to its decoders */
 void MLinks_Feed(uint8_t i, const volatile uint8_t *ring, uint32_t ring_size, uint32_t *rd, uint32_t wr, uint32_t now_ms);
-/* the application's data for link i: all zero (nothing heard) if the link is silent, stale or carries an explicit letter of another phase */
+/* the application's data for link i: all zero (nothing heard) if the link is silent or stale */
 void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms);
 /* the $M frame for link i if one is due (its content changed, or MLINKS_M_PERIOD_MS passed): returns its length, 0 = nothing to send. valid = MApp_ControlValidPh() */
 int32_t MLinks_BuildM(uint8_t i, const MCtlOut_t *c, uint8_t valid, uint32_t now_ms, char *out, uint32_t cap);
@@ -41,8 +40,7 @@ int32_t MLinks_BuildSeq(uint8_t i, uint8_t round, char *out, uint32_t cap);
 uint8_t MLinks_HelloDue(uint8_t i, uint32_t now_ms);
 int32_t MLinks_BuildHello(uint8_t i, char *out, uint32_t cap);
 const MasterMon_t *MLinks_Mon(uint8_t i);           /* the link's counters and last frames (diagnostics) */
-uint8_t MLinks_PhaseBad(uint8_t i);                 /* 1 = frames are arriving, but with an explicit letter of ANOTHER phase (a board built as B on the Y cable) */
-void    MLinks_DisplayMon(uint8_t i, MasterMon_t *out);   /* a copy of the link's monitor state for the monitor page: a board that says R is shown with its PORT's letter */
+void    MLinks_DisplayMon(uint8_t i, MasterMon_t *out);   /* a copy of the link's monitor state for the monitor page, named with its PORT's letter */
 
 #ifdef __cplusplus
 }

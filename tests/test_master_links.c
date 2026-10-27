@@ -1,4 +1,4 @@
-/* The Y and B slave links (master_links.c): the decoders of the two links are independent, the data for the application (and the phase-letter check), the $M and hello timing, and a CLOSED LOOP: simulated Y and B slaves send real frames, the application answers with real $M frames. No hardware. */
+/* The Y and B slave links (master_links.c): the decoders of the two links are independent, the data for the application (the PORT is the identity, the letter is ignored), the $M and hello timing, and a CLOSED LOOP: simulated Y and B slaves send real frames, the application answers with real $M frames. No hardware. */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -51,22 +51,19 @@ static void t_module(void)
     MLinks_Fill(0, &s0, 1000U + 499U); CHECK(s0.have == 1U, "499 ms after its last frame the link is still alive");
     MLinks_Fill(0, &s0, 1000U + 600U); CHECK(s0.have == 0U && s0.link_ok == 0U && s0.vin_dv == 0U && s0.state == 0U && s0.in_band == 0U, "600 ms of silence: no link, no readings, not in band");
     CHECK(s0.e_valid == 1U && s0.clr_echo == 7U, "but what was last heard for the clear counter stays");
-    /* the identity of a slave is its PORT: a board that says R (the default) is accepted on the Y and B cables; only an explicit letter of ANOTHER phase is refused */
-    reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_IN_BAND, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);
-    feed(0, 1000U); MLinks_Fill(0, &s0, 1020U);
-    CHECK(MLinks_PhaseBad(0) == 0U && s0.have == 1U && s0.link_ok == 1U && s0.e_valid == 1U && s0.h_valid == 1U && s0.vin_dv == 2300U && s0.in_band == 1U, "a board that says R (the default) on the Y cable is the Y slave: accepted, with its $E and $H");
-    reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(1, b, n); feed(1, 1000U); MLinks_Fill(1, &s1, 1020U); CHECK(MLinks_PhaseBad(1) == 0U && s1.have == 1U, "and on the B cable");
-    { MasterMon_t v; MLinks_DisplayMon(1U, &v); CHECK(v.last.phase == 'B', "the monitor page names the PORT's phase for it: 'B' (not the board's R)"); }
-    reset(); n = s_frame(b, 'B', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_IN_BAND, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);
-    feed(0, 1000U); MLinks_Fill(0, &s0, 1020U);
-    CHECK(MLinks_PhaseBad(0) == 1U && s0.have == 0U && s0.link_ok == 0U && s0.e_valid == 0U && s0.h_valid == 0U && s0.vin_dv == 0U, "a board BUILT as B on the Y cable: PhaseBad, and the application sees NOTHING (not even $E or $H)");
-    CHECK(MLinks_HelloDue(0, 1020U) == 0U, "and it is not asked for a hello");
-    { MasterMon_t v; MLinks_DisplayMon(0U, &v); CHECK(v.last.phase == 'B', "the monitor page then shows the board's own letter, B, so the mistake is visible"); }
-    reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(1, b, n); feed(1, 1000U); MLinks_Fill(1, &s1, 1020U);
-    CHECK(MLinks_PhaseBad(1) == 1U && s1.have == 0U, "a board built as Y on the B cable: refused too");
-    reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); feed(0, 1000U); MLinks_Fill(0, &s0, 1020U); CHECK(MLinks_PhaseBad(0) == 0U && s0.have == 1U, "a board built as Y on the Y cable: accepted");
-    reset(); n = s_frame(b, 'B', 1U, 2300U, 2300U, 2U, 0U); push(1, b, n); feed(1, 1000U); MLinks_Fill(1, &s1, 1020U);
-    CHECK(MLinks_PhaseBad(1) == 0U && s1.have == 1U, "a B slave on the B cable: accepted");
+    /* v0.9.53: the identity of a slave is its PORT ONLY: the letter in its $S frames is ignored, whatever it is */
+    { const char L[3] = { 'R', 'Y', 'B' }; uint8_t k, p; MasterMon_t v;
+      for (p = 0U; p < 2U; p++) for (k = 0U; k < 3U; k++)
+      {   MAppSlave_t s; reset(); n = s_frame(b, L[k], 1U, 2300U, 2300U, 2U, 0U); push(p, b, n); n = e_frame(b, 1U, LINKV2_FLAG_IN_BAND, 3U); push(p, b, n);
+          feed(p, 1000U); MLinks_Fill(p, &s, 1020U);
+          CHECK(s.have == 1U && s.link_ok == 1U && s.e_valid == 1U && s.vin_dv == 2300U && s.in_band == 1U, "a board that says '%c' on the %c port is the %c slave: accepted, with its $E", L[k], p ? 'B' : 'Y', p ? 'B' : 'Y');
+          CHECK(MLinks_HelloDue(p, 1020U) == 1U, "and it is asked for its hello ('%c' on the %c port)", L[k], p ? 'B' : 'Y');
+          MLinks_DisplayMon(p, &v); CHECK(v.last.phase == (p ? 'B' : 'Y'), "the monitor page names the PORT's phase ('%c' on the %c port shows %c)", L[k], p ? 'B' : 'Y', v.last.phase);
+      }
+      reset(); MLinks_DisplayMon(0U, &v); CHECK(v.have_frame == 0U, "a silent port: the monitor page shows nothing heard"); }
+    /* the $H of a board on the Y port reaches the application */
+    reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);
+    feed(0, 1000U); MLinks_Fill(0, &s0, 1020U); CHECK(s0.h_valid == 1U && MLinks_HelloDue(0, 1020U) == 0U, "its hello is used and not asked again");
     /* the OVERHEAT flag the slave may set one day reaches the engine */
     reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_OVERHEAT, 0U); push(0, b, n); feed(0, 1000U); MLinks_Fill(0, &s0, 1020U);
     CHECK(s0.heat == 1U && s0.in_band == 0U, "the slave's OVERHEAT flag becomes heat = 1");
@@ -113,8 +110,8 @@ static void t_module(void)
     n = h_frame(b); push(0, b, n); feed(0, 3100U); CHECK(MLinks_HelloDue(0, 6000U) == 0U && MLinks_Fill != 0, "after the $H arrives it is not asked for again");
     /* bad indices are harmless */
     { uint32_t r = 5U; MAppSlave_t z; memset(&z, 0xAA, sizeof z); MLinks_Feed(9, ring[0], RING, &r, 0U, 0U); MLinks_Fill(9, &z, 0U);
-      CHECK(z.have == 0U && z.vin_dv == 0U && MLinks_BuildM(9, &c, 1U, 0U, b, sizeof b) == 0 && MLinks_HelloDue(9, 0U) == 0U && MLinks_BuildHello(9, b, sizeof b) == 0 && MLinks_PhaseBad(9) == 0U, "an index outside the two links does nothing"); }
-    printf("  module: independent decoders, freshness, the phase letter, ring wrap, $M timing and sequence numbers, hello\n");
+      CHECK(z.have == 0U && z.vin_dv == 0U && MLinks_BuildM(9, &c, 1U, 0U, b, sizeof b) == 0 && MLinks_HelloDue(9, 0U) == 0U && MLinks_BuildHello(9, b, sizeof b) == 0, "an index outside the two links does nothing"); }
+    printf("  module: independent decoders, freshness, the port is the identity (the letter is ignored), ring wrap, $M timing and sequence numbers, hello\n");
 }
 
 /* the R link still goes through Mon_ProcessBytes into g_mon, exactly as before the decoder was made per link */
@@ -257,9 +254,11 @@ static void t_loop(void)
     { uint8_t clr0 = SM[1].clr_seen, y0 = SM[0].clr_seen; K[1] = 1U; loop(150U); K[1] = 0U; loop(30000U); o = MApp_Engine(&A);
       CHECK(SM[1].clr_seen == (uint8_t)(clr0 + 1U) && SM[1].clr_seen == MApp_ControlPh(&A, 2)->clr && SM[0].clr_seen == y0, "START retries B: its clear counter reaches the slave over the link (%u -> %u) and the Y slave's does not move (%u -> %u)", (unsigned)clr0, (unsigned)SM[1].clr_seen, (unsigned)y0, (unsigned)SM[0].clr_seen);
       CHECK(o->contactor[2] == 1U && SM[1].state == 2U, "and the B unit runs again"); }
-    /* the wrong letter on the B cable */
-    setup((uint8_t)M_MODE_DOMESTIC); SM[1].letter = 'Y'; loop(20000U); o = MApp_Engine(&A);
-    CHECK(MLinks_PhaseBad(1) == 1U && o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 0U && SM[1].run_seen == 0U, "a Y slave on the B cable: the B unit never starts and its slave is never told to run (contactors %u %u %u, B told run %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)SM[1].run_seen);
+    /* the letters do not matter: the Y board says B and the B board says Y (two boards swapped in their letters, not in their cables) */
+    setup((uint8_t)M_MODE_DOMESTIC); SM[0].letter = 'B'; SM[1].letter = 'Y'; loop(15000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U && SM[0].run_seen != 0U && SM[1].run_seen != 0U, "boards that say B on the Y port and Y on the B port: all three units run (contactors %u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
+    SM[1].silent = 1U; loop(4000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[2] == 0U && o->contactor[1] == 1U, "the board on the B PORT goes silent (it says Y): the B unit trips, not the Y one");
     /* INDUSTRIAL */
     setup((uint8_t)M_MODE_INDUSTRIAL); loop(15000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 1U && o->contactor[1] == 0U && o->contactor[2] == 0U && SM[0].state == 2U && SM[1].state == 2U, "closed loop, Industrial: all three slaves run and ONE contactor (PA10) closes (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
@@ -267,7 +266,7 @@ static void t_loop(void)
     CHECK(o->contactor[0] == 0U && SM[1].run_seen == 0U && SM[1].state == 0U, "the Y cable is cut: the contactor opens and the B slave is told to stop too (run %u, state %u)", (unsigned)SM[1].run_seen, (unsigned)SM[1].state);
     setup((uint8_t)M_MODE_INDUSTRIAL); SM[1].silent = 1U; loop(15000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 0U && SM[0].run_seen == 0U, "Industrial with the B slave never connected: nothing starts");
-    printf("  closed loop: simulated Y and B slaves over the real frames: start, cable cut and recovery, inrush trip and START, wrong letter, Industrial\n");
+    printf("  closed loop: simulated Y and B slaves over the real frames: start, cable cut and recovery, inrush trip and START, letters ignored (the port decides), Industrial\n");
 }
 
 
@@ -331,7 +330,7 @@ static void t_all_r_boards(void)
     const MFOut_t *o; const MPhase_t *ph; MasterMon_t v;
     g_lettersR0 = 1; g_kind0 = 0; g_phase_seq0 = 0; g_noseq0 = 0; setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); o = MApp_Engine(&A); ph = MApp_Phase(&A);
     CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U && SM[0].state == 2U && SM[1].state == 2U, "three identical boards (all built as R): Domestic runs: the Y and B slaves are told to run and the three contactors close (%u %u %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
-    CHECK(!MLinks_PhaseBad(0) && !MLinks_PhaseBad(1) && MLinks_Mon(0)->h_valid == 1U && MLinks_Mon(1)->h_valid == 1U, "their hellos arrive too (no phase mismatch is reported)");
+    CHECK(MLinks_Mon(0)->h_valid == 1U && MLinks_Mon(1)->h_valid == 1U, "their hellos arrive too");
     CHECK(ph->state == MPH_OK && ph->have_ang != 0U, "the sequence is measured: OK");
     page1(); CHECK(line_v(0, "R-Y") >= 396 && line_v(0, "R-Y") <= 401 && line_v(1, "Y-B") >= 396 && line_v(1, "Y-B") <= 401, "and the phase-to-phase voltages are on the Run screen (R-Y %d, Y-B %d V)", line_v(0, "R-Y"), line_v(1, "Y-B"));
     MLinks_DisplayMon(0U, &v); CHECK(v.last.phase == 'Y', "the monitor page names the Y port 'Y'"); MLinks_DisplayMon(1U, &v); CHECK(v.last.phase == 'B', "and the B port 'B'");

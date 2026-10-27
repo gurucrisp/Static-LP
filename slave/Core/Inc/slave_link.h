@@ -16,17 +16,14 @@ extern "C" {
 
 #include <stdint.h>
 
-#include "slave_features.h"          /* slave_config.h: SLAVE_PHASE_ID can be set there */
+#include "slave_features.h"
 
-/* The phase this slave regulates, sent in every status frame: 'R' (the default), 'Y' or 'B'. In a three-phase unit each board is built with its own letter
- * (#define SLAVE_PHASE_ID 'Y' in its slave_config.h); the master refuses a link that carries the wrong letter, so a swapped serial cable cannot make a
- * contactor follow the wrong slave. */
-#ifndef SLAVE_PHASE_ID
-#define SLAVE_PHASE_ID          'R'
+/* v0.9.53: a slave has NO phase letter of its own: the master knows the phase from the UART port the slave is on (R = USART1, Y = USART4, B = USART3),
+ * so the three boards of a unit run the same firmware. The phase field of the status frame is always 'R' and the master ignores it on the Y and B ports. */
+#ifdef SLAVE_PHASE_ID
+#error "SLAVE_PHASE_ID is no longer used (v0.9.53): the master identifies the phase by its UART port. Delete the SLAVE_PHASE_ID line from slave_config.h"
 #endif
-#if (SLAVE_PHASE_ID != 'R') && (SLAVE_PHASE_ID != 'Y') && (SLAVE_PHASE_ID != 'B')
-#error "SLAVE_PHASE_ID must be 'R', 'Y' or 'B'"
-#endif
+#define SLAVE_STATUS_PHASE      'R'     /* the fixed phase field of the status frame ($S keeps its format) */
 
 /* One status frame every 10 ms = twice per 50 Hz mains cycle, each with a
  * fresh measurement (MEAS_UPDATE_US in slave_meas.h is the same 10 ms). The

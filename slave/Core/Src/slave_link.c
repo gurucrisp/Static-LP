@@ -212,7 +212,7 @@ static void queue_status_frame(void)
     int32_t      n;
     uint32_t     i;
 
-    st.phase = SLAVE_PHASE_ID;
+    st.phase = SLAVE_STATUS_PHASE;
     st.seq   = s_seq++;                    /* counts even when a frame is dropped,
                                               so the master can see the gap        */
     st.flags = 0U;

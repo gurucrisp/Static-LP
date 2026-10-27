@@ -34,19 +34,14 @@ void MLinks_Feed(uint8_t i, const volatile uint8_t *ring, uint32_t ring_size, ui
     Mon_ProcessBytesCtx(&s_l[i].mon, &s_l[i].lrx, &s_l[i].l2rx, &s_l[i].fps, ring, ring_size, rd, wr, now_ms);
 }
 
-/* v0.9.52: the identity of a slave is its PORT: the Y link is the Y slave and the B link is the B slave, whatever letter the board was built with, so the three boards of a unit can run the SAME firmware.
- * A board that says 'R' (the default) is accepted. Only an explicit letter of ANOTHER phase is refused (a board built as 'B' on the Y cable): that is a wiring mistake. */
-static uint8_t letter_ok(uint8_t i)
-{
-    char c = s_l[i].mon.last.phase;
-    return (uint8_t)((s_l[i].mon.have_frame != 0U) && ((c == s_phase[i]) || (c == 'R')));
-}
+/* v0.9.53: the identity of a slave is its PORT only: the Y link is the Y slave and the B link is the B slave. The letter in its $S frames is ignored (the slaves no longer have one). */
+static uint8_t heard(uint8_t i) { return (uint8_t)(s_l[i].mon.have_frame != 0U); }
 
-uint8_t MLinks_PhaseBad(uint8_t i) { return (uint8_t)((i < MLINKS_N) && (s_l[i].mon.have_frame != 0U) && (letter_ok(i) == 0U)); }
 void MLinks_DisplayMon(uint8_t i, MasterMon_t *out)
 {
-    *out = s_l[(i < MLINKS_N) ? i : 0U].mon;
-    if (out->last.phase == 'R') out->last.phase = s_phase[(i < MLINKS_N) ? i : 0U];             /* the monitor page names the PORT's phase for a board that says R */
+    if (i >= MLINKS_N) i = 0U;
+    *out = s_l[i].mon;
+    out->last.phase = s_phase[i];                                                              /* the monitor page names the PORT's phase */
 }
 const MasterMon_t *MLinks_Mon(uint8_t i) { return &s_l[(i < MLINKS_N) ? i : 0U].mon; }
 
@@ -56,7 +51,7 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)
     memset(s, 0, sizeof *s);
     if (i >= MLINKS_N) return;
     m = &s_l[i].mon;
-    if (letter_ok(i) == 0U) return;                                                        /* nothing heard, or the wrong slave on this cable */
+    if (heard(i) == 0U) return;                                                            /* nothing heard on this cable */
     fresh   = (uint8_t)((uint32_t)(now_ms - m->t_last_ms) < MON_LINK_TIMEOUT_MS);
     e_fresh = (uint8_t)((m->e_valid != 0U) && ((uint32_t)(now_ms - m->e_t_ms) < MON_LINK_TIMEOUT_MS));
     s->e_valid = m->e_valid; s->h_valid = m->h_valid; s->clr_echo = m->e_clr;              /* as the R link: what was last heard, to start the clear counter from */
@@ -88,7 +83,7 @@ uint8_t MLinks_HelloDue(uint8_t i, uint32_t now_ms)
     MLink_t *l;
     if (i >= MLINKS_N) return 0U;
     l = &s_l[i];
-    if ((l->mon.e_valid == 0U) || (l->mon.h_valid != 0U) || (letter_ok(i) == 0U)) { l->hello_n = 0U; return 0U; }
+    if ((l->mon.e_valid == 0U) || (l->mon.h_valid != 0U) || (heard(i) == 0U)) { l->hello_n = 0U; return 0U; }
     if ((l->hello_n != 0U) && ((uint32_t)(now_ms - l->t_hello) < MLINKS_HELLO_MS)) return 0U;
     l->t_hello = now_ms; l->hello_n = 1U; return 1U;
 }
