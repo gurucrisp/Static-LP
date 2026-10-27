@@ -422,6 +422,8 @@ static void t_load_source_item(void)
     /* the slave load calibration is not a setting that Factory Reset throws away */
     ui_reset(M_MODE_SINGLE); to_run(); S.sl_zero_ca = 123U; S.sl_gain = 1280U; S.load_src = 1U; enter_set(); goto_item(22U); CROW(1, "Factory Reset"); key(MK_START); key(MK_MENU_SHORT); tick(100U);
     CHECK(S.set_v == 230U && S.load_src == 0U && S.sl_zero_ca == 123U && S.sl_gain == 1280U && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset resets the settings (Load Source back to Master CT) but KEEPS the slave load calibration (zero %u, gain %u)", (unsigned)S.sl_zero_ca, (unsigned)S.sl_gain);
+    ui_reset(M_MODE_DOMESTIC); to_run(); S.sl_zero_yb[0] = 210U; S.sl_gain_yb[0] = 990U; S.sl_zero_yb[1] = 220U; S.sl_gain_yb[1] = 1010U; S.ovl_current = 60U; enter_set(); goto_item(22U); key(MK_START); key(MK_MENU_SHORT); tick(100U);
+    CHECK(S.ovl_current == 25U && S.sl_zero_yb[0] == 210U && S.sl_gain_yb[0] == 990U && S.sl_zero_yb[1] == 220U && S.sl_gain_yb[1] == 1010U, "v0.9.55: Factory Reset keeps the Y and B load calibrations too, and the Overload Current goes back to 25 A (%u)", (unsigned)S.ovl_current);
     printf("  load source item: after Overload Current, toggles Master CT / Slave, saved; Factory Reset keeps the slave load calibration\n");
 }
 
@@ -764,10 +766,14 @@ static void t_three_service(void)
         key(MK_MENU_SHORT); CHECK(MUI_ShowsDiag(&U) && !MUI_ShowsMonitor(&U), "%s: MENU: the diagnostics page", mn);
         key(MK_MENU_SHORT); CHECK(MUI_ShowsCal(&U), "%s: MENU: the load calibration page", mn);
         key(MK_MENU_SHORT); CHECK(MUI_ShowsClock(&U), "%s: the clock page", mn);
-        key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 1U, "%s: input calibration", mn); key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "%s: output calibration", mn);
-        key(MK_MENU_SHORT); CHECK(MUI_ShowsIout(&U), "%s: converter current", mn);
-        key(MK_MENU_SHORT); CHECK(MUI_ShowsProfile(&U), "%s: the transformer profile page", mn);
-        key(MK_MENU_SHORT); CHECK(U.svc == 9U && !MUI_ShowsProfile(&U) && strstr(row(0), "Slave Load Cal") != NULL, "%s: the slave load calibration ('%s')", mn, row(0));
+        {   /* v0.9.55: the I/P, O/P and Slave Load Cal pages come for R, then Y, then B */
+            static const char PH[3] = { 'R', 'Y', 'B' }; int q;
+            for (q = 0; q < 3; q++) { char t[24]; key(MK_MENU_SHORT); snprintf(t, sizeof t, "I/P Calibration %c", PH[q]); CHECK(MUI_ShowsVCal(&U) == 1U && MUI_CalPhase(&U) == (uint8_t)q && strstr(row(0), t) != NULL, "%s: input calibration %c ('%s')", mn, PH[q], row(0)); }
+            for (q = 0; q < 3; q++) { char t[24]; key(MK_MENU_SHORT); snprintf(t, sizeof t, "O/P Calibration %c", PH[q]); CHECK(MUI_ShowsVCal(&U) == 2U && MUI_CalPhase(&U) == (uint8_t)q && strstr(row(0), t) != NULL, "%s: output calibration %c ('%s')", mn, PH[q], row(0)); }
+            key(MK_MENU_SHORT); CHECK(MUI_ShowsIout(&U) && MUI_CalPhase(&U) == 0U, "%s: converter current", mn);
+            key(MK_MENU_SHORT); CHECK(MUI_ShowsProfile(&U), "%s: the transformer profile page", mn);
+            for (q = 0; q < 3; q++) { char t[24]; key(MK_MENU_SHORT); snprintf(t, sizeof t, "Slave Load Cal %c", PH[q]); CHECK(U.svc == 9U && MUI_CalPhase(&U) == (uint8_t)q && strstr(row(0), t) != NULL, "%s: the slave load calibration %c ('%s')", mn, PH[q], row(0)); }
+        }
         key(MK_MENU_SHORT); CHECK(U.svc == 0U && U.page == 0U && strstr(row(0), "R: ") != NULL, "%s: after the last service page MENU is back on the Run page ('%s')", mn, row(0));
         key(MK_MENU_SHORT); CHECK(U.page == 1U && U.svc == 0U && !MUI_ShowsDiag(&U), "%s: and MENU turns the Run pages as before (page %u, not the diagnostics)", mn, (unsigned)U.page);
         /* a minute without a key, or a new fault, leaves a service page; the scroll timer does not turn it */

@@ -65,6 +65,8 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)
     s->ntc_raw = m->last.ntc_raw; s->ntc_valid = 1U;
     if (m->e_valid != 0U) { s->sq_id = m->e_sq_id; s->sq_delay_us = m->e_sq_delay_us; s->sq_period_us = m->e_sq_period_us; }       /* its last phase sequence round */                                          /* the slave's heat-sink NTC */
     s->in_band = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
+    s->iout_rms_ca = m->e_iout_rms_ca; s->iout_pk_ca = m->e_iout_pk_ca;                    /* v0.9.55: its converter current, for its load */
+    s->iout_valid = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IOUT_VALID) != 0U)); s->iout_clip = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IOUT_CLIP) != 0U));
     s->heat    = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_OVERHEAT) != 0U));       /* the slave's own overheat decision, when it makes one */
 }
 

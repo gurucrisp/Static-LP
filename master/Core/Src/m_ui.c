@@ -233,6 +233,7 @@ uint8_t MUI_ShowsClock(const MUI_t *u) { return shows(u, 4U); }
 uint8_t MUI_ShowsDiag(const MUI_t *u) { return shows(u, 2U); }
 uint8_t MUI_ShowsMonitor(const MUI_t *u) { return shows(u, 1U); }
 uint8_t MUI_RetuneSel(const MUI_t *u) { return u->retune_sel; }
+uint8_t MUI_CalPhase(const MUI_t *u) { return (u->live->mode == (uint8_t)M_MODE_SINGLE) ? 0U : (uint8_t)(u->cal_ph % 3U); }
 
 static void leave_set_saved(MUI_t *u, uint32_t now)
 {
@@ -279,7 +280,8 @@ static void set_commit(MUI_t *u, uint32_t now)
             else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; u->retune_sel = (u->live->mode == (uint8_t)M_MODE_SINGLE) ? 1U : yes; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
             else if (it->id == 20U) { u->req |= MUI_REQ_CLEAR_LOG; msg_set(u, "Fault Log", "Cleared", now, 0U); }
             else if (it->id == 21U) { leave_set_discard(u, now, "Changes", "Discarded"); return; }
-            else if (it->id == 22U) { uint16_t kz = u->work.sl_zero_ca, kg = u->work.sl_gain; MS_Defaults(&u->work); u->work.sl_zero_ca = kz; u->work.sl_gain = kg; MS_ApplyLim(&u->work, u->lim); }      /* the load calibrations are not settings: they stay */
+            else if (it->id == 22U) { uint16_t kz = u->work.sl_zero_ca, kg = u->work.sl_gain, kzy[2], kgy[2]; kzy[0] = u->work.sl_zero_yb[0]; kzy[1] = u->work.sl_zero_yb[1]; kgy[0] = u->work.sl_gain_yb[0]; kgy[1] = u->work.sl_gain_yb[1];
+                MS_Defaults(&u->work); u->work.sl_zero_ca = kz; u->work.sl_gain = kg; u->work.sl_zero_yb[0] = kzy[0]; u->work.sl_zero_yb[1] = kzy[1]; u->work.sl_gain_yb[0] = kgy[0]; u->work.sl_gain_yb[1] = kgy[1]; MS_ApplyLim(&u->work, u->lim); }      /* the load calibrations (R, Y and B) are not settings: they stay */
         }
         if (is_last_item(u)) { leave_set_saved(u, now); return; }          /* one round is complete: leave Set-Mode (saving), do not start again */
         enter_item(u, next_item(u, u->item));
@@ -337,7 +339,8 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
                 if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 10U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
-            else if (u->svc != 0U) { u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
+            else if ((u->svc != 0U) && ((u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) && (u->cal_ph < 2U)) { u->cal_ph++; u->cal_init = 1U; u->cal_cursor = 2U; }      /* v0.9.55: the calibration pages for R, then Y, then B */
+            else if (u->svc != 0U) { u->cal_ph = 0U; u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }
         else if ((ev == MK_START) && ((sp(u) == 3U) || (sp(u) == 5U) || (sp(u) == 6U) || (sp(u) == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
@@ -354,7 +357,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
     case MUI_LOG:
         if (ev == MK_START) { if ((uint16_t)(u->log_idx + 1U) < MLog_Count(u->log)) u->log_idx++; }               /* older */
         else if (ev == MK_STOP) { if (u->log_idx > 0U) u->log_idx--; }                                           /* newer */
-        else if (ev == MK_MENU_SHORT) { u->screen = (uint8_t)MUI_RUN; if (u->live->mode == (uint8_t)M_MODE_SINGLE) u->page = 1U; else u->svc = 1U; u->t_page = now; }     /* the way to the service pages (v0.9.54: in every mode) */
+        else if (ev == MK_MENU_SHORT) { u->screen = (uint8_t)MUI_RUN; if (u->live->mode == (uint8_t)M_MODE_SINGLE) u->page = 1U; else { u->svc = 1U; u->cal_ph = 0U; } u->t_page = now; }     /* the way to the service pages (v0.9.54: in every mode) */
         else if ((ev == MK_LOG_SHORT) || (ev == MK_MENU_SHORT) || (ev == MK_COMBO)) u->screen = (uint8_t)MUI_RUN;
         break;
     case MUI_PW:
@@ -406,13 +409,13 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
     uint8_t p, pg = sp(u); (void)now;
     if ((u->live->mode == (uint8_t)M_MODE_SINGLE) || (pg != 0U))
     {   /* Single's Run screen, and the service pages of every mode (they show the R slave) */
-        uint8_t ok = d->have[0];
+        uint8_t ok = d->have[((pg == 5U) || (pg == 6U)) ? MUI_CalPhase(u) : 0U];          /* v0.9.55: the voltage calibration pages show the chosen phase's slave */
         if (pg == 9U)
         {   /* SLAVE LOAD CAL (v0.9.45): the converter current the slave measures, and the meter value being typed. With the unit RUNNING and NO load, type 00.0 and press LOG: the peak now is the zero. With a known load, type the meter's value and press LOG: the gain.
              * START edits the digit, STOP moves the cursor, LOG saves, MENU goes on. The conversion is: load = (peak - zero) x gain. */
             char v[8]; uint32_t c; uint16_t pk = (uint16_t)((d->sl_pk_ca + 5U) / 10U), rm = (uint16_t)((d->sl_rms_ca + 5U) / 10U);
             if (u->cal_init != 0U) { ((MUI_t *)u)->cal_val = (pk > 9999U) ? 9999U : pk; ((MUI_t *)u)->cal_init = 0U; }
-            f_center(f, 0U, "Slave Load Cal");
+            f_center(f, 0U, (u->live->mode == (uint8_t)M_MODE_SINGLE) ? "Slave Load Cal" : ((u->cal_ph == 1U) ? "Slave Load Cal Y" : ((u->cal_ph == 2U) ? "Slave Load Cal B" : "Slave Load Cal R")));
             f_put(f, 1U, 0U, "Peak"); tenths_put(f, 1U, 4U, pk, 5U, d->sl_valid); f_put(f, 1U, 9U, "A"); f_put(f, 1U, 11U, "RMS"); tenths_put(f, 1U, 14U, rm, 5U, d->sl_valid); f_put(f, 1U, 19U, "A");
             f_put(f, 2U, 0U, "Actual");
             v[0] = (char)('0' + ((u->cal_val / 1000U) % 10U)); v[1] = (char)('0' + ((u->cal_val / 100U) % 10U)); v[2] = (char)('0' + ((u->cal_val / 10U) % 10U)); v[3] = '.'; v[4] = (char)('0' + (u->cal_val % 10U)); v[5] = '\0';
@@ -427,7 +430,10 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
             char v[8], un[2]; uint32_t c; uint16_t rd = (pg == 3U) ? d->load_da[0] : ((pg == 5U) ? d->vin_raw_dv : d->vout_raw_dv);
             un[0] = (pg == 3U) ? 'A' : 'V'; un[1] = '\0';
             if (u->cal_init != 0U) { ((MUI_t *)u)->cal_val = (rd > 9999U) ? 9999U : rd; ((MUI_t *)u)->cal_init = 0U; }
-            f_center(f, 0U, (pg == 3U) ? "Load Calibration" : ((pg == 5U) ? "I/P Calibration" : "O/P Calibration"));
+            {   char tl[21]; const char *b0 = (pg == 3U) ? "Load Calibration" : ((pg == 5U) ? "I/P Calibration" : "O/P Calibration"); uint32_t q = 0U;
+                while (b0[q] != '\0') { tl[q] = b0[q]; q++; }
+                if ((pg != 3U) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { tl[q++] = ' '; tl[q++] = (u->cal_ph == 1U) ? 'Y' : ((u->cal_ph == 2U) ? 'B' : 'R'); }      /* v0.9.55: which phase's slave */
+                tl[q] = '\0'; f_center(f, 0U, tl); }
             f_put(f, 1U, 0U, "Reading"); tenths_put(f, 1U, 11U, rd, 6U, (uint8_t)(ok && ((pg != 3U) || (d->load_ok[0] != 0U)))); f_put(f, 1U, 18U, un);
             f_put(f, 2U, 0U, "Actual");
             v[0] = (char)('0' + ((u->cal_val / 1000U) % 10U)); v[1] = (char)('0' + ((u->cal_val / 100U) % 10U)); v[2] = (char)('0' + ((u->cal_val / 10U) % 10U)); v[3] = '.'; v[4] = (char)('0' + (u->cal_val % 10U)); v[5] = '\0';

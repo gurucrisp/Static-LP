@@ -53,6 +53,7 @@ typedef struct
     uint8_t  wait_valid, wait_ctx;     /* v0.9.54, for its Re-tune: its start-up wait and what for (as the R slave's)                                         */
     uint8_t  tune_n, tune_step, tune_result; uint16_t tune_ticks; int16_t tune_dv_dv;   /* its $T frames: counter, step, result, duty, injection             */
     uint8_t  prof_tuned, prof_n, prof_knee; uint16_t prof_cap, prof_kib, prof_kiu, prof_vref_dv, prof_maxc_dv;   /* its stored profile ($H), for the Transformer Profile page */
+    uint16_t iout_rms_ca, iout_pk_ca; uint8_t iout_valid, iout_clip;      /* v0.9.55: its converter current ($E), for its load (its Slave Load Cal) */
 } MAppSlave_t;
 
 typedef struct
@@ -126,7 +127,7 @@ typedef struct
     uint8_t      k_id;                 /* the next $K id, 1..255 */
     uint8_t      tune_state, tune_id, tune_cmd, tune_due, tune_tx_n, tune_seen, tune_step, tune_result, tune_abort_sent;   /* the autotune: see m_app.c */
     uint8_t      tune_sl_state, tune_sl_wv, tune_sl_wait, tune_sl_fault;      /* what the slave is doing (its $S state, the start-up wait, its fault), shown on the tuning screen */
-    uint8_t      tune_ph, tune_all, tune_id_yb[2], hello_yb[2];               /* v0.9.54: the phase being tuned (0 R, 1 Y, 2 B); 1 = then the next phase (All, one by one); the last TUNE id per Y/B link; ask Y / B for a hello */
+    uint8_t      tune_ph, tune_all, tune_id_yb[2], hello_yb[2];               /* v0.9.54: the phase being tuned (0 R, 1 Y, 2 B); 1 = then the next phase (All, one by one); the application's last $K id on the Y / B link (TUNE, TABORT, calibration); ask Y / B for a hello */
     int16_t      tune_dv_dv;
     uint16_t     tune_ticks;
     uint32_t     tune_t0, tune_t_tx, tune_t_frame, tune_t_done;
@@ -137,6 +138,7 @@ typedef struct
     uint8_t      rec_active, rec_have; /* response timer: an excursion (output more than 5 V from the set voltage) is being timed / one has been timed */
     uint16_t     rec_peak, rec_s10, rec_pk_v;   /* the largest error so far (tenths of a volt); the last recovery time (tenths of a second); its largest error (volts) */
     uint32_t     rec_t0;
+    uint8_t      vcal_ph;                          /* v0.9.55: the phase whose slave the calibration command goes to (0 R, 1 Y, 2 B) */
     uint8_t      vcal_wait, vcal_due, vcal_id, vcal_cmd, vcal_ch, vcal_tx_n;   /* a calibration command is out: waiting for its $R; a (re)send is due; its id, command, channel, transmissions so far */
     int32_t      vcal_num; char vcal_letter; uint32_t vcal_t0, vcal_t_tx, t_now;
     uint8_t      clk_set_pending;      /* a new Date/Time was saved in Set-Mode and waits for the glue to write it to the RTC */

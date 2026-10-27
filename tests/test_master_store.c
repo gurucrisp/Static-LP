@@ -140,7 +140,8 @@ static int ms_eq(const MSettings_t *a, const MSettings_t *b)
     return a->mode == b->mode && a->set_v == b->set_v && a->maxcorr_v == b->maxcorr_v && a->ip_lv == b->ip_lv && a->ip_hv == b->ip_hv && a->op_lv == b->op_lv && a->op_hv == b->op_hv &&
            a->volt_cut_delay == b->volt_cut_delay && a->ovl_current == b->ovl_current && a->ovl_cut_delay == b->ovl_cut_delay && a->heat_delay == b->heat_delay && a->phase_seq == b->phase_seq &&
            a->scroll == b->scroll && a->scroll_time == b->scroll_time && a->password == b->password && a->restart_auto == b->restart_auto && a->restart_time == b->restart_time &&
-           a->load_src == b->load_src && a->sl_zero_ca == b->sl_zero_ca && a->sl_gain == b->sl_gain && a->heat_temp == b->heat_temp && a->heat_reset == b->heat_reset;
+           a->load_src == b->load_src && a->sl_zero_ca == b->sl_zero_ca && a->sl_gain == b->sl_gain && a->heat_temp == b->heat_temp && a->heat_reset == b->heat_reset &&
+           a->sl_zero_yb[0] == b->sl_zero_yb[0] && a->sl_gain_yb[0] == b->sl_gain_yb[0] && a->sl_zero_yb[1] == b->sl_zero_yb[1] && a->sl_gain_yb[1] == b->sl_gain_yb[1];
 }
 
 static void t_settings_validate(void)
@@ -325,7 +326,29 @@ static void t_settings_slave_load(void)
     CHECK(MS_Load(&st, &b) == 0U && b.load_src == 0U && b.sl_gain == 0U, "a record with Load Source 7 and a good CRC is not trusted: the defaults");
     memcpy(raw, def, MS_PACK_LEN); raw[32] = 34U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     CHECK(MS_Load(&st, &b) == 0U && b.heat_reset == 65U, "nor one with an Overheat Restart of 34: the defaults");
-    printf("  settings record: version 2 (48 bytes), bytes 0 to 31 as before, a version 1 record migrates with every setting, the first save does not erase it, the ranges\n");
+    /* v0.9.55: the Y and B slave load calibrations in bytes 33 to 40 (zero Y, gain Y, zero B, gain B): no new version, an older version 2 record has zeros there = not calibrated */
+    CHECK(MASTER_RATED_CURRENT_A == 25U && a.ovl_current == 25U, "v0.9.55: the default Overload Current is 25 A (%u)", (unsigned)MASTER_RATED_CURRENT_A);
+    MS_Pack(&a, raw);                                                                     /* (raw was edited by the checks above) */
+    { MSettings_t y = a, z; uint8_t ry[MS_PACK_LEN]; int same2 = 1;
+      y.sl_zero_yb[0] = 310U; y.sl_gain_yb[0] = 1300U; y.sl_zero_yb[1] = 4000U; y.sl_gain_yb[1] = 5000U; MS_Pack(&y, ry);
+      for (k = 0U; k < 33U; k++) if (ry[k] != raw[k]) same2 = 0;
+      CHECK(same2 && (ry[33] | (ry[34] << 8)) == 310 && (ry[35] | (ry[36] << 8)) == 1300 && (ry[37] | (ry[38] << 8)) == 4000 && (ry[39] | (ry[40] << 8)) == 5000, "Y zero at 33-34, Y gain at 35-36, B zero at 37-38, B gain at 39-40; bytes 0 to 32 unchanged");
+      { int z2 = 1; for (k = 41U; k < MS_PACK_LEN; k++) if (ry[k] != 0U) z2 = 0; CHECK(z2, "bytes 41 to 47 stay free"); }
+      MS_Unpack(&z, ry); CHECK(ms_eq(&y, &z), "they unpack to the same values");
+      flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); CHECK(MS_Save(&st, &y) == 0, "saved"); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+      CHECK(MS_Load(&st, &z) == 1U && ms_eq(&y, &z), "and loaded back exactly");
+      /* a version 2 record written by v0.9.50 .. v0.9.54: bytes 33 to 47 zero */
+      flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+      CHECK(MS_Load(&st, &z) == 1U && z.sl_gain == 1282U && z.sl_gain_yb[0] == 0U && z.sl_gain_yb[1] == 0U && z.sl_zero_yb[0] == 0U && z.sl_zero_yb[1] == 0U, "a record from v0.9.50 to v0.9.54 loads: R's calibration kept, Y and B not calibrated");
+      memcpy(v1, raw, MS_PACK_LEN_V1); flash_blank(); MStore_Init(&o1, &FL, PG(0), PG(1), MS_VERSION_V1, MS_PACK_LEN_V1); (void)MStore_Save(&o1, v1); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+      CHECK(MS_Load(&st, &z) == 1U && z.sl_gain_yb[0] == 0U && z.sl_gain_yb[1] == 0U, "and a version 1 record migrates with Y and B not calibrated");
+      { static const struct { int f; uint16_t v; } BY[] = { {0, 4001}, {1, 199}, {1, 5001}, {2, 4001}, {3, 100}, {3, 65535} }; unsigned q; MSettings_t x;
+        for (q = 0U; q < sizeof BY / sizeof BY[0]; q++) { x = y; if (BY[q].f == 0) x.sl_zero_yb[0] = BY[q].v; else if (BY[q].f == 1) x.sl_gain_yb[0] = BY[q].v; else if (BY[q].f == 2) x.sl_zero_yb[1] = BY[q].v; else x.sl_gain_yb[1] = BY[q].v;
+            CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG, "refused: Y/B calibration field %d = %u", BY[q].f, (unsigned)BY[q].v); }
+        x = y; x.sl_gain_yb[0] = 0U; x.sl_gain_yb[1] = 200U; CHECK(MS_Validate(&x, 0) == MS_OK, "gain 0 (not calibrated) and 0.200 are valid"); }
+      memcpy(ry, raw, MS_PACK_LEN); ry[35] = 0x10U; ry[36] = 0x27U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, ry); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
+      CHECK(MS_Load(&st, &z) == 0U, "a record with a Y gain of 10000 and a good CRC is not trusted: the defaults"); }
+    printf("  settings record: version 2 (48 bytes), bytes 0 to 31 as before, a version 1 record migrates with every setting, the first save does not erase it, the ranges, Y and B load calibrations at 33 to 40\n");
 }
 
 static void t_settings_powercut(void)

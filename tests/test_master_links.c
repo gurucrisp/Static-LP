@@ -18,9 +18,11 @@ static int s_frame(char *b, char ph, uint8_t seq, uint16_t vin, uint16_t vout, u
     return (int)Link_BuildStatus(b, 96U, &st);
 }
 static uint16_t g_e_sq_id, g_e_sq_delay, g_e_sq_period;      /* the phase sequence result the next $E frame carries (0 = none: a 6 field frame as before) */
+static uint16_t g_e_iout_pk; static uint8_t g_e_iout_clip;                                 /* v0.9.55: the converter-current peak the next $E carries (0 = none) */
 static int e_frame(char *b, uint8_t seq, uint16_t flags2, uint8_t clr)
 {
     LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period;
+    if (g_e_iout_pk != 0U) { e.iout_pk_ca = g_e_iout_pk; e.iout_rms_ca = (uint16_t)(g_e_iout_pk / 2U); e.flags2 = (uint16_t)(e.flags2 | LINKV2_FLAG_IOUT_VALID | ((g_e_iout_clip != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U)); }
     return (int)LinkV2_BuildE(b, 96U, &e);
 }
 static int h_frame_p(char *b, uint16_t cap)
@@ -148,6 +150,7 @@ typedef struct
     char     letter; uint8_t silent, seq, state, fault, run_seen, clr_seen, h_pending, h_sent, rx_started;
     uint16_t vin, vout, ntc; uint32_t t_s, t_e, t_run, n_m; LinkV2Rx_t rx;
     uint32_t phi_us; uint8_t armed, no_seq; uint16_t arm_round, sq_id, sq_delay, sq_period;      /* the phase sequence: the time of its rising zero-cross within a period, armed by $K SEQ, the last result */
+    uint16_t iout_pk; uint8_t iout_clip, n_cal, last_cal_cmd; int32_t last_cal_num;      /* v0.9.55: its converter-current peak (hundredths of an ampere, 0 = not measured) and the calibration commands it got */
     uint8_t  last_kid, tuning, tune_fail, n_tune, n_abort, max_aux_id, n_hello_rx; uint16_t prof_cap; uint32_t tune_t0, tune_t_last; uint8_t tune_k;   /* v0.9.54: its Re-tune, as the real slave (a $K with the id of the last one is a retry: not executed) */
 } Sim_t;
 static uint16_t raw_of(double tc) { double k = tc + 273.15, r = 10000.0 * exp(3950.0 * (1.0 / k - 1.0 / 298.15)); return (uint16_t)(4095.0 * r / (r + 1500.0) + 0.5); }
@@ -162,7 +165,7 @@ static void sim_tick(int link, uint32_t now)
     if ((s->run_seen == 0U) && (s->state != 3U)) s->state = 0U;
     s->vout = (s->state == 2U) ? 2300U : s->vin;
     if ((uint32_t)(now - s->t_s) >= 10U) { s->t_s = now; g_frame_ntc = s->ntc; n = s_frame(b, s->letter, s->seq++, s->vin, s->vout, s->state, s->fault); g_frame_ntc = 3000U; push((uint8_t)link, b, n); }
-    if ((uint32_t)(now - s->t_e) >= 100U) { s->t_e = now; g_e_sq_id = s->sq_id; g_e_sq_delay = s->sq_delay; g_e_sq_period = s->sq_period; n = e_frame(b, s->seq, (uint16_t)((s->state == 2U) ? LINKV2_FLAG_IN_BAND : 0U), s->clr_seen); g_e_sq_id = 0U; g_e_sq_delay = 0U; g_e_sq_period = 0U; push((uint8_t)link, b, n); }
+    if ((uint32_t)(now - s->t_e) >= 100U) { s->t_e = now; g_e_sq_id = s->sq_id; g_e_sq_delay = s->sq_delay; g_e_sq_period = s->sq_period; g_e_iout_pk = s->iout_pk; g_e_iout_clip = s->iout_clip; n = e_frame(b, s->seq, (uint16_t)((s->state == 2U) ? LINKV2_FLAG_IN_BAND : 0U), s->clr_seen); g_e_sq_id = 0U; g_e_sq_delay = 0U; g_e_sq_period = 0U; g_e_iout_pk = 0U; push((uint8_t)link, b, n); }
     if (s->h_pending != 0U) { s->h_pending--; n = h_frame_p(b, s->prof_cap); push((uint8_t)link, b, n); }
     if ((s->tuning != 0U) && ((uint32_t)(now - s->tune_t_last) >= 500U))
     {   /* a $T frame every 500 ms: steps 1, 2, 3, then the result */
@@ -188,6 +191,8 @@ static void sim_rx(int link, const char *b, int n)       /* the $M and $K frames
             if (f.u.k.cmd == LINKCMD_HELLO) { s->h_pending = 1U; s->n_hello_rx++; }
             else if ((f.u.k.cmd == LINKCMD_SEQ) && (s->no_seq == 0U)) { s->armed = 1U; s->arm_round = (uint16_t)f.u.k.num; }
             else if (f.u.k.cmd == LINKCMD_TUNE) { s->n_tune++; s->tuning = 1U; s->tune_k = 0U; s->tune_t0 = s->tune_t_last = T_now_sim; r.id = f.u.k.id; r.status = 0U; r.value = 0; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn); }
+            else if ((f.u.k.cmd == LINKCMD_CALV) || (f.u.k.cmd == LINKCMD_CALO) || (f.u.k.cmd == LINKCMD_CALR))
+            {   s->n_cal++; s->last_cal_cmd = (uint8_t)f.u.k.cmd; s->last_cal_num = f.u.k.num; r.id = f.u.k.id; r.status = 0U; r.value = 10050; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn); }
             else if (f.u.k.cmd == LINKCMD_TABORT)
             {   LinkT_t tt; s->n_abort++; r.id = f.u.k.id; r.status = 0U; r.value = 0; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn);
                 if (s->tuning != 0U) { s->tuning = 0U; memset(&tt, 0, sizeof tt); tt.result = LINKV2_T_BY_MASTER; rn = (int)LinkV2_BuildT(rb, sizeof rb, &tt); push((uint8_t)link, rb, rn); } }
@@ -228,8 +233,10 @@ static void seq_actions(void)
 }
 /* v0.9.54: the R slave's Re-tune, as the glue sees it (its $R goes to MApp_OnKResult, its $T frames into D) */
 static uint8_t r_last_kid, r_tuning, r_k, r_fail, r_n_tune, r_n_abort, r_ack_pending, r_ack_id; static uint32_t r_t_last; static int g_max_tuning, g_order[3], g_n_order;
+static uint8_t r_n_cal;
 static void r_k_cmd(const MCalK_t *ck)
 {
+    if ((ck->cmd == MAPP_KCMD_CALV) || (ck->cmd == MAPP_KCMD_CALO) || (ck->cmd == MAPP_KCMD_CALR)) r_n_cal++;
     uint8_t retry = (uint8_t)((ck->id == r_last_kid) && (r_last_kid != 0U)); r_last_kid = ck->id;
     if ((ck->cmd != MAPP_KCMD_TUNE) && (ck->cmd != MAPP_KCMD_TABORT)) return;
     r_ack_pending = 1U; r_ack_id = ck->id; if (retry != 0U) return;
@@ -259,7 +266,7 @@ static void loop(uint32_t ms)
             while (MApp_TakeKCommand(&A, &ck, T) != 0U)
             {
                 if (ck.ph == 0U) { r_k_cmd(&ck); continue; }
-                memset(&k, 0, sizeof k); k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : LINKCMD_CALR); k.num = ck.num; k.letter = (ck.cmd == MAPP_KCMD_CALR) ? 'V' : '\0';
+                memset(&k, 0, sizeof k); k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : ((ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : LINKCMD_CALR))); k.num = ck.num; k.letter = ck.letter;
                 n = LinkV2_BuildK(b, sizeof b, &k); if ((n > 0) && (ck.ph <= 2U)) sim_rx(ck.ph - 1U, b, (int)n);
             }
             for (i = 0; i < 2; i++) { const MasterMon_t *ym = MLinks_Mon((uint8_t)i); if (ym->r_n != r_seen_yb[i]) { r_seen_yb[i] = ym->r_n; MApp_OnKResultPh(&A, (uint8_t)(1 + i), ym->r_id, ym->r_status, ym->r_value); } }
@@ -282,7 +289,7 @@ static int g_kind0 = 0, g_phase_seq0 = 0, g_noseq0 = 0, g_lettersR0 = 0;      /*
 static void setup(uint8_t mode)
 {
     memset(fm, 0xFF, sizeof fm); memset(&D, 0, sizeof D); memset(K, 0, sizeof K); T = 0U; reset();
-    r_last_kid = 0U; r_tuning = 0U; r_k = 0U; r_fail = 0U; r_n_tune = 0U; r_n_abort = 0U; r_ack_pending = 0U; g_max_tuning = 0; g_n_order = 0;
+    r_n_cal = 0U; r_last_kid = 0U; r_tuning = 0U; r_k = 0U; r_fail = 0U; r_n_tune = 0U; r_n_abort = 0U; r_ack_pending = 0U; g_max_tuning = 0; g_n_order = 0;
     D.have = 1U; D.link_ok = 1U; D.vin_dv = 2300U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.h_valid = 1U; D.in_band = 1U; D.load_ok = 1U;
     MApp_Init(&A, &FL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, T);
     A.settings.mode = mode; A.settings.scroll = 0U; A.settings.phase_seq = (uint8_t)g_phase_seq0; MF_Init(&A.eng, &A.settings, T);
@@ -489,9 +496,56 @@ static void t_retune_phase(void)
     CHECK(r_n_tune == 1U && SM[0].n_tune == 0U, "Single: a Re-tune always goes to R (R %u, Y %u)", (unsigned)r_n_tune, (unsigned)SM[0].n_tune);
     printf("  per-phase Re-tune: each phase on its own link, ids apart, screens name the phase, All = R then Y then B never together, a failure or a key ends it, STOP aborts the right one, latches per phase, profiles per phase\n");
 }
+
+/* ======================= v0.9.55: PER-PHASE LOAD AND VOLTAGE CALIBRATION, the default Overload Current 25 A ======================= */
+static void press_log(void) { loop(MUI_MSG_MS + 100U); K[3] = 1U; loop(150U); K[3] = 0U; loop(200U); }      /* (a key while a message is up only dismisses it) */
+static void t_percal(void)
+{
+    const MFOut_t *o;
+    /* Y has no load reading until ITS Slave Load Cal is done */
+    g_kind0 = 0; g_phase_seq0 = 0; g_noseq0 = 0; setup((uint8_t)M_MODE_DOMESTIC); A.settings.scroll = 0U; SM[0].iout_pk = 300U; SM[1].iout_pk = 300U; loop(15000U);
+    CHECK(A.settings.ovl_current == 25U, "the default Overload Current is 25 A (%u)", (unsigned)A.settings.ovl_current);
+    CHECK(strstr(F[1], "Y:") != NULL && strstr(F[1], "--.-A") != NULL, "Y not calibrated: no load reading ('%s')", F[1]);
+    /* the Slave Load Cal page of Y: the zero (00.0 with the unit running and no load), then the gain at a known load */
+    A.ui.svc = 9U; A.ui.cal_ph = 1U; loop(100U); A.ui.cal_val = 0U; press_log();
+    CHECK(A.settings.sl_zero_yb[0] == 300U && A.settings.sl_zero_ca == 0U && A.settings.sl_zero_yb[1] == 0U, "the Y zero is Y's peak at no load (%u), R's and B's are untouched", (unsigned)A.settings.sl_zero_yb[0]);
+    SM[0].iout_pk = 1300U; loop(500U); A.ui.cal_val = 100U; press_log();
+    CHECK(A.settings.sl_gain_yb[0] == 1000U && A.settings.sl_gain == 0U && A.settings.sl_gain_yb[1] == 0U, "a 10.0 A load 10 A of peak above the zero: Y's gain 1.000 (%u), R's and B's untouched", (unsigned)A.settings.sl_gain_yb[0]);
+    { MStore_t chk; MSettings_t c; (void)chk; c = A.settings; CHECK(MS_Validate(&c, 0) == MS_OK, "and the settings are valid"); }
+    A.ui.svc = 0U; A.ui.page = 0U; loop(1500U);
+    CHECK(strstr(F[1], "10.0A") != NULL && strstr(F[2], "--.-A") != NULL, "the Run page: Y shows 10.0 A, B still none ('%s' / '%s')", F[1], F[2]);
+    /* the overload of Y trips Y only */
+    SM[0].iout_pk = 300U + 2600U; loop(5000U); o = MApp_Engine(&A); CHECK(o->contactor[1] == 1U, "26 A on Y: not yet (Overload Cut Delay 10 s)");
+    loop(7000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[1] == 0U && o->contactor[0] == 1U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_OVERLOAD, "26 A on Y for 10 s: Y trips on overload, R and B run (%u %u %u, fault %u)", (unsigned)o->contactor[0], (unsigned)o->contactor[1], (unsigned)o->contactor[2], (unsigned)o->fault[1]);
+    /* a clipped or missing reading is not a load reading */
+    setup((uint8_t)M_MODE_DOMESTIC); A.settings.scroll = 0U; A.settings.sl_zero_yb[1] = 300U; A.settings.sl_gain_yb[1] = 1000U; SM[1].iout_pk = 0U; loop(15000U);
+    CHECK(strstr(F[2], "--.-A") != NULL, "B calibrated but its slave sends no current: no load reading ('%s')", F[2]);
+    SM[1].iout_pk = 800U; loop(1500U); CHECK(strstr(F[2], "5.0A") != NULL, "and with one: 5.0 A ('%s')", F[2]);
+    SM[1].iout_pk = 4000U; SM[1].iout_clip = 1U; loop(14000U); o = MApp_Engine(&A);
+    CHECK(strstr(F[2], "--.-A") != NULL && o->contactor[2] == 1U, "a CLIPPED reading (37 A) is not a load reading: --.-A and no overload trip on it ('%s')", F[2]); SM[1].iout_clip = 0U;
+    /* voltage calibration of Y: the CALV goes on the Y link, its answer comes back on it */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all();
+    A.ui.svc = 5U; A.ui.cal_ph = 1U; loop(100U); A.ui.cal_val = 2312U; press_log();
+    CHECK(SM[0].n_cal == 1U && SM[0].last_cal_cmd == (uint8_t)LINKCMD_CALV && SM[0].last_cal_num == 2312 && SM[1].n_cal == 0U && r_n_cal == 0U, "I/P Calibration Y: CALV 231.2 V on the Y link only (Y %u, B %u, R %u)", (unsigned)SM[0].n_cal, (unsigned)SM[1].n_cal, (unsigned)r_n_cal);
+    CHECK(A.vcal_wait == 0U && (A.vcal_id & 0x80U) != 0U, "and its answer on the Y link ends the wait (id %u, 128..255)", (unsigned)A.vcal_id);
+    A.ui.svc = 6U; A.ui.cal_ph = 2U; loop(100U); A.ui.cal_val = 0U; press_log();
+    CHECK(SM[1].n_cal == 1U && SM[1].last_cal_cmd == (uint8_t)LINKCMD_CALR && r_n_cal == 0U, "O/P Calibration B, 000.0: CALR on the B link");
+    A.ui.svc = 5U; A.ui.cal_ph = 0U; loop(100U); A.ui.cal_val = 2300U; press_log();
+    CHECK(r_n_cal == 1U && SM[0].n_cal == 1U && SM[1].n_cal == 1U, "I/P Calibration R: on the R link, as before");
+    /* the Y slave running: refused; the answer on the wrong link is ignored */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); A.ui.svc = 5U; A.ui.cal_ph = 1U; loop(100U); A.ui.cal_val = 2312U; press_log();
+    CHECK(SM[0].n_cal == 0U, "Y running: 'Stop The Unit First', nothing sent");
+    loop(MUI_MSG_MS + 100U); stop_all(); SM[0].silent = 1U; loop(1000U); A.ui.svc = 5U; A.ui.cal_ph = 1U; loop(100U); A.ui.cal_val = 2312U; press_log();
+    CHECK(SM[0].n_cal == 0U && A.vcal_wait == 0U, "Y silent: 'Slave Link Lost', nothing sent"); SM[0].silent = 0U; loop(2000U);
+    A.ui.svc = 5U; A.ui.cal_ph = 1U; loop(MUI_MSG_MS + 100U); A.ui.cal_val = 2312U; SM[0].silent = 1U; K[3] = 1U; loop(150U); K[3] = 0U; loop(200U); SM[0].silent = 0U;      /* the Y slave does not answer this one: the answers below are injected */
+    if (A.vcal_wait != 0U) { uint8_t id = A.vcal_id; MApp_OnKResult(&A, id, 0U, 10050); CHECK(A.vcal_wait == 1U, "Y's calibration answered on the R link: ignored"); MApp_OnKResultPh(&A, 2U, id, 0U, 10050); CHECK(A.vcal_wait == 1U, "or on the B link: ignored"); MApp_OnKResultPh(&A, 1U, id, 0U, 10050); CHECK(A.vcal_wait == 0U, "on the Y link: taken"); }
+    else CHECK(0, "(the Y calibration should be waiting)");
+    printf("  per-phase calibration: Y and B load from their own Slave Load Cal (zero, gain, overload trip of that phase only, no reading without one), I/P and O/P calibration on the chosen phase's link, refusals, answers on the wrong link ignored, Overload Current 25 A\n");
+}
 int main(void)
 {
-    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards(); t_retune_phase();
+    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards(); t_retune_phase(); t_percal();
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
     return g_fail ? 1 : 0;
 }

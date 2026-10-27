@@ -24,6 +24,7 @@ Master: `master/Core` (STM32G070RBT6, "DISP SS3S LCD4 M1 V1.1": LCD monitor of t
 ## Apply to your projects
 1. Slave: copy `slave/Core/Src` and `slave/Core/Inc` over your slave project's `Core/Src` and `Core/Inc`. Master: the same with `master/Core`. Rebuild, flash BOTH.
 2. `slave/Core/Inc/slave_config.h` holds the settings (stage, autorun, report mode, relay mode, relay contact types). Check it before building.
+   **Copying `slave/Core/Inc` OVERWRITES your own `slave_config.h` with the repository's default (stage 1, no master control).** Keep a copy of yours and put it back, or copy the production one: `configs/slave_config_STAGE3_cap2752_full_range_MASTER_fast_start_fast_correction_100_iout_tune_apply.h` -> `Core/Inc/slave_config.h`. Symptom of the default on a unit: the diagnostics page shows `T ---`, the Run screen stays at `To 230 V (...)`, Re-tune says "No Answer".
 3. **Stages 2 and 3 will not build until you have measured the relay contacts** and set `SLAVE_RELAY_SH_CONTACT` / `SLAVE_RELAY_W_CONTACT` (`docs/RELAY_LOGIC_REVIEW.md`, section 6).
 4. The two link files `link_proto.c/.h` must be identical in both projects (they are, in every tagged version).
 

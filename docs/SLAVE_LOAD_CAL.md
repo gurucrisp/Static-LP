@@ -31,3 +31,10 @@ The master falls back to its own CT, so the Overload trip never depends on a rea
 * The channel clips at +-26.8 A of converter peak, which sets how large a load it can show.
 * This version has ONE calibration, for the single slave on the R link. Per phase calibrations come with the three-phase work.
 * The master CT is still used for the inrush backup trip (it is a hardware ADC full-scale check), whatever the source.
+
+## Three phases: Y and B (v0.9.55)
+The master's CT serves one phase (R). The Y and B phases get their load ONLY from their own slave's converter current, with THEIR OWN zero and gain:
+* LOG, then MENU to **Slave Load Cal**: in Industrial and Domestic the page comes three times, `Slave Load Cal R`, `Slave Load Cal Y`, `Slave Load Cal B` (MENU steps R, Y, B, then the next page). Calibrate each the same way: unit RUNNING, no load, type 00.0, LOG (the zero); a known load, type it, LOG (the gain).
+* Until a phase is calibrated, or while its slave sends no current reading, or the reading is clipped, that phase shows `--.-A` and has **no overload protection**. Once calibrated, its load is on the Run page and its own overload trip works (Domestic: only that phase's unit; Industrial: the whole unit).
+* R keeps the Load Source choice (Master CT or Slave) as before.
+* Stored in the settings record, bytes 33 to 40 (Y zero, Y gain, B zero, B gain). An older record reads as "not calibrated". Factory Reset keeps them.

@@ -28,3 +28,6 @@ Send the whole line. To tell a bad page from a bad channel: calibrate the INPUT 
 ## History: the pages moved in v0.9.23
 v0.9.22 and before used the last two pages of the chip. In single-bank mode those are pages 254 and 255, but the page number field holds only 0..127: the erase went to another page, the blank check reported `S1 R5 D0 E0000` and a calibration could be saved only once per page.
 Pages 126 and 127 of bank 1 have the same number in both flash modes. A calibration stored by the older versions is not found: calibrate again.
+
+## Three phases (v0.9.55)
+In Industrial and Domestic the I/P and O/P Calibration pages come for R, then Y, then B (`I/P Calibration Y`; MENU steps the phase, then the next page). The reading shown is that phase's slave, and LOG sends the calibration to THAT slave over its own link (each slave keeps its own calibration in its own flash). That phase must be stopped, as before.

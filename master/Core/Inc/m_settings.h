@@ -12,9 +12,9 @@
 extern "C" {
 #endif
 
-/* the factory default Overload Current is the RATED current of the variant: a build constant, so a default unit never trips below its rated load (D22) */
+/* the factory default Overload Current is the RATED current of the variant: a build constant, so a default unit never trips below its rated load (D22). v0.9.55: 25 A (was 99 A) */
 #ifndef MASTER_RATED_CURRENT_A
-#define MASTER_RATED_CURRENT_A   99U
+#define MASTER_RATED_CURRENT_A   25U
 #endif
 
 /* THE LIMITS MODEL (v0.9.17). The unit works from MS_VIN_MIN_V to MS_VIN_MAX_V of input. The WINDOW is Set Voltage -/+ Max Correction, never outside 90..300 V (Max Correction 0 = not set: the whole 90..300 V).
@@ -49,6 +49,7 @@ typedef struct
     uint16_t sl_gain;          /* its gain, thousandths: load = (peak - zero) x gain / 1000; 0 = not calibrated, else 200..5000 */
     uint8_t  heat_reset;       /* Overheat Restart: the unit may restart when the heat sink is at or below this, degC, MS_HEAT_RESET_MIN..(Overheat Temp - 5) (v0.9.50). Byte 32 of the record; 0 there means the default */
     uint8_t  heat_temp;        /* Overheat Temp: the heat-sink temperature that trips the unit, degC 50..120 (v0.9.49). Stored in byte 27 of the record; 0 there (an older record) means the default */
+    uint16_t sl_zero_yb[2], sl_gain_yb[2];   /* v0.9.55: the Y [0] and B [1] slave load calibrations, as sl_zero_ca / sl_gain (the Y and B phases have no master CT: their load is always their slave's). Bytes 33 to 40; zeros there (older records) = not calibrated */
 } MSettings_t;
 #define MS_HEAT_TEMP_DEFAULT  75U
 #define MS_HEAT_TEMP_MIN      50U
@@ -67,7 +68,7 @@ typedef enum
     MS_BAD_OVL_DELAY, MS_BAD_HEAT_DELAY, MS_BAD_SCROLL_TIME, MS_BAD_PASSWORD, MS_BAD_RESTART_TIME, MS_BAD_HEAT_TEMP, MS_BAD_HEAT_RESET, MS_BAD_FLAG
 } MSErr_t;
 
-#define MS_PACK_LEN  48U              /* v0.9.50: 48 bytes (it was 32): bytes 0 to 31 are laid out exactly as before, byte 32 is the Overheat Restart */
+#define MS_PACK_LEN  48U              /* v0.9.50: 48 bytes (it was 32): bytes 0 to 31 are laid out exactly as before, byte 32 is the Overheat Restart, 33 to 40 the Y and B load calibrations (v0.9.55), 41 to 47 free */
 #define MS_PACK_LEN_V1  32U           /* the record of firmware up to v0.9.49: MS_Load reads it and carries the settings over */
 #define MS_VERSION_V1   1U
 #define MS_VERSION   2U       /* the record version: MStore_Init(&st, fl, page_a, page_b, MS_VERSION, MS_PACK_LEN) */

@@ -33,12 +33,19 @@ static uint16_t ct_to_da(const MCal_t *c, uint16_t x16)
 }
 /* the load current in tenths of an amp from the slave's CONVERTER current: load = (peak - zero) x gain. The PEAK is used: the converter's RMS hardly moves with the load (0.9 A RMS at 10 A of load, and as much at no load), the peak does (7.8 A at 10 A).
  * The zero is the peak at no load WITH THE UNIT RUNNING (the converter's own magnetizing current), the gain is load / (peak - zero) at a known load. */
-static uint16_t sl_to_da(const MSettings_t *s, uint16_t pk_ca)
+static uint16_t sl_to_da(uint16_t zero_ca, uint16_t gain, uint16_t pk_ca)
 {
-    int32_t x = (int32_t)pk_ca - (int32_t)s->sl_zero_ca; uint64_t v;
+    int32_t x = (int32_t)pk_ca - (int32_t)zero_ca; uint64_t v;
     if (x < 0) x = 0;
-    v = (((uint64_t)(uint32_t)x * (uint64_t)s->sl_gain) + 5000ULL) / 10000ULL;                  /* hundredths of an amp x thousandths / 10000 = tenths of an amp */
+    v = (((uint64_t)(uint32_t)x * (uint64_t)gain) + 5000ULL) / 10000ULL;                         /* hundredths of an amp x thousandths / 10000 = tenths of an amp */
     return (v > 6000ULL) ? 6000U : (uint16_t)v;
+}
+/* v0.9.55: the load of the Y (k 0) or B (k 1) phase: they have no master CT, so it is always their slave's converter current with THEIR calibration. 0 = no load reading (not calibrated, not measured, clipped): shown as --.-A, no overload trip */
+static uint8_t yb_load(const MApp_t *a, const MAppSlave_t *s, uint8_t k, uint16_t *ld)
+{
+    *ld = 0U;
+    if ((a->settings.sl_gain_yb[k] == 0U) || (s->have == 0U) || (s->iout_valid == 0U) || (s->iout_clip != 0U)) return 0U;
+    *ld = sl_to_da(a->settings.sl_zero_yb[k], a->settings.sl_gain_yb[k], s->iout_pk_ca); return 1U;
 }
 static uint32_t ct_nominal_da(const MCal_t *c, uint16_t x16)      /* the same with gain 1: what the span calibration divides by */
 {
@@ -239,29 +246,41 @@ uint8_t MApp_TempDeci(const MApp_t *a, uint8_t ph, int16_t *t_dc)
 static void slcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
     uint32_t entered = MUI_CalValue(&a->ui);                                           /* tenths of an amp */
-    uint16_t keep_z = a->settings.sl_zero_ca, keep_g = a->settings.sl_gain;
-    if ((d->have == 0U) || (d->iout_valid == 0U)) { MUI_Notify(&a->ui, "No Converter", "Current Reading", now); return; }
-    if (d->state != 2U) { MUI_Notify(&a->ui, "Run The Unit", "First", now); return; }
-    if (d->iout_clip != 0U) { MUI_Notify(&a->ui, "Reading Clipped", "Reduce The Load", now); return; }
+    uint8_t cp = MUI_CalPhase(&a->ui);                                                 /* v0.9.55: R, Y or B: its slave and its own zero and gain */
+    uint16_t *zp = (cp == 0U) ? &a->settings.sl_zero_ca : &a->settings.sl_zero_yb[cp - 1U], *gp = (cp == 0U) ? &a->settings.sl_gain : &a->settings.sl_gain_yb[cp - 1U];
+    uint16_t keep_z = *zp, keep_g = *gp, pk; uint8_t have, valid, clip, st;
+    if (cp == 0U) { have = d->have; valid = d->iout_valid; clip = d->iout_clip; st = d->state; pk = d->iout_pk_ca; }
+    else { const MAppSlave_t *s = &d->yb[cp - 1U]; have = s->have; valid = s->iout_valid; clip = s->iout_clip; st = s->state; pk = s->iout_pk_ca; }
+    if ((have == 0U) || (valid == 0U)) { MUI_Notify(&a->ui, "No Converter", "Current Reading", now); return; }
+    if (st != 2U) { MUI_Notify(&a->ui, "Run The Unit", "First", now); return; }
+    if (clip != 0U) { MUI_Notify(&a->ui, "Reading Clipped", "Reduce The Load", now); return; }
     if (a->sstore.fl == 0) { MUI_Notify(&a->ui, "Calibration", "Not Available", now); return; }
     if (entered == 0U)
     {   /* THE ZERO: the peak at no load */
-        if (d->iout_pk_ca > 4000U) { MUI_Notify(&a->ui, "Out Of Range", "Open The Load", now); return; }
-        a->settings.sl_zero_ca = d->iout_pk_ca;
+        if (pk > 4000U) { MUI_Notify(&a->ui, "Out Of Range", "Open The Load", now); return; }
+        *zp = pk;
         if (MS_Save(&a->sstore, &a->settings) == 0) MUI_Notify(&a->ui, "Zero Set", "Now The Gain", now);
-        else { a->settings.sl_zero_ca = keep_z; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
+        else { *zp = keep_z; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
         return;
     }
     {   /* THE GAIN: the typed load against the peak above the zero */
-        uint32_t delta = (d->iout_pk_ca > a->settings.sl_zero_ca) ? (uint32_t)(d->iout_pk_ca - a->settings.sl_zero_ca) : 0U, g;
+        uint32_t delta = (pk > *zp) ? (uint32_t)(pk - *zp) : 0U, g;
         if (delta < MAPP_SL_MIN_DELTA_CA) { MUI_Notify(&a->ui, "Load Too Low", "Min 1 A Above Zero", now); return; }
         if ((entered < MAPP_CT_MIN_CAL_DA) || (entered > 1800U)) { MUI_Notify(&a->ui, "Enter 2.0-180.0 A", "", now); return; }
         g = (entered * 10000U + (delta / 2U)) / delta;
         if ((g < 200U) || (g > 5000U)) { MUI_Notify(&a->ui, "Out Of Range", "Check The Load", now); return; }
-        a->settings.sl_gain = (uint16_t)g;
+        *gp = (uint16_t)g;
         if (MS_Save(&a->sstore, &a->settings) == 0) MUI_Notify(&a->ui, "Calibrated", "Saved", now);
-        else { a->settings.sl_gain = keep_g; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
+        else { *gp = keep_g; MUI_Notify(&a->ui, "Save Failed", "Flash Error", now); }
     }
+}
+
+/* a $K id for the Y or B link (ph 1 or 2): 128..255 (master_links uses 1..127 for its hello and SEQ), and never the id of the application's last command on that link (the slave would take it for a retry) */
+static uint8_t yb_kid(MApp_t *a, uint8_t ph)
+{
+    uint8_t id = (uint8_t)(MApp_NextKId(a) | 0x80U);
+    if (id == a->tune_id_yb[ph - 1U]) id = (uint8_t)(0x80U | (uint8_t)(id + 1U));
+    a->tune_id_yb[ph - 1U] = id; return id;
 }
 
 /* v0.9.54: what the slave of phase ph says about its Re-tune (the R slave's fields are the top level of MAppData_t, the Y and B slaves' are in yb[]) */
@@ -287,19 +306,14 @@ static void tune_request(MApp_t *a, const MAppData_t *d, uint8_t ph, uint32_t no
     if ((a->eout.run[ph] != 0U) || ((t.state != 0U) && !((t.state == 3U) && ((t.fault == 18U) || (t.fault == 19U)))))      /* the slave latched "Re-tune Required" (18, 19): that is exactly what a tune is for */
     { a->tune_all = 0U; MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }
     a->tune_state = TS_ASK; a->tune_id = MApp_NextKId(a); a->tune_cmd = (uint8_t)MAPP_KCMD_TUNE; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t0 = now; a->tune_t_tx = now;
-    if (ph != 0U)
-    {   /* the Y and B links: ids 128..255 (master_links uses 1..127 for its hello and SEQ), and never the id of the last TUNE on that link (the slave would take it for a retry) */
-        a->tune_id = (uint8_t)(a->tune_id | 0x80U);
-        if (a->tune_id == a->tune_id_yb[ph - 1U]) a->tune_id = (uint8_t)(0x80U | (uint8_t)(a->tune_id + 1U));
-        a->tune_id_yb[ph - 1U] = a->tune_id;
-    }
+    if (ph != 0U) a->tune_id = yb_kid(a, ph);
     a->tune_seen = t.tune_n; a->tune_step = 0U; a->tune_dv_dv = 0; a->tune_ticks = 0U; a->tune_result = 0U; a->tune_abort_sent = 0U;           /* frames already counted belong to an older sweep */
 }
 
 static void tune_abort(MApp_t *a, uint32_t now)
 {
     if ((a->tune_abort_sent != 0U) || (a->tune_state == TS_IDLE) || (a->tune_state == TS_DONE)) return;
-    a->tune_abort_sent = 1U; a->tune_id = MApp_NextKId(a); if (a->tune_ph != 0U) { a->tune_id = (uint8_t)(a->tune_id | 0x80U); if (a->tune_id == a->tune_id_yb[a->tune_ph - 1U]) a->tune_id = (uint8_t)(0x80U | (uint8_t)(a->tune_id + 1U)); a->tune_id_yb[a->tune_ph - 1U] = a->tune_id; } a->tune_cmd = (uint8_t)MAPP_KCMD_TABORT; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t_tx = now; a->tune_t0 = now;
+    a->tune_abort_sent = 1U; a->tune_id = (a->tune_ph != 0U) ? yb_kid(a, a->tune_ph) : MApp_NextKId(a); a->tune_cmd = (uint8_t)MAPP_KCMD_TABORT; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t_tx = now; a->tune_t0 = now;
 }
 
 static void tune_key(MApp_t *a, uint8_t ev, uint32_t now)
@@ -485,7 +499,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     if (d->ct_raw != 0U) { ld = ct_to_da(&a->cal, d->ct_x16); lok = 1U; }                      /* from the CT count and the calibration */
     if ((a->settings.load_src != 0U) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
     {   /* "Load Source = Slave": the slave's converter current, calibrated. NOT calibrated, no reading or a clipped one: the master CT stays in charge (the overload trip must never depend on a reading that is not there). */
-        ld = sl_to_da(&a->settings, d->iout_pk_ca); lok = 1U;
+        ld = sl_to_da(a->settings.sl_zero_ca, a->settings.sl_gain, d->iout_pk_ca); lok = 1U;
     }
     r.load_ok[0] = lok; r.load_da[0] = disp_filter(&a->f_load, ld, (uint8_t)(d->have && lok), 1, 3, now);   /* tenths of an amp, 0.3 A band */
     for (ph = 0U; ph < 3U; ph++)
@@ -500,7 +514,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         r.have[1U + ph] = s->have;
         r.vin_dv[1U + ph]  = disp_filter(&a->f_vin_yb[ph],  s->vin_dv,  s->have, 10, 7, now);
         r.vout_dv[1U + ph] = disp_filter(&a->f_vout_yb[ph], s->vout_dv, s->have, 10, 7, now);
-        r.load_ok[1U + ph] = s->load_ok; r.load_da[1U + ph] = disp_filter(&a->f_load_yb[ph], s->load_da, (uint8_t)(s->have && s->load_ok), 1, 3, now);
+        { uint16_t yl; uint8_t yok = yb_load(a, s, ph, &yl); r.load_ok[1U + ph] = yok; r.load_da[1U + ph] = disp_filter(&a->f_load_yb[ph], yl, (uint8_t)(s->have && yok), 1, 3, now); }      /* v0.9.55: its slave, calibrated */
     }
     r.seq_state = (uint8_t)((a->phase.state == MPH_REVERSE) ? 1U : ((a->phase.state == MPH_SAME) ? 2U : 0U));
     r.vll_dv[0] = ((r.have[0] != 0U) && (r.have[1] != 0U)) ? MPhase_LineDv(&a->phase, 0U, 1U, r.vout_dv[0], r.vout_dv[1]) : 0U;      /* the phase-to-phase output voltages R-Y, Y-B, B-R from the three voltages and the angles the slaves measured */
@@ -541,7 +555,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
             const MAppSlave_t *s = &d->yb[k]; MPhaseIn_t *pi = &in.ph[1U + k];
             int32_t dvb = (int32_t)s->vout_dv - (int32_t)(a->settings.set_v * 10U);
             uint8_t meas = (uint8_t)((s->have != 0U) && (s->state == 2U) && (dvb <= (int32_t)MAPP_BAND_DV) && (dvb >= -(int32_t)MAPP_BAND_DV));
-            pi->link_ok = s->link_ok; pi->vin_dv = s->vin_dv; pi->vout_dv = s->vout_dv; pi->load_da = (s->load_ok != 0U) ? s->load_da : 0U;
+            pi->link_ok = s->link_ok; pi->vin_dv = s->vin_dv; pi->vout_dv = s->vout_dv; { uint16_t yl; pi->load_da = (yb_load(a, s, k, &yl) != 0U) ? yl : 0U; }      /* v0.9.55: the overload trip of Y and B, once calibrated */
             pi->slave_fault = (uint8_t)((s->have != 0U) ? s->fault : 0U);
             pi->in_band = (uint8_t)(((s->e_valid != 0U) && (s->in_band != 0U)) || (meas != 0U));
             pi->heat = (uint8_t)((s->heat != 0U) || (a->heat_on[1U + k] != 0U)); pi->ct_peak = 0U; pi->slave_state = s->state; pi->state_valid = s->have;
@@ -583,8 +597,16 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     else if ((d->have != 0U) && (d->fault != 0U)) r.fault[0] = MF_SlaveFaultType(d->fault, d->vin_dv, a->settings.set_v);
     r.fcode[0] = (uint8_t)((d->have != 0U) ? d->fault : 0U);
     if (d->have == 0U) r.fault[0] = (uint8_t)(a->eout.fault[0] != 0U ? a->eout.fault[0] : 0U);
-    r.sl_pk_ca = d->iout_pk_ca; r.sl_rms_ca = d->iout_rms_ca; r.sl_valid = (uint8_t)((d->have != 0U) && (d->iout_valid != 0U)); r.sl_run = (uint8_t)(d->state == 2U);      /* for the Slave Load Cal page */
-    r.vin_raw_dv = d->vin_dv; r.vout_raw_dv = d->vout_dv; r.active = (uint8_t)((a->eout.run[0] != 0U) || (d->state != 0U));       /* for the Voltage Calibration pages */
+    r.sl_pk_ca = d->iout_pk_ca; r.sl_rms_ca = d->iout_rms_ca; r.sl_valid = (uint8_t)((d->have != 0U) && (d->iout_valid != 0U)); r.sl_run = (uint8_t)(d->state == 2U);
+    {   /* v0.9.55: the calibration pages of the Y or B phase show ITS slave */
+        uint8_t cp = MUI_CalPhase(&a->ui);
+        if (cp != 0U)
+        {   const MAppSlave_t *s = &d->yb[cp - 1U];
+            r.sl_pk_ca = s->iout_pk_ca; r.sl_rms_ca = s->iout_rms_ca; r.sl_valid = (uint8_t)((s->have != 0U) && (s->iout_valid != 0U)); r.sl_run = (uint8_t)(s->state == 2U);
+        }
+    }      /* for the Slave Load Cal page */
+    r.vin_raw_dv = d->vin_dv; r.vout_raw_dv = d->vout_dv; r.active = (uint8_t)((a->eout.run[0] != 0U) || (d->state != 0U));
+    { uint8_t cp = MUI_CalPhase(&a->ui); if (cp != 0U) { const MAppSlave_t *s = &d->yb[cp - 1U]; r.vin_raw_dv = s->have ? s->vin_dv : 0U; r.vout_raw_dv = s->have ? s->vout_dv : 0U; r.active = (uint8_t)((a->eout.run[cp] != 0U) || (s->state != 0U)); } }       /* for the Voltage Calibration pages */
     r.wait_s[0] = (a->eout.fault[0] != 0U) ? MF_RestartLeftS(&a->eng, 0U) : 0U;                                      /* the automatic restart countdown for the status row */
     r.fcode[0] = (a->eout.fault[0] != 0U) ? a->eng.u[0].fcode : (((a->eout.appear[0] == 0U) && (d->have != 0U)) ? d->fault : 0U);      /* the slave code behind the fault shown */
     MUI_Tick(&a->ui, &r, now, frame);
@@ -754,14 +776,16 @@ static void vcal_message(MApp_t *a, uint8_t status, int32_t value)
 static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
     uint16_t entered = MUI_CalValue(&a->ui); uint8_t ch = ((((a->ui.live->mode == (uint8_t)M_MODE_SINGLE) ? a->ui.page : a->ui.svc)) == 6U) ? 1U : 0U;      /* the output page (v0.9.54: the service pages exist in every mode) */
+    uint8_t cp = MUI_CalPhase(&a->ui), have = d->have, st = d->state;                      /* v0.9.55: the chosen phase's slave, over its own link */
+    if (cp != 0U) { have = d->yb[cp - 1U].have; st = d->yb[cp - 1U].state; }
     if (a->vcal_wait != 0U) { MUI_Notify(&a->ui, "Busy", "Wait For The Answer", now); return; }
-    if (d->have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
-    if ((a->eout.run[0] != 0U) || (d->state != 0U)) { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }          /* never while it regulates: a gain change would make the output jump */
+    if (have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
+    if ((a->eout.run[cp] != 0U) || (st != 0U)) { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }          /* never while it regulates: a gain change would make the output jump */
     a->vcal_ch = ch;
     if (entered == 0U) { a->vcal_cmd = MAPP_KCMD_CALR; a->vcal_letter = (ch == 0U) ? 'V' : 'O'; a->vcal_num = 0; }          /* typing 000.0 resets the channel to nominal */
     else if ((entered < 500U) || (entered > 4000U)) { MUI_Notify(&a->ui, "Enter 50.0-400.0 V", "Or 000.0 To Reset", now); return; }
     else { a->vcal_cmd = (ch == 0U) ? MAPP_KCMD_CALV : MAPP_KCMD_CALO; a->vcal_letter = '\0'; a->vcal_num = (int32_t)entered; }
-    a->vcal_id = MApp_NextKId(a); a->vcal_tx_n = 0U; a->vcal_t0 = now; a->vcal_t_tx = now; a->vcal_due = 1U; a->vcal_wait = 1U;
+    a->vcal_ph = cp; a->vcal_id = (cp == 0U) ? MApp_NextKId(a) : yb_kid(a, cp); a->vcal_tx_n = 0U; a->vcal_t0 = now; a->vcal_t_tx = now; a->vcal_due = 1U; a->vcal_wait = 1U;
     MUI_Notify(&a->ui, "Calibrating", "Wait...", now);
 }
 
@@ -779,7 +803,7 @@ uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now)
         out->id = a->tune_id; out->cmd = a->tune_cmd; out->num = 0; out->letter = '\0'; out->ph = a->tune_ph; a->tune_due = 0U; a->tune_tx_n++; a->tune_t_tx = now; return 1U;
     }
     if ((a->vcal_wait == 0U) || (a->vcal_due == 0U)) return 0U;
-    out->id = a->vcal_id; out->cmd = a->vcal_cmd; out->num = a->vcal_num; out->letter = a->vcal_letter; out->ph = 0U;
+    out->id = a->vcal_id; out->cmd = a->vcal_cmd; out->num = a->vcal_num; out->letter = a->vcal_letter; out->ph = a->vcal_ph;
     a->vcal_due = 0U; a->vcal_tx_n++; a->vcal_t_tx = now;
     return 1U;
 }
@@ -787,7 +811,7 @@ uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now)
 void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
 {
     if ((a->tune_state != TS_IDLE) && (a->tune_ph == 0U) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }       /* the answer to TUNE or TABORT (of the R phase: a Y or B Re-tune is answered on its own link) */
-    if ((a->vcal_wait == 0U) || (id != a->vcal_id)) return;                       /* not the answer to a calibration (a HELLO's, or a late one) */
+    if ((a->vcal_wait == 0U) || (a->vcal_ph != 0U) || (id != a->vcal_id)) return;   /* not the answer to a calibration of R (a HELLO's, a late one, or one for Y or B) */
     a->vcal_wait = 0U; a->vcal_due = 0U;
     vcal_message(a, status, value);
 }
@@ -795,7 +819,8 @@ void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
 void MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t value)
 {
     if (ph == 0U) { MApp_OnKResult(a, id, status, value); return; }
-    if ((a->tune_state != TS_IDLE) && (a->tune_ph == ph) && (id == a->tune_id)) tune_on_result(a, status, value, a->t_now);      /* the Y and B links: only the answer to that phase's TUNE or TABORT */
+    if ((a->tune_state != TS_IDLE) && (a->tune_ph == ph) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }      /* the Y and B links: only the answer to that phase's TUNE or TABORT */
+    if ((a->vcal_wait != 0U) && (a->vcal_ph == ph) && (id == a->vcal_id)) { a->vcal_wait = 0U; a->vcal_due = 0U; vcal_message(a, status, value); }      /* v0.9.55: or to its voltage calibration */
 }
 uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i) { if ((i > 1U) || (a->hello_yb[i] == 0U)) return 0U; a->hello_yb[i] = 0U; return 1U; }
 

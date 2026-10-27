@@ -152,7 +152,7 @@ static void t_overload_heat(void)
     W_t w;
     world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w);
     w.in.ph[0].load_da = 1200U; run_ms(&w, 9800U);
-    CHECK(w.out.contactor[0] == 1U && w.out.appear[0] == MLOG_T_OVERLOAD, "overload: 120 A against 99 A for 9.8 s: not yet, 'Appear' shown");
+    CHECK(w.out.contactor[0] == 1U && w.out.appear[0] == MLOG_T_OVERLOAD, "overload: 120 A against the default limit for 9.8 s: not yet, 'Appear' shown");
     run_ms(&w, 400U);
     CHECK(w.out.contactor[0] == 0U && w.out.shown == MLOG_T_OVERLOAD && w.log[0].type == MLOG_T_OVERLOAD && w.log[0].load_da == 1200U, "after the Overload Cut Delay (10 s) it trips and logs the load");
     w.in.ph[0].load_da = 0U; run_ms(&w, 120000U);
@@ -160,8 +160,10 @@ static void t_overload_heat(void)
     press_start(&w); run_ms(&w, 300U);
     CHECK(w.out.run[0] == 1U, "START restarts it");
     to_on(&w);
-    w.in.ph[0].load_da = 990U; run_ms(&w, 60000U);
-    CHECK(w.out.contactor[0] == 1U, "exactly the limit (99.0 A) is not an overload");
+    w.in.ph[0].load_da = (uint16_t)(MASTER_RATED_CURRENT_A * 10U); run_ms(&w, 60000U);
+    CHECK(w.out.contactor[0] == 1U, "exactly the limit (the default %u.0 A) is not an overload", (unsigned)MASTER_RATED_CURRENT_A);
+    w.in.ph[0].load_da = (uint16_t)(MASTER_RATED_CURRENT_A * 10U + 1U); run_ms(&w, 10500U);
+    CHECK(w.out.contactor[0] == 0U && w.out.shown == MLOG_T_OVERLOAD, "0.1 A above it for the delay is");
     /* heat */
     world(&w, M_MODE_SINGLE, 1U, 11000U); to_on(&w);
     w.in.ph[0].heat = 1U; run_ms(&w, 9800U);
