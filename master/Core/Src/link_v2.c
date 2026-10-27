@@ -20,7 +20,7 @@ static const Fld_t F_E[11] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 
 static const Fld_t F_H[14] = { {0, 255, 0}, {0, 9999999, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 2, 0}, {0, 1, 0}, {0, 65535, 0}, {0, 4095, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 15, 0}, {0, 1, 0} };
 static const Fld_t F_R[3] = { {1, 255, 0}, {0, 7, 0}, {-INT32_LIM, INT32_LIM, 0} };
 static const Fld_t F_T[5] = { {0, 255, 0}, {0, 4095, 0}, {0, 65535, 0}, {-999, 999, 0}, {0, 6, 0} };
-static const Fld_t F_M[5] = { {0, 255, 0}, {0, 1, 0}, {1000, 3000, 0}, {0, 255, 0}, {0, 1990, 0} };
+static const Fld_t F_M[6] = { {0, 255, 0}, {0, 1, 0}, {1000, 3000, 0}, {0, 255, 0}, {0, 1990, 0}, {0, 1, 0} };
 static const Fld_t F_K_ID  = {1, 255, 0};
 static const Fld_t F_K_CAL = {500, 4000, 0};
 static const Fld_t F_K_SEQ = {1, 255, 0};
@@ -185,8 +185,8 @@ int32_t LinkV2_BuildT(char *out, uint32_t cap, const LinkT_t *f)
 
 int32_t LinkV2_BuildM(char *out, uint32_t cap, const LinkM_t *f)
 {
-    const int32_t v[5] = { f->seq, f->run, f->setv_dv, f->clr, f->maxc_dv };
-    return build_nums('M', F_M, v, 5U, out, cap);
+    const int32_t v[6] = { f->seq, f->run, f->setv_dv, f->clr, f->maxc_dv, f->hold };
+    return build_nums('M', F_M, v, (f->hold != 0U) ? 6U : 5U, out, cap);      /* CANONICAL: hold = 0 is left out (the frame of the first protocol) */
 }
 
 int32_t LinkV2_BuildK(char *out, uint32_t cap, const LinkK_t *f)
@@ -454,10 +454,10 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
         f.u.t.step = (uint8_t)v[0]; f.u.t.ticks = (uint16_t)v[1]; f.u.t.vin_dv = (uint16_t)v[2]; f.u.t.dv = (int16_t)v[3]; f.u.t.result = (uint8_t)v[4];
         break;
     case 'M':
-        rc = parse_nums(p, end, F_M, 5U, v);
+        rc = parse_nums_opt(p, end, F_M, 5U, 6U, v);
         if (rc != LINK_OK) return rc;
         f.type = LINKV2_M;
-        f.u.m.seq = (uint8_t)v[0]; f.u.m.run = (uint8_t)v[1]; f.u.m.setv_dv = (uint16_t)v[2]; f.u.m.clr = (uint8_t)v[3]; f.u.m.maxc_dv = (uint16_t)v[4];
+        f.u.m.seq = (uint8_t)v[0]; f.u.m.run = (uint8_t)v[1]; f.u.m.setv_dv = (uint16_t)v[2]; f.u.m.clr = (uint8_t)v[3]; f.u.m.maxc_dv = (uint16_t)v[4]; f.u.m.hold = (uint8_t)v[5];
         break;
     default:   /* 'K' */
         rc = parse_k(p, end, &f.u.k);

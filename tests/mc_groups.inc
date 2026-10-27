@@ -207,7 +207,7 @@ static void t_mc_condition_fault(void)
 #define E2E_MAX 700
 static char     e2e_f[E2E_MAX][100]; static int e2e_n[E2E_MAX]; static int e2e_cnt;
 static uint32_t e2e_seq_m;
-static void    e2e_on_control(const LinkM_t *m, uint32_t now) { SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now); }
+static void    e2e_on_control(const LinkM_t *m, uint32_t now) { SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now); SlaveCtrl_OnLoadHold(m->hold, now); }      /* as slave_link.c */
 static uint16_t e2e_iout_rms, e2e_iout_pk; static uint8_t e2e_iout_on, e2e_iout_clip;      /* what the simulated slave measures on I-OUT (hundredths of an ampere); off = like a slave without the channel */
 static void    e2e_fill_e(LinkE_t *e)
 {
@@ -256,7 +256,7 @@ static void    e2e_step(uint32_t ms) { uint32_t k; for (k = 0U; k < ms / 5U; k++
 static void    e2e_master(uint8_t run, uint16_t setv, uint8_t clr, uint16_t maxc, int corrupt)
 {
     LinkM_t m; char b[96]; int32_t n;
-    m.seq = (uint8_t)e2e_seq_m++; m.run = run; m.setv_dv = setv; m.clr = clr; m.maxc_dv = maxc;
+    m.seq = (uint8_t)e2e_seq_m++; m.run = run; m.setv_dv = setv; m.clr = clr; m.maxc_dv = maxc; m.hold = 0U;
     n = LinkV2_BuildM(b, sizeof b, &m);
     if (corrupt) b[n - 4] = (char)((b[n - 4] == '0') ? '1' : '0');
     e2e_bytes(b, (uint32_t)n);
@@ -266,7 +266,7 @@ static void    e2e_master(uint8_t run, uint16_t setv, uint8_t clr, uint16_t maxc
 static void    e2e_inject_bad_stop(void)
 {
     LinkM_t m; char b[96]; int32_t n;
-    m.seq = 0U; m.run = 0U; m.setv_dv = 2300U; m.clr = 4U; m.maxc_dv = 300U;
+    m.seq = 0U; m.run = 0U; m.setv_dv = 2300U; m.clr = 4U; m.maxc_dv = 300U; m.hold = 0U;
     n = LinkV2_BuildM(b, sizeof b, &m);
     b[n - 4] = (char)((b[n - 4] == '0') ? '1' : '0');
     e2e_bytes(b, (uint32_t)n);
@@ -349,7 +349,7 @@ static MCtlOut_t mm_tick(uint8_t setmode, uint8_t start, uint8_t stop)
     MCtlOut_t o; LinkM_t m; char b[96]; int32_t n;
     uint8_t sf = (uint8_t)((SlaveCtrl_LinkState() == 3U) || (SlaveCtrl_FaultCode() != 0U));
     MCtl_Step(&mm_c, &mm_s, setmode, start, stop, 1U, sf, mc_ms(), &o);
-    m.seq = (uint8_t)mm_seq++; m.run = o.run; m.setv_dv = o.setv_dv; m.clr = o.clr; m.maxc_dv = o.maxc_dv;
+    m.seq = (uint8_t)mm_seq++; m.run = o.run; m.setv_dv = o.setv_dv; m.clr = o.clr; m.maxc_dv = o.maxc_dv; m.hold = o.hold;
     n = LinkV2_BuildM(b, sizeof b, &m);
     if (n > 0) e2e_bytes(b, (uint32_t)n);
     e2e_step(100);
@@ -461,10 +461,10 @@ static void ma_ms10(void)
     if ((MApp_ControlValid(&ma) != 0U) && (ma_mute_m == 0))
     {
         const MCtlOut_t *c = MApp_Control(&ma);
-        if ((ma_have_last == 0U) || (c->run != ma_last.run) || (c->clr != ma_last.clr) || (c->setv_dv != ma_last.setv_dv) || (c->maxc_dv != ma_last.maxc_dv) || ((uint32_t)(now - ma_t_tx) >= 100U))
+        if ((ma_have_last == 0U) || (c->run != ma_last.run) || (c->clr != ma_last.clr) || (c->setv_dv != ma_last.setv_dv) || (c->maxc_dv != ma_last.maxc_dv) || (c->hold != ma_last.hold) || ((uint32_t)(now - ma_t_tx) >= 100U))
         {
             LinkM_t m; char b[96]; int32_t n;
-            m.seq = (uint8_t)ma_seq++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv;
+            m.seq = (uint8_t)ma_seq++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv; m.hold = c->hold;
             n = LinkV2_BuildM(b, sizeof b, &m); if (n > 0) e2e_bytes(b, (uint32_t)n);
             ma_t_tx = now; ma_last = *c; ma_have_last = 1U;
         }
@@ -577,6 +577,31 @@ static void t_mc_master_app(void)
 }
 
 
+/* v0.9.61, end to end: the real master application closes the contactor with the real slave holding its duty; the load (the output 5 V low) arrives with the contactor */
+static void t_mc_app_load_hold(void)
+{
+    int32_t t_h = -1, t_c = -1, t_e = -1; uint32_t k; uint16_t d_c = 0U, dmin = 0xFFFFU, dmax = 0U; int moved_before = 0;
+    ma_start(1U, 222.0f);
+    for (k = 0U; k < 4000U && t_e < 0; k++)
+    {
+        uint8_t held = (uint8_t)((SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) != 0U);
+        if (t_h < 0 && held) t_h = (int32_t)(k * 10U);
+        if (t_c < 0 && ma_c_contactor()) { t_c = (int32_t)(k * 10U); d_c = g_ctrl.duty_counts; W.out_offset = -5.0; if (!held) moved_before = 1; }
+        if (t_c >= 0 && t_e < 0) { if (!held) t_e = (int32_t)(k * 10U); else { if (g_ctrl.duty_counts < dmin) dmin = g_ctrl.duty_counts; if (g_ctrl.duty_counts > dmax) dmax = g_ctrl.duty_counts; } }
+        ma_ms10();
+    }
+    CHECK(t_h >= 0 && t_c >= 0 && t_c - t_h >= 100 && moved_before == 0, "the slave is holding (LOAD_HOLD in its $E) before the master closes the contactor (%d ms before)", (int)(t_c - t_h));
+    CHECK(dmin == d_c && dmax == d_c, "the load arrives with the contactor: the duty stays at %u through the hold (%u..%u)", (unsigned)d_c, (unsigned)dmin, (unsigned)dmax);
+    CHECK(t_e - t_c >= 400 && t_e - t_c <= 700, "the hold ends about %u ms after the contactor closed (%d ms)", (unsigned)MF_HOLD_AFTER_MS, (int)(t_e - t_c));
+    ma_run(8000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && MLog_Count(&ma.log) == 0U, "the unit runs on with the load: contactor closed, no fault, nothing logged");
+    CHECK((double)W.vout > 228.0 && (double)W.vout < 232.0, "and regulates the loaded output back to 230 V (%.1f V)", (double)W.vout);
+    CHECK(ma.ctl_out.hold == 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) == 0U, "no hold left over");
+    check_invariants("master control: the load-connect hold, end to end");
+    printf("  load-connect hold end to end: the real master holds the real slave from before the contactor closes until 0.5 s after; the load arrives on a steady duty\n");
+}
+
+
 #if (SLAVE_INJ_GUARD != 0)
 /* ---- input steps while running: the guard protects the first moments, then the output must come back FAST and never stay stuck ---- */
 static double mc_back_within(double band_v, uint32_t limit_ms, uint16_t setv_dv)
@@ -615,6 +640,62 @@ static void t_mc_input_steps(void)
     CHECK(t >= 0.0 && t <= 4.0, "after 8 swings the output settles at 230 V within %.1f s of the last one", t);
     CHECK(SlaveCtrl_GuardCount() >= 8U, "the guard acted on the swings (%u events)", (unsigned)SlaveCtrl_GuardCount());
     printf("  input steps: boost and buck steps recover in about 2 s, 8 fast swings never stick, the guard releases every time\n");
+}
+#endif
+
+#if (SLAVE_INJ_GUARD != 0)      /* mc_back_within */
+/* ---- v0.9.61: the load-connect hold. With $M hold = 1 the regulator's duty is frozen in RUN; the contactor closing onto a load is modelled as the output reading dropping 5 V (out_offset). ---- */
+static void mch_for(uint32_t ms, uint8_t hold, uint16_t *dmin, uint16_t *dmax)
+{
+    uint32_t k, j;
+    for (k = 0U; k < (ms / 100U); k++)
+    {
+        SlaveCtrl_OnControl(1U, 2300U, 1U, 300U, mc_ms()); SlaveCtrl_OnLoadHold(hold, mc_ms());
+        for (j = 0U; j < 10U; j++) { run_for(10000); if (dmin != 0) { if (g_ctrl.duty_counts < *dmin) *dmin = g_ctrl.duty_counts; if (g_ctrl.duty_counts > *dmax) *dmax = g_ctrl.duty_counts; } }
+    }
+}
+static void t_mc_load_hold(void)
+{
+    uint16_t d0, dmin, dmax; double t;
+    CHECK(SlaveCtrl_LoadHoldActive(mc_ms()) == 0U, "no hold before anything has run");
+    mc_world(262000000ULL, 222.0f); (void)mc_until_run(2300U, 1U, 60000U); mch_for(12000U, 0U, 0, 0);
+    CHECK(g_ctrl.state == CTRL_RUN && (double)W.vout > 228.0 && (double)W.vout < 232.0, "boosting 222 V to 230 V (%.1f V)", (double)W.vout);
+    d0 = g_ctrl.duty_counts; dmin = 0xFFFFU; dmax = 0U;
+    mch_for(100U, 1U, 0, 0);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) != 0U && SlaveCtrl_LoadHoldActive(mc_ms()) != 0U, "hold = 1: the slave reports LOAD_HOLD (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
+    W.out_offset = -5.0;                                                                       /* the load arrives: the output drops 5 V */
+    d0 = g_ctrl.duty_counts; dmin = 0xFFFFU; dmax = 0U;
+    mch_for(600U, 1U, &dmin, &dmax);
+    CHECK(dmin == d0 && dmax == d0, "the load arrives during the hold: the duty does NOT move (%u, %u..%u) although the output is 5 V low (%.1f V)", (unsigned)d0, (unsigned)dmin, (unsigned)dmax, (double)W.vout);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "no fault in the hold");
+    mch_for(100U, 0U, 0, 0);
+    CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) == 0U, "hold = 0: LOAD_HOLD clears");
+    dmin = 0xFFFFU; dmax = 0U; mch_for(300U, 0U, &dmin, &dmax);
+    CHECK(dmax > d0 && dmax - d0 < 300U, "released: the regulator takes up the dip with ordinary steps (%u -> %u; no jump from the hold time integrated at once)", (unsigned)d0, (unsigned)dmax);
+    t = mc_back_within(2.0, 8000U, 2300U);
+    CHECK(t >= 0.0 && t <= 3.0 && g_ctrl.fault == CF_NONE, "and the output is back within 2 V of 230 V in %.1f s", t);
+    /* the slave ends a hold by itself: the master keeps sending 1 */
+    W.out_offset = 0.0; mch_for(8000U, 0U, 0, 0);
+    mch_for(100U, 1U, 0, 0); W.out_offset = -5.0; d0 = g_ctrl.duty_counts;
+    mch_for(800U, 1U, 0, 0); CHECK(g_ctrl.duty_counts == d0 && SlaveCtrl_LoadHoldActive(mc_ms()) != 0U, "a hold that stays 1: frozen at 0.9 s");
+    mch_for(300U, 1U, 0, 0); CHECK(SlaveCtrl_LoadHoldActive(mc_ms()) == 0U && g_ctrl.duty_counts != d0, "ended by the slave itself after %u ms (the duty moves again)", (unsigned)CTRL_LOAD_HOLD_MAX_MS);
+    mch_for(2000U, 1U, 0, 0); CHECK(SlaveCtrl_LoadHoldActive(mc_ms()) == 0U, "and a level that stays 1 does not start another (a new hold needs a 0 first)");
+    mch_for(100U, 0U, 0, 0); mch_for(100U, 1U, 0, 0); CHECK(SlaveCtrl_LoadHoldActive(mc_ms()) != 0U, "after a 0, a 1 holds again");
+#if (SLAVE_INJ_GUARD != 0)
+    {   /* the input-step guard still runs during a hold: a step takes the duty to zero */
+        uint32_t g = SlaveCtrl_GuardCount();
+        W.vin = 245.0f; dmin = 0xFFFFU; dmax = 0U; mch_for(400U, 1U, &dmin, &dmax);
+        CHECK(SlaveCtrl_GuardCount() > g && dmin == 0U, "an input step during the hold: the guard still takes the correction to zero (events %u -> %u, lowest duty %u)", (unsigned)g, (unsigned)SlaveCtrl_GuardCount(), (unsigned)dmin);
+        mch_for(100U, 0U, 0, 0); W.out_offset = 0.0;
+        t = mc_back_within(2.0, 8000U, 2300U); CHECK(t >= 0.0 && g_ctrl.fault == CF_NONE, "and it recovers after the hold (%.1f s)", t);
+    }
+#endif
+    /* not in RUN: a hold means nothing */
+    mc_for(3000U, 0U, 2300U, 1U, 300U); SlaveCtrl_OnLoadHold(1U, mc_ms());
+    CHECK(g_ctrl.state != CTRL_RUN && SlaveCtrl_LoadHoldActive(mc_ms()) == 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) == 0U, "stopped: a hold is not reported active");
+    SlaveCtrl_OnLoadHold(0U, mc_ms());
+    check_invariants("load-connect hold");
+    printf("  load-connect hold: the duty frozen while the load arrives, released with ordinary steps, the slave ends a stuck hold itself, the guard still acts\n");
 }
 #endif
 
@@ -882,7 +963,13 @@ static void t_mc_tune_apply(void)
       ma.settings.maxcorr_v = 30U; ma_run(1500U);                                                       /* the current Max Correction is BELOW the profile's 36 V: the old rule would have applied the cap */
       memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(190.0f) * 1.99; tn_start_at(190.0f); got = tn_wait_contactor(90000U); tn_run(6000U);
       CHECK(got && g_ctrl.fault == 0U && fabs((double)W.vout - 230.0) < 3.0 && tn.max_eff > 64U, "with it stored, a start from 190 V is NOT held to 64 ticks (4 V): it applied %u ticks, the output is %.1f V, no fault", (unsigned)tn.max_eff, (double)W.vout); }
-    printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it\n");
+    /* ---- v0.9.61: the load arrives with the contactor (the output 5 V low) on a tuned unit: the hold, then the same-transformer check, raise no false alarm ---- */
+    tn_stop_unit(); tn_do_retune(1.0, 230.0f, 30U);
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(215.0f) * 1.0; tn_start_at(215.0f); got = tn_wait_contactor(90000U);
+    { int was_held = (SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) != 0U; W.out_offset = -5.0; tn_run(8000U);
+      CHECK(got && was_held && g_ctrl.fault == 0U && ma_c_contactor() && fabs((double)W.vout - 230.0) < 3.0, "tuned: the contactor closes with the slave holding (%d), the load arrives (5 V dip): no fault, the output back at %.1f V", was_held, (double)W.vout); }
+    W.out_offset = 0.0;
+    printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it, a load at the contactor\n");
 }
 #endif
 #endif

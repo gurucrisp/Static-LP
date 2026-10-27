@@ -95,6 +95,7 @@ static uint16_t to_dv(float v);
 static void hk_on_control(const LinkM_t *m, uint32_t now_ms)
 {
     SlaveCtrl_OnControl(m->run, m->setv_dv, m->clr, m->maxc_dv, now_ms);
+    SlaveCtrl_OnLoadHold(m->hold, now_ms);                    /* v0.9.61 */
 }
 #if (SLAVE_AUTOTUNE != 0)
 #include "slave_tune_link.h"

@@ -45,3 +45,7 @@ The boards change to 180 ohm x 3 (60 ohm, the drawing's value). `IOUT_BURDEN_R_E
 * Resolution 4.9 mA per count (was 13.1); the channel clips at +-10.1 A peak (was 26.8); the hardware comparators trip at about +-41 A peak (was 108).
 * At the converter peaks measured on the bench (7.8 A of peak at 10 A of load) the load reading clips from about 13 A of load. Above that the slave's load reading is "clipped": R falls back to the master CT, **Y and B have no load reading and no overload trip**. Check the clip and the 41 A trip against your largest normal load and inrush.
 * Redo the Slave Load Cal (zero and gain) of every phase after the resistors change.
+
+
+## v0.9.61: F02 when the contactor closes onto a load
+Reported: every phase tripped F02 (these comparators) when the contactor closed onto a load, never at no load or when the load was added later. v0.9.61 freezes the regulator's duty from 150 ms before the contactor closes to 500 ms after (the load-connect hold, docs/LINK_V2.md). If F02 remains, the peak is the load step itself: measure I-OUT at the closing with a scope, and change the trip in hardware (burden or R37 .. R40), not above about 75 A.

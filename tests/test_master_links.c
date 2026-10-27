@@ -90,7 +90,7 @@ static void t_module(void)
     n = s_frame(b, 'Y', 9U, 2311U, 2299U, 2U, 0U); push(0, b, n / 2); feed(0, 1000U); push(0, b + n / 2, n - n / 2); feed(0, 1001U); MLinks_Fill(0, &s0, 1010U);
     CHECK(s0.have == 1U && s0.vin_dv == 2311U && s0.vout_dv == 2299U, "a frame split over two reads and over the end of the ring is decoded (vin %u)", (unsigned)s0.vin_dv);
     /* the $M frames */
-    reset(); c.run = 1U; c.clr = 5U; c.setv_dv = 2300U; c.maxc_dv = 500U;
+    reset(); c.run = 1U; c.clr = 5U; c.setv_dv = 2300U; c.maxc_dv = 500U; c.hold = 0U;
     CHECK(MLinks_BuildM(0, &c, 0U, 0U, b, sizeof b) == 0, "nothing is sent while the application says it is not ready");
     n = (int)MLinks_BuildM(0, &c, 1U, 1000U, b, sizeof b);
     { LinkV2Rx_t rx; LinkV2Frame_t f; int32_t k, got = 0; LinkV2Rx_Init(&rx); for (k = 0; k < n; k++) if (LinkV2Rx_Feed(&rx, (uint8_t)b[k], &f) == (int32_t)LINKV2_M) got = 1;
@@ -101,6 +101,12 @@ static void t_module(void)
     c.clr = 6U; CHECK(MLinks_BuildM(0, &c, 1U, 1111U, b, sizeof b) > 0, "so is a change of the clear counter");
     c.setv_dv = 2200U; CHECK(MLinks_BuildM(0, &c, 1U, 1112U, b, sizeof b) > 0, "and of the set voltage");
     c.maxc_dv = 400U; CHECK(MLinks_BuildM(0, &c, 1U, 1113U, b, sizeof b) > 0, "and of the Max Correction");
+    c.hold = 1U; n = (int)MLinks_BuildM(0, &c, 1U, 1114U, b, sizeof b);
+    { LinkV2Rx_t rx; LinkV2Frame_t f; int32_t k, got = 0; LinkV2Rx_Init(&rx); for (k = 0; k < n; k++) if (LinkV2Rx_Feed(&rx, (uint8_t)b[k], &f) == (int32_t)LINKV2_M) got = 1;
+      CHECK(n > 0 && got && f.u.m.hold == 1U, "v0.9.61: the load-connect hold goes AT ONCE and the frame carries it (hold %u)", got ? (unsigned)f.u.m.hold : 9U); }
+    c.hold = 0U; n = (int)MLinks_BuildM(0, &c, 1U, 1115U, b, sizeof b);
+    { LinkV2Rx_t rx; LinkV2Frame_t f; int32_t k, got = 0; LinkV2Rx_Init(&rx); for (k = 0; k < n; k++) if (LinkV2Rx_Feed(&rx, (uint8_t)b[k], &f) == (int32_t)LINKV2_M) got = 1;
+      CHECK(n > 0 && got && f.u.m.hold == 0U, "and its end too"); }
     CHECK(MLinks_BuildM(1, &c, 1U, 1114U, b, sizeof b) > 0, "link 1 has its own timer: its first frame is due although link 0 just sent");
     { LinkV2Rx_t rx; LinkV2Frame_t f; int32_t k; uint8_t s_a = 0U, s_b = 0U; reset();
       for (t = 0U; t < 3U; t++) { n = (int)MLinks_BuildM(0, &c, 1U, 1000U + t * 100U, b, sizeof b); LinkV2Rx_Init(&rx); for (k = 0; k < n; k++) if (LinkV2Rx_Feed(&rx, (uint8_t)b[k], &f) == (int32_t)LINKV2_M) s_a = f.u.m.seq; }

@@ -716,12 +716,12 @@ void MasterApp_Run(void)
             if (MApp_ShowsIout(&app) != 0U) MApp_IoutPage(&app, now, want);
             if (MApp_ShowsProfile(&app) != 0U) MApp_ProfilePage(&app, now, want);            /* the converter-side current, LOG then MENU x7 */
             if (MApp_ShowsClock(&app) != 0U) MApp_ClockPage(&app, now, want);          /* the Clock page, LOG then MENU x4 */               /* the control diagnostics, two MENU presses away */
-            {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction or the clear counter changes (Set-Mode = run 0 = the slave stops its PWM) */
+            {   /* tell the slave what to do: a $M frame every 100 ms, and AT ONCE when run, the set voltage, the Max Correction, the clear counter or the load-connect hold changes (Set-Mode = run 0 = the slave stops its PWM) */
                 const MCtlOut_t *c = MApp_Control(&app);
-                if ((MApp_ControlValid(&app) != 0U) && ((have_last == 0U) || (c->run != last.run) || (c->clr != last.clr) || (c->setv_dv != last.setv_dv) || (c->maxc_dv != last.maxc_dv) || ((uint32_t)(now - t_tx) >= 100U)))
+                if ((MApp_ControlValid(&app) != 0U) && ((have_last == 0U) || (c->run != last.run) || (c->clr != last.clr) || (c->setv_dv != last.setv_dv) || (c->maxc_dv != last.maxc_dv) || (c->hold != last.hold) || ((uint32_t)(now - t_tx) >= 100U)))
                 {
                     LinkM_t m; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
-                    m.seq = seq_tx++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv;
+                    m.seq = seq_tx++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv; m.hold = c->hold;
                     n = LinkV2_BuildM(b, sizeof b, &m);
                     if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);      /* about 0.6 ms at 500 kbaud; the receive DMA keeps running */
                     MApp_NoteFrameSent(&app); t_tx = now; last = *c; have_last = 1U;

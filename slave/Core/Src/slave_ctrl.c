@@ -479,6 +479,8 @@ static uint8_t  s_mc_clr, s_mc_clr_valid;
 static uint32_t s_mc_last_m_ms;
 static uint8_t  s_mc_link_lost;
 static uint16_t s_mc_maxc_dv;
+static uint8_t  s_hold_lvl;                  /* v0.9.61: the last $M hold level */
+static uint32_t s_hold_since_ms;             /* when it went to 1 */
 static uint32_t s_restart_at_ms;
 static uint32_t s_last_trip_ms;
 static uint32_t s_state_since_ms;
@@ -920,7 +922,7 @@ void SlaveCtrl_Init(void)
     g_ctrl.mode        = CTRL_ZC_UNKNOWN;
     g_ctrl.run_request = (uint8_t)(SLAVE_BENCH_AUTORUN != 0);       /* with master control SLAVE_BENCH_AUTORUN is 0: the master decides */
     s_mc_last_m_ms = CtrlHw_NowMs();                                 /* the link timeout runs from the start */
-    s_mc_link_lost = 0U; s_mc_clr_valid = 0U; s_mc_clr = 0U; s_mc_setv_dv = 0U; s_mc_maxc_dv = 0U;
+    s_mc_link_lost = 0U; s_mc_clr_valid = 0U; s_mc_clr = 0U; s_mc_setv_dv = 0U; s_mc_maxc_dv = 0U; s_hold_lvl = 0U; s_hold_since_ms = 0U;
 #if (TUNE_ENABLED != 0)
     s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f; s_tune_last_ms = 0U;
 #endif
@@ -989,6 +991,25 @@ void SlaveCtrl_OnControl(uint8_t run, uint16_t setv_dv, uint8_t clr, uint16_t ma
 #endif
 }
 
+void SlaveCtrl_OnLoadHold(uint8_t hold, uint32_t now_ms)
+{
+#if (SLAVE_MASTER_CONTROL != 0)
+    if ((hold != 0U) && (s_hold_lvl == 0U)) s_hold_since_ms = now_ms;       /* a new hold: its own time limit starts */
+    s_hold_lvl = (uint8_t)(hold != 0U);
+#else
+    (void)hold; (void)now_ms;
+#endif
+}
+
+uint8_t SlaveCtrl_LoadHoldActive(uint32_t now_ms)
+{
+#if (SLAVE_MASTER_CONTROL != 0)
+    return (uint8_t)((g_ctrl.state == CTRL_RUN) && (s_hold_lvl != 0U) && (s_mc_link_lost == 0U) && ((uint32_t)(now_ms - s_hold_since_ms) < CTRL_LOAD_HOLD_MAX_MS));
+#else
+    (void)now_ms; return 0U;
+#endif
+}
+
 uint16_t SlaveCtrl_Flags2(void)
 {
     uint16_t f = 0U;
@@ -1006,6 +1027,7 @@ uint16_t SlaveCtrl_Flags2(void)
     if ((g_ctrl.state == CTRL_RUN) && ((float)s_reg_eff >= (REG_CAP() - 1.0f))) f |= LINKV2_FLAG_AT_CAP;
 #endif
     if (g_ctrl.state == CTRL_LATCHED) f |= LINKV2_FLAG_FAULT_LATCHED;
+    if (SlaveCtrl_LoadHoldActive(CtrlHw_NowMs()) != 0U) f |= LINKV2_FLAG_LOAD_HOLD;
     return f;
 }
 
@@ -1336,7 +1358,12 @@ void SlaveCtrl_Service(void)
 #else
         {
             float d;
-            Reg_Service(&s_reg, now_ms, m.vin, m.vout, 1U);
+            if (SlaveCtrl_LoadHoldActive(now_ms) != 0U)
+            {   /* v0.9.61: the contactor is connecting the load: the duty stays where it is. The controller's clocks follow, so it resumes with a normal step (no 0.5 s of error integrated at once) */
+                s_reg.last_time_ms = now_ms;
+                if (s_reg.ramp_last_ms != 0U) s_reg.ramp_last_ms = now_ms;
+            }
+            else Reg_Service(&s_reg, now_ms, m.vin, m.vout, 1U);
             d = Reg_Duty(&s_reg);                                   /* the EFFECTIVE high-side on-time in ticks (the integral controller's output) */
             if (d > REG_CAP()) d = REG_CAP();
             if (d < 0.0f) d = 0.0f;

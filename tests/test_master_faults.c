@@ -540,12 +540,54 @@ static void t_priority(void)
     printf("  display priority: the exact agreed order, and in live scenarios\n");
 }
 
+/* v0.9.61: the load-connect hold. The slaves freeze their duty from MF_HOLD_LEAD_MS before the contactor closes to MF_HOLD_AFTER_MS after it ($M hold). */
+static void t_load_hold(void)
+{
+    W_t w; uint32_t k; int32_t t_hold = -1, t_con = -1, t_end = -1, early = 0, held_off = 0;
+    world(&w, M_MODE_SINGLE, 1U, 1000U);
+    for (k = 0U; k < 200U; k++)
+    {
+        step(&w);
+        if (w.out.hold[0] && !w.out.run[0]) held_off++;
+        if (t_hold < 0 && w.out.hold[0]) t_hold = (int32_t)(k * 100U);
+        if (t_con < 0 && w.out.contactor[0]) t_con = (int32_t)(k * 100U);
+        if (t_con >= 0 && t_end < 0 && !w.out.hold[0]) t_end = (int32_t)(k * 100U);
+        if (t_hold < 0 && w.out.contactor[0]) early++;
+    }
+    CHECK(t_hold >= 0 && t_con >= 0 && t_con - t_hold >= 100 && t_con - t_hold <= (int32_t)MF_HOLD_LEAD_MS, "Single: the hold starts BEFORE the contactor closes (%d ms before; at most %u)", (int)(t_con - t_hold), (unsigned)MF_HOLD_LEAD_MS);
+    CHECK(early == 0 && held_off == 0, "the contactor never closes without the hold already on, and the hold is never sent to a stopped slave");
+    CHECK(t_end - t_con == (int32_t)MF_HOLD_AFTER_MS, "it ends %d ms after the contactor closed (%u)", (int)(t_end - t_con), (unsigned)MF_HOLD_AFTER_MS);
+    run_ms(&w, 5000U); CHECK(w.out.contactor[0] && !w.out.hold[0], "running on: no hold");
+    press_stop(&w); CHECK(!w.out.hold[0] && !w.out.run[0], "STOP: no hold");
+    /* the output leaves the band during the lead: no contactor, and the hold goes too */
+    world(&w, M_MODE_SINGLE, 1U, 1000U);
+    for (k = 0U; k < 200U && !w.out.hold[0]; k++) step(&w);
+    CHECK(w.out.hold[0] && !w.out.contactor[0], "the hold is on, the contactor still open");
+    w.code[0] = 9U; step(&w); step(&w);                                   /* the model reports it after the engine's tick: the engine sees it on the next one */
+    CHECK(!w.out.hold[0] && !w.out.contactor[0], "a slave fault in the lead: the hold is gone on the tick it is seen and the contactor stays open");
+    /* Industrial: all three slaves hold together */
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U);
+    for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0] && w.out.hold[0] && w.out.hold[1] && w.out.hold[2], "Industrial: the contactor closes with all three slaves holding");
+    run_ms(&w, MF_HOLD_AFTER_MS); CHECK(!w.out.hold[0] && !w.out.hold[1] && !w.out.hold[2], "and all three are released together");
+    /* Domestic: each phase's own contactor, its own hold */
+    world(&w, M_MODE_DOMESTIC, 1U, 50000U);
+    for (k = 0U; k < 400U && !w.out.contactor[2]; k++) step(&w);
+    run_ms(&w, 2000U);
+    w.code[1] = 2U; run_ms(&w, 300U); w.code[1] = 0U;
+    CHECK(w.out.contactor[0] && !w.out.contactor[1] && w.out.contactor[2], "Domestic: Y tripped, R and B run on");
+    for (k = 0U; k < 800U && !w.out.contactor[1]; k++) { step(&w); if (w.out.hold[0] || w.out.hold[2]) held_off++; }
+    CHECK(w.out.contactor[1] && w.out.hold[1], "Y closes again holding");
+    CHECK(held_off == 0 && !w.out.hold[0] && !w.out.hold[2], "while R and B, already connected, are not held");
+    printf("  load-connect hold: from %u ms before the contactor closes to %u ms after, per unit, never to a stopped slave\n", (unsigned)MF_HOLD_LEAD_MS, (unsigned)MF_HOLD_AFTER_MS);
+}
+
 static uint32_t rs = 99U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
 static void t_fuzz(void)
 {
-    uint32_t round, bad_con = 0U, bad_set = 0U, bad_latch = 0U, bad_log = 0U, ticks = 0U;
+    uint32_t round, bad_con = 0U, bad_set = 0U, bad_latch = 0U, bad_log = 0U, bad_hold = 0U, ticks = 0U;
     for (round = 0U; round < 60U; round++)
     {
         W_t w; uint32_t k; uint8_t was_latched[3] = { 0U, 0U, 0U }; uint8_t prev_run_state[3] = { 0U, 0U, 0U };
@@ -574,6 +616,8 @@ static void t_fuzz(void)
                 if (w.f.mode == (uint8_t)M_MODE_INDUSTRIAL && w.out.contactor[0] && !(w.out.run[0] && w.out.run[1] && w.out.run[2])) bad_con++;
                 /* (b) nothing is energised or closed while Set-Mode is open */
                 if (w.in.setmode && (w.out.contactor[p] || w.out.run[p])) bad_set++;
+                /* (e) v0.9.61: the hold goes only to a slave that is told to run */
+                if (w.out.hold[p] && !w.out.run[p]) bad_hold++;
             }
             for (u = 0; u < (int)w.f.nunits; u++)
             {   /* (c) a latch never lets go, apart from the Re-tune one which only MF_RetuneDone clears (not called here) */
@@ -590,6 +634,7 @@ static void t_fuzz(void)
     CHECK(bad_set == 0U, "nothing is energised while Set-Mode is open (%u violations)", (unsigned)bad_set);
     CHECK(bad_latch == 0U, "a latched unit never lets go by itself (%u violations)", (unsigned)bad_latch);
     CHECK(bad_log == 0U, "a fault is only logged when the unit was energised (%u violations)", (unsigned)bad_log);
+    CHECK(bad_hold == 0U, "the load-connect hold only goes to a running slave (%u violations)", (unsigned)bad_hold);
     printf("  fuzz: %u random ticks in 60 random configurations: the invariants hold\n", (unsigned)ticks);
 }
 
@@ -611,6 +656,7 @@ int main(void)
     t_restart_left();
     t_setmode_and_stale();
     t_priority();
+    t_load_hold();
     t_fuzz();
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
     return g_fail ? 1 : 0;

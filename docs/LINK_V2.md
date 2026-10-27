@@ -12,7 +12,7 @@ Version 1 (`link_proto.*`, the `$S` status frame) is frozen. Version 2 adds the 
 | `$H` | slave -> master | `LinkV2_BuildH` | protocol, firmware, input window, reset cause, tuned, output guard |
 | `$R` | slave -> master | `LinkV2_BuildR` | response to a `$K`: id, status, value |
 | `$T` | slave -> master | `LinkV2_BuildT` | autotune progress |
-| `$M` | master -> slave | `LinkV2_BuildM` | run, set voltage, clear counter, Max Correction (a LEVEL, every 100 ms) |
+| `$M` | master -> slave | `LinkV2_BuildM` | run, set voltage, clear counter, Max Correction (a LEVEL, every 100 ms); optional 6th field `hold` (v0.9.61, sent only when 1): the load-connect hold, the slave freezes its duty while the contactor connects the load |
 | `$K` | master -> slave | `LinkV2_BuildK` | acknowledged commands (HELLO, CALV, CALO, CALR, TUNE, TABORT, TPARAM, TSAVE) |
 
 Receiving: feed every byte to `LinkV2Rx_Feed`; it returns the frame type when a valid frame completed. `LinkV2_Parse` takes one line.
@@ -38,7 +38,9 @@ The examples in `tests/link_v2_examples.inc` are generated from the workbook: `p
 
 ## `$E` optional fields (v0.9.30)
 `$E,seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca]`: the last two (the converter-side current, hundredths of an ampere, 0..4000) are OPTIONAL. A sender without the channel omits them (the frame is byte for byte the 6-field frame of the first protocol); a receiver that gets only 6 fields reads them as 0; one that gets 7 reads the peak as 0;
-a present optional field must be in range or the frame is rejected; extra fields beyond 8 are ignored. Flags: `IOUT_VALID` 0x0200 (the slave measures it), `IOUT_CLIP` 0x0400 (the measurement is at the limit of its range).
+a present optional field must be in range or the frame is rejected; extra fields beyond 8 are ignored. Flags: `IOUT_VALID` 0x0200 (the slave measures it), `IOUT_CLIP` 0x0400 (the measurement is at the limit of its range), `LOAD_HOLD` 0x0800 (v0.9.61: the duty is frozen for the load-connect hold).
+
+`$M,seq,run,setv,clr,maxc[,hold]` (v0.9.61): `hold` 0 or 1, OPTIONAL and sent only when 1 (the 0 frame is byte for byte the 5-field one; an older slave ignores the extra field). The master raises it 150 ms before a contactor closes and drops it 500 ms after (m_faults.h `MF_HOLD_*`); while it is 1 and the slave is in RUN the regulator's duty is frozen (protections and the input-step guard still run). The slave ends a hold by itself after `CTRL_LOAD_HOLD_MAX_MS` (1 s), on link loss and outside RUN; a new hold needs a 0 first.
 
 
 ## The autotune over the link (v0.9.32)

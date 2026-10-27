@@ -2666,6 +2666,10 @@ int main(void)
     run_isolated(t_mc_master_app,             "master control: the real master application against the real slave");
     run_isolated(t_mc_from_90v,               "master control: the unit works from 90 V");
     run_isolated(t_mc_iout,                   "master control: converter-side current through the link");
+#if (SLAVE_INJ_GUARD != 0)
+    run_isolated(t_mc_load_hold,              "master control: the load-connect hold (v0.9.61)");
+#endif
+    run_isolated(t_mc_app_load_hold,          "master control: the load-connect hold, real master application");
 #if (SLAVE_TUNE_MODE != 0)
     run_isolated(t_mc_tune,                   "tune mode: the real controller, the real sweep, the real master");
 #endif

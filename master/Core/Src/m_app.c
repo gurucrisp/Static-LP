@@ -579,12 +579,12 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         }
         for (k = 0U; k < a->eout.n_log; k++) (void)MLog_Append(&a->log, &a->eout.log[k].rec);
         if (a->eout.clr_pulse[0] != 0U) a->clr_cnt++;
-        a->ctl_out.run = a->eout.run[0]; a->ctl_out.clr = a->clr_cnt;
+        a->ctl_out.run = a->eout.run[0]; a->ctl_out.clr = a->clr_cnt; a->ctl_out.hold = a->eout.hold[0];       /* v0.9.61: the load-connect hold */
         a->ctl_out.setv_dv = (uint16_t)(a->settings.set_v * 10U); a->ctl_out.maxc_dv = (uint16_t)(a->settings.maxcorr_v * 10U);
         for (k = 0U; k < 2U; k++)
         {   /* the $M content for the Y and B slaves: its own run level and clear counter, the same set voltage and Max Correction */
             if (a->eout.clr_pulse[1U + k] != 0U) a->clr_cnt_yb[k]++;
-            a->ctl_out_yb[k].run = a->eout.run[1U + k]; a->ctl_out_yb[k].clr = a->clr_cnt_yb[k];
+            a->ctl_out_yb[k].run = a->eout.run[1U + k]; a->ctl_out_yb[k].clr = a->clr_cnt_yb[k]; a->ctl_out_yb[k].hold = a->eout.hold[1U + k];
             a->ctl_out_yb[k].setv_dv = a->ctl_out.setv_dv; a->ctl_out_yb[k].maxc_dv = a->ctl_out.maxc_dv;
         }
     }

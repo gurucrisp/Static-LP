@@ -23,6 +23,10 @@ extern "C" {
 #endif
 
 #define MF_CLOSE_HOLD_MS    1000UL    /* the contactor closes once the output has been IN BAND (at the set voltage) for this long: a short debounce, no longer the Restart Time */
+/* v0.9.61, the load-connect hold: the slaves freeze their regulator's duty ($M hold) from MF_HOLD_LEAD_MS before the contactor closes to MF_HOLD_AFTER_MS after it. Closing onto a load
+ * with the converter correcting tripped the hardware short-circuit comparators (F02) on every phase; the same load added after the start did not. The slave also ends a hold by itself (CTRL_LOAD_HOLD_MAX_MS). */
+#define MF_HOLD_LEAD_MS     150UL     /* the $M frame goes at once on a change: 150 ms is a margin for a few lost frames */
+#define MF_HOLD_AFTER_MS    500UL     /* the contactor's closing time and bounce, and the output measurement settling with the load on */
 #define MF_OP_HV_FAST_V     30U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... (30 since v0.9.26; it was 15: a variac step up passes straight through the series transformer and tripped it) */
 #define MF_OP_HV_FAST_MS    200UL     /* ... once it has lasted this long: the load must not sit on a gross over-voltage for the whole delay */
 #define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
@@ -67,6 +71,7 @@ typedef struct
     uint8_t  run[3];           /* the run LEVEL to send each slave in $M                                     */
     uint8_t  clr_pulse[3];     /* 1 for one tick: increment that slave's clear counter                       */
     uint8_t  contactor[3];     /* 1 = closed                                                                 */
+    uint8_t  hold[3];          /* v0.9.61: the hold LEVEL to send each slave in $M (MF_HOLD_*)                */
     uint8_t  buzzer;
     uint8_t  fault[3];         /* per phase: the fault shown for it (MLOG_T_*), 0 = none                     */
     uint8_t  appear[3];        /* per phase: a limit is violated right now ("Appear"), 0 = none             */

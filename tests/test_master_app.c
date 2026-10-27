@@ -1002,7 +1002,14 @@ static void t_three_phase_app(void)
       tap3(1); run3(1500U);
       CHECK(MApp_ControlPh(&A, 1)->clr == (uint8_t)(y0 + 1U) && MApp_ControlPh(&A, 0)->clr == r0 && MApp_ControlPh(&A, 2)->clr == b0, "START retries only Y: its clear counter %u -> %u, R stays %u, B stays %u", (unsigned)y0, (unsigned)MApp_ControlPh(&A, 1)->clr, (unsigned)MApp_ControlPh(&A, 0)->clr, (unsigned)MApp_ControlPh(&A, 2)->clr); }
     /* INDUSTRIAL: one unit, one contactor, all three phases must be there, any trip trips all */
-    three_fresh((uint8_t)M_MODE_INDUSTRIAL); run3(12000U); o = MApp_Engine(&A);
+    three_fresh((uint8_t)M_MODE_INDUSTRIAL);
+    {   /* v0.9.61: the load-connect hold reaches each phase's own $M content, R, Y and B */
+        uint32_t k; int seen = 0; uint8_t h[3] = { 0U, 0U, 0U };
+        for (k = 0U; k < 1200U && !seen; k++) { run3(10U); if (MApp_Engine(&A)->contactor[0] != 0U) { seen = 1; h[0] = MApp_ControlPh(&A, 0)->hold; h[1] = MApp_ControlPh(&A, 1)->hold; h[2] = MApp_ControlPh(&A, 2)->hold; } }
+        CHECK(seen && h[0] == 1U && h[1] == 1U && h[2] == 1U, "Industrial: when the contactor closes, R, Y and B are all told to hold (%u %u %u)", (unsigned)h[0], (unsigned)h[1], (unsigned)h[2]);
+        run3(1000U); CHECK(MApp_ControlPh(&A, 0)->hold == 0U && MApp_ControlPh(&A, 1)->hold == 0U && MApp_ControlPh(&A, 2)->hold == 0U, "and released 0.5 s later");
+    }
+    run3(12000U); o = MApp_Engine(&A);
     CHECK(o->contactor[0] == 1U && MApp_ControlPh(&A, 0)->run == 1U && MApp_ControlPh(&A, 1)->run == 1U && MApp_ControlPh(&A, 2)->run == 1U, "Industrial with the three slaves: the one contactor closes and all three get run = 1");
     CHECK(o->contactor[1] == 0U && o->contactor[2] == 0U, "and ONLY the first contactor output (PA10) is ever closed in Industrial: the second and third (PA11, PA12) stay open (%u %u)", (unsigned)o->contactor[1], (unsigned)o->contactor[2]);
     D.yb[1].link_ok = 0U; D.yb[1].have = 0U; D.yb[1].state = 0U; run3(3000U); o = MApp_Engine(&A);

@@ -304,6 +304,9 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         {
             if ((mask & (1U << p)) == 0U) continue;
             out->run[p] = (uint8_t)((un->st == (uint8_t)U_STARTING) || (un->st == (uint8_t)U_ON));
+            /* v0.9.61: the duty is held steady while the contactor connects the load: from MF_HOLD_LEAD_MS before it closes (the in-band count nearly done) to MF_HOLD_AFTER_MS after */
+            if ((un->st == (uint8_t)U_STARTING) && (un->inband_run != 0U) && (age(now, un->t_inband) >= (MF_CLOSE_HOLD_MS - MF_HOLD_LEAD_MS))) out->hold[p] = 1U;
+            if ((un->st == (uint8_t)U_ON) && (age(now, un->t_on) < MF_HOLD_AFTER_MS)) out->hold[p] = 1U;
             if ((un->st == (uint8_t)U_FAULT) || (un->st == (uint8_t)U_LATCHED))
             {
                 if ((un->fphase == 3U) || (un->fphase == p)) out->fault[p] = un->ftype;

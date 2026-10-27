@@ -75,9 +75,9 @@ int32_t MLinks_BuildM(uint8_t i, const MCtlOut_t *c, uint8_t valid, uint32_t now
     MLink_t *l; LinkM_t m; int32_t n;
     if ((i >= MLINKS_N) || (valid == 0U)) return 0;
     l = &s_l[i];
-    if ((l->have_last != 0U) && (c->run == l->last.run) && (c->clr == l->last.clr) && (c->setv_dv == l->last.setv_dv) && (c->maxc_dv == l->last.maxc_dv)
+    if ((l->have_last != 0U) && (c->run == l->last.run) && (c->clr == l->last.clr) && (c->setv_dv == l->last.setv_dv) && (c->maxc_dv == l->last.maxc_dv) && (c->hold == l->last.hold)
         && ((uint32_t)(now_ms - l->t_tx) < MLINKS_M_PERIOD_MS)) return 0;
-    m.seq = l->seq_tx++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv;
+    m.seq = l->seq_tx++; m.run = c->run; m.setv_dv = c->setv_dv; m.clr = c->clr; m.maxc_dv = c->maxc_dv; m.hold = c->hold;
     n = LinkV2_BuildM(out, cap, &m);
     l->t_tx = now_ms; l->last = *c; l->have_last = 1U;
     return n;

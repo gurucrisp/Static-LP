@@ -50,4 +50,5 @@ void MCtl_Step(MCtl_t *c, const MSettings_t *s, uint8_t setmode, uint8_t key_sta
     out->clr     = c->clr;
     out->setv_dv = (uint16_t)(s->set_v * 10U);
     out->maxc_dv = (uint16_t)(s->maxcorr_v * 10U);
+    out->hold    = 0U;
 }

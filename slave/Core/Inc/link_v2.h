@@ -64,6 +64,7 @@ typedef enum
 #define LINKV2_FLAG_NOT_TUNED      0x0100U   /* no valid autotune profile / Max Correction not set               */
 #define LINKV2_FLAG_IOUT_VALID     0x0200U   /* the slave measures the converter-side current (I-OUT): iout_rms_ca / iout_pk_ca are real      */
 #define LINKV2_FLAG_IOUT_CLIP      0x0400U   /* that measurement is at the limit of its range: the true current is larger                       */
+#define LINKV2_FLAG_LOAD_HOLD      0x0800U   /* v0.9.61: the regulator's duty is frozen while the contactor connects the load ($M hold)          */
 
 typedef struct
 {
@@ -144,7 +145,7 @@ typedef struct
     uint8_t  result;       /* LINKV2_T_*                                                */
 } LinkT_t;
 
-/* ---- $M control: seq,run,setv,clr,maxc ------------------------------------------------- */
+/* ---- $M control: seq,run,setv,clr,maxc[,hold] ------------------------------------------ hold is OPTIONAL (v0.9.61): sent only when 1, so the frame is otherwise exactly the 5-field one */
 typedef struct
 {
     uint8_t  seq;          /* 0..255                                                    */
@@ -152,6 +153,7 @@ typedef struct
     uint16_t setv_dv;      /* set voltage, tenths of a volt, 1000..3000                 */
     uint8_t  clr;          /* clear counter: a CHANGE clears a latched fault            */
     uint16_t maxc_dv;      /* Max Correction, tenths of a volt, 0 (not set) .. 1990     */
+    uint8_t  hold;         /* 1 = the contactor is about to close / has just closed: hold the duty steady (a LEVEL; the slave ends it itself after CTRL_LOAD_HOLD_MAX_MS) */
 } LinkM_t;
 
 /* ---- $K command: id,cmd[,arg...] -------------------------------------------------------- */

@@ -37,6 +37,7 @@ typedef struct
     uint8_t  clr;
     uint16_t setv_dv;
     uint16_t maxc_dv;
+    uint8_t  hold;      /* v0.9.61: $M hold, the duty frozen while the contactor connects the load (m_faults.c MF_HOLD_*) */
 } MCtlOut_t;
 
 void MCtl_Init(MCtl_t *c);

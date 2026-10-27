@@ -409,6 +409,14 @@ uint32_t SlaveCtrl_GuardCount(void);    /* how many times the guard has taken th
  * it is picked up the moment the unit stops); the clear counter is adopted by the first $M and a CHANGE of it clears a latched fault (the fault's cause is checked again
  * by the normal start); maxc is the Max Correction (used by the autotune, step 5). */
 void     SlaveCtrl_OnControl(uint8_t run, uint16_t setv_dv, uint8_t clr, uint16_t maxc_dv, uint32_t now_ms);
+/* v0.9.61, the load-connect hold ($M hold, a LEVEL): while it is 1 and the unit is in RUN the regulator's duty is FROZEN (no integration, no ramp) so the load arriving through the
+ * contactor (and its bounce) meets a steady converter instead of a loop chasing the dip. Every protection and the input-step guard still run. A hold ends when the master sends 0,
+ * when the link is lost, or by itself CTRL_LOAD_HOLD_MAX_MS after it began. */
+#ifndef CTRL_LOAD_HOLD_MAX_MS
+#define CTRL_LOAD_HOLD_MAX_MS  1000UL
+#endif
+void     SlaveCtrl_OnLoadHold(uint8_t hold, uint32_t now_ms);
+uint8_t  SlaveCtrl_LoadHoldActive(uint32_t now_ms);   /* 1 = the duty is frozen now (RUN and a hold in force) */
 uint16_t SlaveCtrl_Flags2(void);        /* LINKV2_FLAG_* for the $E frame                                     */
 uint16_t SlaveCtrl_SetvDv(void);        /* the set voltage in use, tenths of a volt; 0 = none accepted yet (master control) */
 uint8_t  SlaveCtrl_ClrEcho(void);       /* the last clear counter value seen in $M                            */
