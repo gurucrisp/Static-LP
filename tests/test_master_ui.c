@@ -156,13 +156,13 @@ static void t_screens(void)
     CHECK(ok, "every row is exactly 20 printable characters");
     /* three-phase */
     ui_reset(M_MODE_INDUSTRIAL); S.scroll = 0U; MUI_Tick(&U, &D, T, F); ROW(2, "Industrial"); to_run();
-    ROW(0, "R:  230V     12.3A"); ROW(1, "Y:  230V     12.3A"); ROW(2, "B:  230V     12.3A"); ROW(3, "Output OFF");
+    ROW(0, "R: 230V       12.3A"); ROW(1, "Y: 230V       12.3A"); ROW(2, "B: 230V       12.3A"); ROW(3, "Output OFF");
     key(MK_MENU_SHORT);
     CHECK(strstr(row(0), "R-Y") != NULL && strstr(row(0), "400") != NULL && strstr(row(3), "Freq") != NULL && strstr(row(3), "50.0") != NULL, "page 2: phase-to-phase and frequency ('%s' / '%s')", row(0), row(3));
     D.vll_dv[1] = 0U; tick(100U); CHECK(strstr(row(1), "Y-B") != NULL && strstr(row(1), "400") == NULL && strstr(row(1), "-") != NULL, "a missing phase shows dashes: '%s'", row(1));
     key(MK_MENU_SHORT);
     ROW(0, "R : OK"); ROW(3, "Industrial       OFF");
-    key(MK_MENU_SHORT); ROW(0, "R:  230V     12.3A");
+    key(MK_MENU_SHORT); ROW(0, "R: 230V       12.3A");
     CHECK(1, "the pages wrap");
     D.have[1] = 0U; key(MK_MENU_SHORT); key(MK_MENU_SHORT); ROW(1, "Y : ---");
     printf("  screens: splash, single-phase page and every fault text, Industrial pages, a missing phase or link\n");
@@ -483,6 +483,17 @@ static void t_run_temperature(void)
         D.temp_dc[0] = 473; D.temp_st[0] = 1U; D.temp_dc[1] = 824; D.temp_st[1] = 0x11U; D.temp_dc[2] = 0; D.temp_st[2] = 2U; tick(100U);
         CHECK(strstr(row(0), "R:") != NULL && strstr(row(0), "47C") != NULL && strstr(row(1), "82C!") != NULL && strstr(row(2), "---") != NULL, "%s: the page shows R 47C, Y 82C!, B --- ('%s' / '%s' / '%s')", m == 0 ? "Domestic" : "Industrial", row(0), row(1), row(2));
         CHECK(strstr(row(0), "230V") != NULL && strstr(row(0), "12.3A") != NULL && strlen(row(0)) <= 20U && strlen(row(1)) <= 20U, "and the voltage and load are still there, nothing overlaps ('%s')", row(0));
+        ROW(0, "R: 230V 47C   12.3A"); ROW(1, "Y: 230V 82C!  12.3A"); ROW(2, "B: 230V ---   12.3A");      /* v0.9.54: a space between the voltage and the temperature (it read '230V47C') */
+        D.load_da[1] = 1234U; tick(100U); ROW(1, "Y: 230V 82C! 123.4A"); D.load_da[1] = 123U;      /* a hot reading and a three digit load share the row without touching */
+        {   /* v0.9.54: the status page carries each phase's heat sink at the right, when the fault text leaves room */
+            int k; uint8_t sc = S.scroll; S.scroll = 0U; for (k = 0; k < 4 && strstr(row(0), "R : ") == NULL; k++) { key(MK_MENU_SHORT); tick(100U); }
+            ROW(0, "R : OK           47C"); ROW(1, "Y : OK          82C!"); ROW(2, "B : OK           ---");
+            D.fault[1] = (uint8_t)MLOG_T_PHASE_SEQ; D.seq_state = 1U; tick(100U); CHECK(strcmp(row(1), "Y : PH SEQ REVERSE") == 0, "a long fault text keeps its row: no temperature ('%s')", row(1));
+            D.fault[1] = (uint8_t)MLOG_T_IP_LV; D.fault[0] = (uint8_t)MLOG_T_IP_LV; tick(100U); ROW(0, "R : IP LV Appear 47C"); CHECK(strcmp(row(1), "Y : IP LV Appear") == 0, "exactly 20 fits ('47C'), 21 does not ('82C!': '%s')", row(1));
+            D.fault[1] = 0U; D.fault[0] = 0U; D.seq_state = 0U; tick(100U);
+            for (k = 0; k < 4 && strstr(row(0), "R: ") == NULL; k++) { key(MK_MENU_SHORT); tick(100U); }
+            S.scroll = sc;
+        }
         D.temp_dc[0] = 1054; D.temp_st[0] = 0x11U; tick(100U); CHECK(strstr(row(0), "105C") != NULL && strstr(row(0), "12.3A") != NULL, "a three digit temperature does not touch the load ('%s')", row(0));
         D.temp_st[0] = 0U; D.temp_st[1] = 0U; D.temp_st[2] = 0U; tick(100U); CHECK(strstr(row(0), "C") == NULL && strstr(row(1), "C") == NULL, "with no readings the page is as it was ('%s')", row(0));
     }
@@ -740,8 +751,54 @@ static void t_ui_fuzz(void)
     printf("  UI fuzz: 2,400,000 random steps: frames well formed, live settings always valid\n");
 }
 
+
+/* v0.9.54: the service pages (monitor, diagnostics, calibrations, clock, converter current, transformer profile) in Industrial and Domestic too, and the per-phase Re-tune choice */
+static void t_three_service(void)
+{
+    int m, i; static const char *const RT[5] = { "No", "R Phase", "Y Phase", "B Phase", "All, One By One" };
+    for (m = 0; m < 2; m++)
+    {
+        uint8_t mode = (m == 0) ? (uint8_t)M_MODE_DOMESTIC : (uint8_t)M_MODE_INDUSTRIAL; const char *mn = (m == 0) ? "Domestic" : "Industrial";
+        ui_reset(mode); S.scroll = 0U; to_run();
+        key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U) && U.page == 0U, "%s: LOG then MENU opens the monitor page (it went straight back to the Run page before)", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsDiag(&U) && !MUI_ShowsMonitor(&U), "%s: MENU: the diagnostics page", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsCal(&U), "%s: MENU: the load calibration page", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsClock(&U), "%s: the clock page", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 1U, "%s: input calibration", mn); key(MK_MENU_SHORT); CHECK(MUI_ShowsVCal(&U) == 2U, "%s: output calibration", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsIout(&U), "%s: converter current", mn);
+        key(MK_MENU_SHORT); CHECK(MUI_ShowsProfile(&U), "%s: the transformer profile page", mn);
+        key(MK_MENU_SHORT); CHECK(U.svc == 9U && !MUI_ShowsProfile(&U) && strstr(row(0), "Slave Load Cal") != NULL, "%s: the slave load calibration ('%s')", mn, row(0));
+        key(MK_MENU_SHORT); CHECK(U.svc == 0U && U.page == 0U && strstr(row(0), "R: ") != NULL, "%s: after the last service page MENU is back on the Run page ('%s')", mn, row(0));
+        key(MK_MENU_SHORT); CHECK(U.page == 1U && U.svc == 0U && !MUI_ShowsDiag(&U), "%s: and MENU turns the Run pages as before (page %u, not the diagnostics)", mn, (unsigned)U.page);
+        /* a minute without a key, or a new fault, leaves a service page; the scroll timer does not turn it */
+        key(MK_MENU_SHORT); key(MK_MENU_SHORT); key(MK_LOG_SHORT); key(MK_MENU_SHORT); key(MK_MENU_SHORT); S.scroll = 1U; S.scroll_time = 5U; tick(20000U);
+        CHECK(MUI_ShowsDiag(&U), "%s: Display Scroll does not turn a service page away", mn);
+        tick(MUI_SERVICE_IDLE_MS); CHECK(U.svc == 0U && !MUI_ShowsDiag(&U), "%s: a minute without a key: back to the Run pages", mn);
+        S.scroll = 0U; key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "(monitor again)");
+        D.fault[1] = (uint8_t)MLOG_T_IP_LV; tick(100U); CHECK(U.svc == 0U && U.page == 2U && strstr(row(1), "Y : IP LV") != NULL, "%s: a new fault takes a service page to the status page ('%s')", mn, row(1));
+        D.fault[1] = 0U; tick(100U);
+        /* the Re-tune item: START walks No, R, Y, B, All */
+        ui_reset(mode); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set();
+        tick(1600U); for (i = 0; i < 40 && U.item != 19; i++) { key(MK_MENU_SHORT); tick(1600U); }
+        CROW(1, "Re-tune"); CROW(2, RT[0]);
+        for (i = 1; i <= 5; i++) { key(MK_START); CHECK(crow_ok(2, RT[i % 5]), "%s: START %d: '%s' ('%s')", mn, i, RT[i % 5], row(2)); }
+        key(MK_START); key(MK_START); CROW(2, "Y Phase"); key(MK_MENU_SHORT);
+        CHECK(MUI_Take(&U, MUI_REQ_RETUNE) && MUI_RetuneSel(&U) == 2U, "%s: Re-tune = Y Phase asks for the Y phase (%u)", mn, (unsigned)MUI_RetuneSel(&U));
+        ui_reset(mode); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set(); tick(1600U); for (i = 0; i < 40 && U.item != 19; i++) { key(MK_MENU_SHORT); tick(1600U); }
+        for (i = 0; i < 4; i++) key(MK_START);
+        key(MK_MENU_SHORT); CHECK(MUI_Take(&U, MUI_REQ_RETUNE) && MUI_RetuneSel(&U) == 4U, "%s: 'All, One By One' asks for all three (%u)", mn, (unsigned)MUI_RetuneSel(&U));
+        ui_reset(mode); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set(); tick(1600U); for (i = 0; i < 40 && U.item != 19; i++) { key(MK_MENU_SHORT); tick(1600U); }
+        key(MK_MENU_SHORT); CHECK(!MUI_Take(&U, MUI_REQ_RETUNE), "%s: left on No: no request", mn);
+    }
+    /* Single: Yes / No as before, and the request is the R phase */
+    ui_reset(M_MODE_SINGLE); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set(); tick(1600U); for (i = 0; i < 40 && U.item != 19; i++) { key(MK_MENU_SHORT); tick(1600U); }
+    key(MK_START); CROW(2, "Yes"); key(MK_START); CROW(2, "No"); key(MK_START); key(MK_MENU_SHORT);
+    CHECK(MUI_Take(&U, MUI_REQ_RETUNE) && MUI_RetuneSel(&U) == 1U, "Single: Re-tune Yes asks for the (only) R phase");
+    printf("  three-phase service pages (LOG, MENU: monitor ... slave load cal, back to Run), idle and fault exits, Re-tune R / Y / B / All\n");
+}
 int main(void)
 {
+    t_three_service();
     t_keys();
     t_keys_fuzz();
     t_screens();

@@ -87,6 +87,8 @@ typedef struct
     char         msg[2][MUI_COLS + 1U];            /* the message lines as typed, centred when drawn */
     uint8_t      msg_on;
     uint8_t      return_to_run;       /* after a message, go to Run-Mode                                         */
+    uint8_t      svc;                 /* v0.9.54, Industrial and Domestic: the service page shown (1..9, as Single's page numbers), 0 = the three Run pages */
+    uint8_t      retune_sel;          /* v0.9.54: what the last Re-tune asked for: 1 R, 2 Y, 3 B, 4 all three in turn (Single: always 1) */
 } MUI_t;
 
 void    MUI_Init(MUI_t *u, MSettings_t *live, MLog_t *log, uint32_t now_ms);
@@ -105,6 +107,7 @@ const MDateTime_t *MUI_ClockToSet(const MUI_t *u);                        /* aft
 uint16_t MUI_CalValue(const MUI_t *u);      /* the value typed on the Load Calibration page, tenths of an amp */
 uint8_t MUI_ShowsCal(const MUI_t *u);         /* single-phase, the fourth MENU page: Load Calibration (the UI draws it) */
 uint8_t MUI_ShowsVCal(const MUI_t *u);         /* 1 = the input, 2 = the output Voltage Calibration page (the UI draws them), else 0 */
+uint8_t MUI_RetuneSel(const MUI_t *u);          /* v0.9.54: 1 R, 2 Y, 3 B, 4 R then Y then B (read with MUI_REQ_RETUNE) */
 uint8_t MUI_ShowsProfile(const MUI_t *u);     /* the transformer profile page (the app draws it) */
 uint8_t MUI_ShowsIout(const MUI_t *u);        /* the converter-side current page (the app draws it) */
 uint8_t MUI_ShowsClock(const MUI_t *u);       /* single-phase, the fifth service page (LOG, then MENU x4): the Clock page (the app draws it) */

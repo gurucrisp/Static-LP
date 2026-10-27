@@ -15,7 +15,7 @@ typedef struct
     uint32_t     fps;
     uint32_t     t_tx, t_hello;
     MCtlOut_t    last;                  /* the content of the last $M sent */
-    uint8_t      seq_tx, have_last, hello_n, k_id;
+    uint8_t      seq_tx, have_last, hello_n, k_id;     /* k_id: 1..127 (v0.9.54): the ids 128..255 belong to the application's Re-tune of this phase, so the slave never takes one for a retry of the other */
 } MLink_t;
 
 static MLink_t     s_l[MLINKS_N];
@@ -55,10 +55,13 @@ void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)
     fresh   = (uint8_t)((uint32_t)(now_ms - m->t_last_ms) < MON_LINK_TIMEOUT_MS);
     e_fresh = (uint8_t)((m->e_valid != 0U) && ((uint32_t)(now_ms - m->e_t_ms) < MON_LINK_TIMEOUT_MS));
     s->e_valid = m->e_valid; s->h_valid = m->h_valid; s->clr_echo = m->e_clr;              /* as the R link: what was last heard, to start the clear counter from */
+    s->tune_n = m->t_n; s->tune_step = m->t_step; s->tune_result = m->t_result; s->tune_ticks = m->t_ticks; s->tune_dv_dv = m->t_dv_dv;      /* v0.9.54, its Re-tune: kept while the link is silent (the master's own timeout judges that) */
+    s->prof_tuned = m->h_tuned; s->prof_n = m->h_prof_n; s->prof_knee = m->h_prof_knee; s->prof_cap = m->h_prof_cap; s->prof_kib = m->h_prof_kib; s->prof_kiu = m->h_prof_kiu; s->prof_vref_dv = m->h_prof_vref_dv; s->prof_maxc_dv = m->h_prof_maxc_dv;
     if (fresh == 0U) return;                                                               /* a silent link: no readings, the engine sees a lost link */
     s->have = 1U; s->link_ok = 1U;
     s->vin_dv = m->last.vin_dv; s->vout_dv = m->last.vout_dv;
     s->state = m->last.state; s->fault = (uint8_t)m->last.fault;
+    s->wait_valid = (uint8_t)((m->last.state == 1U) && ((m->last.flags & 0x8000U) != 0U)); s->wait_ctx = (uint8_t)((m->last.flags >> 8) & 0x7FU);
     s->ntc_raw = m->last.ntc_raw; s->ntc_valid = 1U;
     if (m->e_valid != 0U) { s->sq_id = m->e_sq_id; s->sq_delay_us = m->e_sq_delay_us; s->sq_period_us = m->e_sq_period_us; }       /* its last phase sequence round */                                          /* the slave's heat-sink NTC */
     s->in_band = (uint8_t)(e_fresh && ((m->e_flags2 & LINKV2_FLAG_IN_BAND) != 0U));
@@ -93,7 +96,7 @@ int32_t MLinks_BuildSeq(uint8_t i, uint8_t round, char *out, uint32_t cap)
     LinkK_t k;
     if ((i >= MLINKS_N) || (round == 0U)) return 0;
     memset(&k, 0, sizeof k);
-    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 255U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_SEQ; k.num = (int32_t)round;
+    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 127U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_SEQ; k.num = (int32_t)round;
     return LinkV2_BuildK(out, cap, &k);
 }
 
@@ -102,6 +105,6 @@ int32_t MLinks_BuildHello(uint8_t i, char *out, uint32_t cap)
     LinkK_t k;
     if (i >= MLINKS_N) return 0;
     memset(&k, 0, sizeof k);
-    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 255U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
+    s_l[i].k_id = (uint8_t)((s_l[i].k_id % 127U) + 1U); k.id = s_l[i].k_id; k.cmd = LINKCMD_HELLO; k.num = 0; k.letter = '\0'; k.name[0] = '\0';
     return LinkV2_BuildK(out, cap, &k);
 }

@@ -85,6 +85,10 @@ static void make_status(const MApp_t *a, const MAppData_t *d, uint32_t now, char
     o[0] = '\0';
     if ((d->have == 0U) || (MUI_SetModeOpen(&a->ui) != 0U)) return;
     if ((a->seq_wait != 0U) && ((u->st == U_OFF) || (u->st == U_ONDELAY))) { copy(o, "Checking Phase Seq"); return; }      /* Industrial with Phase Sequence on: the sequence is measured before a start */
+    if ((a->settings.mode == (uint8_t)M_MODE_INDUSTRIAL) && (a->settings.phase_seq != 0U) && ((a->phase.state == MPH_REVERSE) || (a->phase.state == MPH_SAME)) && ((u->st == U_OFF) || (u->st == U_ONDELAY)))
+    {   /* v0.9.54: a wrong sequence measured BEFORE the start holds it: say so (it used to show a frozen "Start in 05 s") */
+        copy(o, (a->phase.state == MPH_SAME) ? "Phase Seq Same Ph" : "Phase Seq Reverse"); return;
+    }
     switch (u->st)
     {
     case U_OFF:      copy(o, "Press START"); break;
@@ -164,7 +168,7 @@ static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 #define TS_DONE 3U
 #define TR_LOST 7U      /* our own result code: the $T frames stopped coming */
 
-static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; MUI_Notify(&a->ui, l1, l2, now); }
+static void tune_refuse(MApp_t *a, const char *l1, const char *l2, uint32_t now) { a->tune_state = TS_IDLE; a->tune_all = 0U; MUI_Notify(&a->ui, l1, l2, now); }
 
 /* The phase sequence rounds (v0.9.51), three-phase modes with all three slaves heard: ARM ($K SEQ <round>) on the three links, 20 ms later one SYNC byte on the three links at once, then the three slaves'
  * results come back in their $E frames (sq_id = the round, the time from the SYNC byte to their rising zero-cross, their period). MPhase decides after three identical rounds. */
@@ -260,46 +264,84 @@ static void slcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
     }
 }
 
-static void tune_request(MApp_t *a, const MAppData_t *d, uint32_t now)
+/* v0.9.54: what the slave of phase ph says about its Re-tune (the R slave's fields are the top level of MAppData_t, the Y and B slaves' are in yb[]) */
+typedef struct { uint8_t have, state, fault, wait_valid, wait_ctx, tune_n, tune_step, tune_result; uint16_t tune_ticks; int16_t tune_dv_dv; } TuneSrc_t;
+static void tune_src(const MAppData_t *d, uint8_t ph, TuneSrc_t *t)
 {
+    if ((ph == 1U) || (ph == 2U))
+    {   const MAppSlave_t *s = &d->yb[ph - 1U];
+        t->have = s->have; t->state = s->state; t->fault = s->fault; t->wait_valid = s->wait_valid; t->wait_ctx = s->wait_ctx;
+        t->tune_n = s->tune_n; t->tune_step = s->tune_step; t->tune_result = s->tune_result; t->tune_ticks = s->tune_ticks; t->tune_dv_dv = s->tune_dv_dv; return; }
+    t->have = d->have; t->state = d->state; t->fault = d->fault; t->wait_valid = d->wait_valid; t->wait_ctx = d->wait_ctx;
+    t->tune_n = d->tune_n; t->tune_step = d->tune_step; t->tune_result = d->tune_result; t->tune_ticks = d->tune_ticks; t->tune_dv_dv = d->tune_dv_dv;
+}
+
+/* ph: 0 R, 1 Y, 2 B (Single: always 0). ONE phase at a time: the units are held off while a sweep runs (the engine's setmode) */
+static void tune_request(MApp_t *a, const MAppData_t *d, uint8_t ph, uint32_t now)
+{
+    TuneSrc_t t;
     if (a->tune_state != TS_IDLE) return;
-    if (d->have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
-    if ((a->eout.run[0] != 0U) || ((d->state != 0U) && !((d->state == 3U) && ((d->fault == 18U) || (d->fault == 19U)))))      /* the slave latched "Re-tune Required" (18, 19): that is exactly what a tune is for */
-    { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }
+    if ((ph > 2U) || ((ph != 0U) && (a->settings.mode == (uint8_t)M_MODE_SINGLE))) ph = 0U;
+    tune_src(d, ph, &t); a->tune_ph = ph;
+    if (t.have == 0U) { a->tune_all = 0U; MUI_Notify(&a->ui, "Slave Link Lost", (ph == 1U) ? "Y Phase" : ((ph == 2U) ? "B Phase" : ""), now); return; }
+    if ((a->eout.run[ph] != 0U) || ((t.state != 0U) && !((t.state == 3U) && ((t.fault == 18U) || (t.fault == 19U)))))      /* the slave latched "Re-tune Required" (18, 19): that is exactly what a tune is for */
+    { a->tune_all = 0U; MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }
     a->tune_state = TS_ASK; a->tune_id = MApp_NextKId(a); a->tune_cmd = (uint8_t)MAPP_KCMD_TUNE; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t0 = now; a->tune_t_tx = now;
-    a->tune_seen = d->tune_n; a->tune_step = 0U; a->tune_dv_dv = 0; a->tune_ticks = 0U; a->tune_result = 0U; a->tune_abort_sent = 0U;           /* frames already counted belong to an older sweep */
+    if (ph != 0U)
+    {   /* the Y and B links: ids 128..255 (master_links uses 1..127 for its hello and SEQ), and never the id of the last TUNE on that link (the slave would take it for a retry) */
+        a->tune_id = (uint8_t)(a->tune_id | 0x80U);
+        if (a->tune_id == a->tune_id_yb[ph - 1U]) a->tune_id = (uint8_t)(0x80U | (uint8_t)(a->tune_id + 1U));
+        a->tune_id_yb[ph - 1U] = a->tune_id;
+    }
+    a->tune_seen = t.tune_n; a->tune_step = 0U; a->tune_dv_dv = 0; a->tune_ticks = 0U; a->tune_result = 0U; a->tune_abort_sent = 0U;           /* frames already counted belong to an older sweep */
 }
 
 static void tune_abort(MApp_t *a, uint32_t now)
 {
     if ((a->tune_abort_sent != 0U) || (a->tune_state == TS_IDLE) || (a->tune_state == TS_DONE)) return;
-    a->tune_abort_sent = 1U; a->tune_id = MApp_NextKId(a); a->tune_cmd = (uint8_t)MAPP_KCMD_TABORT; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t_tx = now; a->tune_t0 = now;
+    a->tune_abort_sent = 1U; a->tune_id = MApp_NextKId(a); if (a->tune_ph != 0U) { a->tune_id = (uint8_t)(a->tune_id | 0x80U); if (a->tune_id == a->tune_id_yb[a->tune_ph - 1U]) a->tune_id = (uint8_t)(0x80U | (uint8_t)(a->tune_id + 1U)); a->tune_id_yb[a->tune_ph - 1U] = a->tune_id; } a->tune_cmd = (uint8_t)MAPP_KCMD_TABORT; a->tune_due = 1U; a->tune_tx_n = 0U; a->tune_t_tx = now; a->tune_t0 = now;
 }
 
 static void tune_key(MApp_t *a, uint8_t ev, uint32_t now)
 {
-    if (a->tune_state == TS_DONE) { if (ev != (uint8_t)MK_NONE) a->tune_state = TS_IDLE; return; }                     /* any key dismisses the result */
+    if (a->tune_state == TS_DONE) { if (ev != (uint8_t)MK_NONE) { a->tune_state = TS_IDLE; a->tune_all = 0U; } return; }      /* any key dismisses the result (and ends All, one by one) */
     if (ev == (uint8_t)MK_STOP) tune_abort(a, now);
 }
 
 static void tune_service(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
-    a->tune_sl_state = d->state; a->tune_sl_wv = d->wait_valid; a->tune_sl_wait = (uint8_t)(d->wait_ctx & 0x7FU); a->tune_sl_fault = d->fault;
+    TuneSrc_t t; tune_src(d, a->tune_ph, &t);
+    a->tune_sl_state = t.state; a->tune_sl_wv = t.wait_valid; a->tune_sl_wait = (uint8_t)(t.wait_ctx & 0x7FU); a->tune_sl_fault = t.fault;
     if (a->tune_state == TS_IDLE) return;
-    if (a->tune_state == TS_DONE) { if ((uint32_t)(now - a->tune_t_done) >= MAPP_TUNE_RESULT_MS) a->tune_state = TS_IDLE; return; }
+    if (a->tune_state == TS_DONE)
+    {
+        if ((a->tune_all != 0U) && (a->tune_result == 1U) && (a->tune_ph < 2U))
+        {   /* All, one by one: this phase is done, the next one starts after MAPP_TUNE_NEXT_MS (never two at once) */
+            if ((uint32_t)(now - a->tune_t_done) >= MAPP_TUNE_NEXT_MS) { a->tune_state = TS_IDLE; tune_request(a, d, (uint8_t)(a->tune_ph + 1U), now); }
+            return;
+        }
+        a->tune_all = 0U;
+        if ((uint32_t)(now - a->tune_t_done) >= MAPP_TUNE_RESULT_MS) a->tune_state = TS_IDLE;
+        return;
+    }
     /* a command is repeated with the same id until it is answered (3 sends, 200 ms apart) */
     if ((a->tune_due == 0U) && (a->tune_tx_n > 0U) && (a->tune_tx_n < 3U) && ((uint32_t)(now - a->tune_t_tx) >= MAPP_VCAL_RETRY_MS) && ((a->tune_state == TS_ASK) || (a->tune_abort_sent != 0U))) a->tune_due = 1U;
     if ((a->tune_state == TS_ASK) && ((uint32_t)(now - a->tune_t0) >= MAPP_VCAL_TIMEOUT_MS)) { tune_refuse(a, "No Answer", "From The Slave", now); return; }
     if (a->tune_state == TS_RUN)
     {
-        if (d->tune_n != a->tune_seen)
+        if (t.tune_n != a->tune_seen)
         {   /* a new $T frame */
-            a->tune_seen = d->tune_n; a->tune_t_frame = now;
-            if (d->tune_result == 0U)
+            a->tune_seen = t.tune_n; a->tune_t_frame = now;
+            if (t.tune_result == 0U)
             {   /* a step frame. Step 0 is the slave's HEARTBEAT ("still here"): it only keeps the timeout away, it must NOT send a sweep that is under way back to "Measuring baseline" */
-                if (d->tune_step != 0U) { a->tune_step = d->tune_step; a->tune_ticks = d->tune_ticks; a->tune_dv_dv = d->tune_dv_dv; }
+                if (t.tune_step != 0U) { a->tune_step = t.tune_step; a->tune_ticks = t.tune_ticks; a->tune_dv_dv = t.tune_dv_dv; }
             }
-            else { a->tune_result = d->tune_result; a->tune_step = d->tune_step; a->tune_dv_dv = d->tune_dv_dv; a->tune_state = TS_DONE; a->tune_t_done = now; if (d->tune_result == 1U) { MF_RetuneDone(&a->eng); a->hello_force = 1U; } return; }
+            else
+            {
+                a->tune_result = t.tune_result; a->tune_step = t.tune_step; a->tune_dv_dv = t.tune_dv_dv; a->tune_state = TS_DONE; a->tune_t_done = now;
+                if (t.tune_result == 1U) { MF_RetuneDone(&a->eng, a->tune_ph); if (a->tune_ph == 0U) a->hello_force = 1U; else a->hello_yb[a->tune_ph - 1U] = 1U; }      /* that phase's latch only, and ITS slave is asked for the new profile */
+                return;
+            }
         }
         if ((a->tune_abort_sent != 0U) && ((uint32_t)(now - a->tune_t0) >= 5000UL)) { a->tune_result = 6U; a->tune_state = TS_DONE; a->tune_t_done = now; return; }       /* the abort was never confirmed: say so */
         if ((uint32_t)(now - a->tune_t_frame) >= MAPP_TUNE_FRAME_TIMEOUT_MS) { tune_abort(a, now); a->tune_result = TR_LOST; a->tune_state = TS_DONE; a->tune_t_done = now; }
@@ -340,7 +382,7 @@ static void tune_dv_text(char *o, int16_t dv)
 
 void MApp_TuneScreen(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
 {
-    uint32_t r, c, n; char t[24]; (void)now;
+    uint32_t r, c, n; char t[24]; static const char PH[3] = { 'R', 'Y', 'B' }; const uint8_t three = (uint8_t)(a->settings.mode != (uint8_t)M_MODE_SINGLE); (void)now;
     for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
     if (a->tune_state == TS_DONE)
     {
@@ -392,10 +434,12 @@ void MApp_TuneScreen(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COL
         copy(t, l0); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
         copy(t, l1); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
         copy(t, l2); for (n = 0U; t[n] != '\0'; n++) frame[2][n] = t[n];
-        copy(t, "Press any key"); for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
+        copy(t, ((a->tune_all != 0U) && (a->tune_result == 1U) && (a->tune_ph < 2U)) ? ((a->tune_ph == 0U) ? "Next: Y Phase..." : "Next: B Phase...") : "Press any key"); for (n = 0U; t[n] != '\0'; n++) frame[3][n] = t[n];
+        if (three != 0U) frame[0][19] = PH[a->tune_ph % 3U];                                   /* v0.9.54: which phase */
         return;
     }
-    copy(t, "Transformer Tuning"); for (n = 0U; t[n] != '\0'; n++) frame[0][1U + n] = t[n];
+    copy(t, "Transformer Tuning"); for (n = 0U; t[n] != '\0'; n++) frame[0][(three != 0U) ? n : (1U + n)] = t[n];
+    if (three != 0U) frame[0][19] = PH[a->tune_ph % 3U];
     if ((a->tune_state == TS_ASK) || (a->tune_step == 0U))
     {
         copy(t, (a->tune_state == TS_ASK) ? "Starting..." : "Measuring baseline"); for (n = 0U; t[n] != '\0'; n++) frame[1][n] = t[n];
@@ -582,7 +626,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         }
     }
     if (MUI_Take(&a->ui, MUI_REQ_SLCAL_SAVE)) slcal_request(a, d, now);
-    if (MUI_Take(&a->ui, MUI_REQ_RETUNE) != 0U) tune_request(a, d, now);
+    if (MUI_Take(&a->ui, MUI_REQ_RETUNE) != 0U) { uint8_t sel = MUI_RetuneSel(&a->ui); a->tune_all = (uint8_t)((sel == 4U) && (a->settings.mode != (uint8_t)M_MODE_SINGLE)); tune_request(a, d, (uint8_t)((sel >= 1U) && (sel <= 3U) ? (sel - 1U) : 0U), now); }      /* v0.9.54: R, Y, B, or all three one by one */
     tune_service(a, d, now);
 }
 
@@ -709,7 +753,7 @@ static void vcal_message(MApp_t *a, uint8_t status, int32_t value)
 /* LOG on a Voltage Calibration page */
 static void vcal_request(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
-    uint16_t entered = MUI_CalValue(&a->ui); uint8_t ch = (a->ui.page == 6U) ? 1U : 0U;
+    uint16_t entered = MUI_CalValue(&a->ui); uint8_t ch = ((((a->ui.live->mode == (uint8_t)M_MODE_SINGLE) ? a->ui.page : a->ui.svc)) == 6U) ? 1U : 0U;      /* the output page (v0.9.54: the service pages exist in every mode) */
     if (a->vcal_wait != 0U) { MUI_Notify(&a->ui, "Busy", "Wait For The Answer", now); return; }
     if (d->have == 0U) { MUI_Notify(&a->ui, "Slave Link Lost", "", now); return; }
     if ((a->eout.run[0] != 0U) || (d->state != 0U)) { MUI_Notify(&a->ui, "Stop The Unit", "First", now); return; }          /* never while it regulates: a gain change would make the output jump */
@@ -732,21 +776,28 @@ uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now)
 {
     if ((a->tune_due != 0U) && (a->tune_state != TS_IDLE))
     {   /* a TUNE or TABORT (re)send is due */
-        out->id = a->tune_id; out->cmd = a->tune_cmd; out->num = 0; out->letter = '\0'; a->tune_due = 0U; a->tune_tx_n++; a->tune_t_tx = now; return 1U;
+        out->id = a->tune_id; out->cmd = a->tune_cmd; out->num = 0; out->letter = '\0'; out->ph = a->tune_ph; a->tune_due = 0U; a->tune_tx_n++; a->tune_t_tx = now; return 1U;
     }
     if ((a->vcal_wait == 0U) || (a->vcal_due == 0U)) return 0U;
-    out->id = a->vcal_id; out->cmd = a->vcal_cmd; out->num = a->vcal_num; out->letter = a->vcal_letter;
+    out->id = a->vcal_id; out->cmd = a->vcal_cmd; out->num = a->vcal_num; out->letter = a->vcal_letter; out->ph = 0U;
     a->vcal_due = 0U; a->vcal_tx_n++; a->vcal_t_tx = now;
     return 1U;
 }
 
 void MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value)
 {
-    if ((a->tune_state != TS_IDLE) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }       /* the answer to TUNE or TABORT */
+    if ((a->tune_state != TS_IDLE) && (a->tune_ph == 0U) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }       /* the answer to TUNE or TABORT (of the R phase: a Y or B Re-tune is answered on its own link) */
     if ((a->vcal_wait == 0U) || (id != a->vcal_id)) return;                       /* not the answer to a calibration (a HELLO's, or a late one) */
     a->vcal_wait = 0U; a->vcal_due = 0U;
     vcal_message(a, status, value);
 }
+
+void MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t value)
+{
+    if (ph == 0U) { MApp_OnKResult(a, id, status, value); return; }
+    if ((a->tune_state != TS_IDLE) && (a->tune_ph == ph) && (id == a->tune_id)) tune_on_result(a, status, value, a->t_now);      /* the Y and B links: only the answer to that phase's TUNE or TABORT */
+}
+uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i) { if ((i > 1U) || (a->hello_yb[i] == 0U)) return 0U; a->hello_yb[i] = 0U; return 1U; }
 
 uint8_t MApp_ShowsProfile(const MApp_t *a) { return MUI_ShowsProfile(&a->ui); }
 
@@ -754,9 +805,13 @@ uint8_t MApp_ShowsProfile(const MApp_t *a) { return MUI_ShowsProfile(&a->ui); }
  * the GAIN SCALE for boost and buck (the regulator's integral gain is multiplied by it: below 1 for a transformer with more gain than the reference), and the input voltage and Max Correction it was MADE at (a cap made with a low Max Correction is not applied). */
 void MApp_ProfilePage(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COLS + 1U])
 {
-    const MAppData_t *d = &a->last; uint32_t r, c, n; char t[24]; (void)now;
+    const MAppData_t *dd = &a->last; uint32_t r, c, n; char t[24];
+    struct { uint8_t prof_n, prof_knee; uint16_t prof_cap, prof_kib, prof_kiu, prof_vref_dv, prof_maxc_dv; } pp, *d = &pp;
+    uint8_t ph = (uint8_t)((a->settings.mode == (uint8_t)M_MODE_SINGLE) ? 0U : ((now / 3000U) % 3U));      /* v0.9.54: Industrial and Domestic show R, Y and B in turn, 3 s each */
+    if (ph == 0U) { pp.prof_n = dd->prof_n; pp.prof_knee = dd->prof_knee; pp.prof_cap = dd->prof_cap; pp.prof_kib = dd->prof_kib; pp.prof_kiu = dd->prof_kiu; pp.prof_vref_dv = dd->prof_vref_dv; pp.prof_maxc_dv = dd->prof_maxc_dv; }
+    else { const MAppSlave_t *s = &dd->yb[ph - 1U]; pp.prof_n = s->prof_n; pp.prof_knee = s->prof_knee; pp.prof_cap = s->prof_cap; pp.prof_kib = s->prof_kib; pp.prof_kiu = s->prof_kiu; pp.prof_vref_dv = s->prof_vref_dv; pp.prof_maxc_dv = s->prof_maxc_dv; }
     for (r = 0U; r < MUI_ROWS; r++) { for (c = 0U; c < MUI_COLS; c++) frame[r][c] = ' '; frame[r][MUI_COLS] = '\0'; }
-    copy(t, "Transformer Profile"); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
+    copy(t, (a->settings.mode == (uint8_t)M_MODE_SINGLE) ? "Transformer Profile" : ((ph == 0U) ? "Transformer Prof. R" : ((ph == 1U) ? "Transformer Prof. Y" : "Transformer Prof. B"))); for (n = 0U; t[n] != '\0'; n++) frame[0][n] = t[n];
     if (d->prof_cap != 0U)
     {
         uint32_t cap = (d->prof_cap > 9999U) ? 9999U : d->prof_cap, kb = (d->prof_kib > 9999U) ? 9999U : d->prof_kib, ku = (d->prof_kiu > 9999U) ? 9999U : d->prof_kiu;

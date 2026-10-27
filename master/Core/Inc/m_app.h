@@ -50,6 +50,9 @@ typedef struct
     uint16_t load_da; uint8_t load_ok; /* its load, tenths of an ampere (from its converter current, a later step)                     */
     uint16_t ntc_raw; uint8_t ntc_valid; /* its heat-sink NTC: the 12 bit reading of PA5 / it is fresh (v0.9.49)                         */
     uint16_t sq_id, sq_delay_us, sq_period_us;   /* its last phase sequence round (v0.9.51): the round id (0 = none), delay, period                       */
+    uint8_t  wait_valid, wait_ctx;     /* v0.9.54, for its Re-tune: its start-up wait and what for (as the R slave's)                                         */
+    uint8_t  tune_n, tune_step, tune_result; uint16_t tune_ticks; int16_t tune_dv_dv;   /* its $T frames: counter, step, result, duty, injection             */
+    uint8_t  prof_tuned, prof_n, prof_knee; uint16_t prof_cap, prof_kib, prof_kiu, prof_vref_dv, prof_maxc_dv;   /* its stored profile ($H), for the Transformer Profile page */
 } MAppSlave_t;
 
 typedef struct
@@ -123,6 +126,7 @@ typedef struct
     uint8_t      k_id;                 /* the next $K id, 1..255 */
     uint8_t      tune_state, tune_id, tune_cmd, tune_due, tune_tx_n, tune_seen, tune_step, tune_result, tune_abort_sent;   /* the autotune: see m_app.c */
     uint8_t      tune_sl_state, tune_sl_wv, tune_sl_wait, tune_sl_fault;      /* what the slave is doing (its $S state, the start-up wait, its fault), shown on the tuning screen */
+    uint8_t      tune_ph, tune_all, tune_id_yb[2], hello_yb[2];               /* v0.9.54: the phase being tuned (0 R, 1 Y, 2 B); 1 = then the next phase (All, one by one); the last TUNE id per Y/B link; ask Y / B for a hello */
     int16_t      tune_dv_dv;
     uint16_t     tune_ticks;
     uint32_t     tune_t0, tune_t_tx, tune_t_frame, tune_t_done;
@@ -154,6 +158,7 @@ void    MApp_Init(MApp_t *a, const MFlash_t *fl, uint32_t page_set_a, uint32_t p
 /* call every few ms: raw key levels (1 = pressed) and the slave's latest data; fills the frame to draw */
 void    MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log, const MAppData_t *d, uint32_t now_ms, char frame[MUI_ROWS][MUI_COLS + 1U]);
 uint8_t MApp_SetModeOpen(const MApp_t *a);      /* the output must be off while this is 1 */
+#define MAPP_TUNE_NEXT_MS       4000U   /* v0.9.54, Re-tune All: the result of one phase is shown this long before the next phase starts */
 #define MAPP_SEQ_SYNC_DELAY_MS  20U     /* from the $K SEQ (ARM) to the SYNC byte: the slaves act on the $K in their main loop */
 #define MAPP_SEQ_TIMEOUT_MS     500U    /* from the SYNC byte to the three results ($E every 100 ms) */
 #define MAPP_SEQ_FAST_MS        300U    /* between rounds while the sequence is not known */
@@ -179,7 +184,7 @@ void    MApp_SetInrushRetries(MApp_t *a, uint8_t n);
 uint8_t MApp_HelloDue(MApp_t *a, uint32_t now);
 
 /* ---- voltage calibration over the link ($K CALV / CALO / CALR, answered by $R) ---- */
-typedef struct { uint8_t id, cmd; int32_t num; char letter; } MCalK_t;        /* cmd: MAPP_KCMD_* */
+typedef struct { uint8_t id, cmd; int32_t num; char letter; uint8_t ph; } MCalK_t;        /* cmd: MAPP_KCMD_*; ph: the link it goes on (0 R, 1 Y, 2 B: v0.9.54, a Re-tune of the Y or B phase) */
 #define MAPP_KCMD_CALV  1U            /* num = the true input voltage, tenths of a volt   */
 #define MAPP_KCMD_CALO  2U            /* num = the true output voltage, tenths of a volt  */
 #define MAPP_KCMD_CALR  3U            /* letter = 'V' or 'O': back to nominal             */
@@ -208,7 +213,9 @@ uint8_t MApp_ShowsTune(const MApp_t *a);                                      /*
 void    MApp_TuneScreen(const MApp_t *a, uint32_t now, char out[4][21]);                               /* once at start-up, after the log is open: a restart by the watchdog is logged ("Watchdog Reset") */
 uint8_t MApp_NextKId(MApp_t *a);                                              /* ONE id counter for every $K (a repeated id is a retry for the slave): HELLO and calibration use it */
 uint8_t MApp_TakeKCommand(MApp_t *a, MCalK_t *out, uint32_t now);             /* 1 = a $K frame is due now (first send or a retry): build and send it */
-void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived */
+void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /* a $R arrived on the R link */
+void    MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t value);   /* v0.9.54: a $R on link ph (0 R, 1 Y, 2 B): only the Re-tune of that phase takes it from the Y and B links */
+uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i);                               /* v0.9.54: 1 once when the Y (0) or B (1) slave must be asked for its hello again (a Re-tune stored a new profile) */
 /* a Date or Time saved in Set-Mode: returns 1 once, with the value to write to the real-time clock (seconds are set to 0 by the glue) */
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */

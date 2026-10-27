@@ -48,11 +48,11 @@ void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms)
 void MF_SetMaxRetries(MFaults_t *f, uint8_t n) { f->max_retries = n; }
 uint16_t MF_RestartLeftS(const MFaults_t *f, uint8_t unit) { return (unit < 3U) ? f->u[unit].left_s : 0U; }
 
-void MF_RetuneDone(MFaults_t *f)
+void MF_RetuneDone(MFaults_t *f, uint8_t ph)
 {
     uint8_t u;
     for (u = 0U; u < f->nunits; u++)
-        if ((f->u[u].st == (uint8_t)U_LATCHED) && (f->u[u].fclass == (uint8_t)FC_RETUNE)) { f->u[u].st = (uint8_t)U_OFF; f->u[u].ftype = 0U; f->u[u].fclass = 0U; }
+        if ((f->u[u].st == (uint8_t)U_LATCHED) && (f->u[u].fclass == (uint8_t)FC_RETUNE) && ((ph > 2U) || (f->u[u].fphase == ph) || (f->u[u].fphase > 2U))) { f->u[u].st = (uint8_t)U_OFF; f->u[u].ftype = 0U; f->u[u].fclass = 0U; }      /* only the latch of the phase that was tuned */
 }
 
 typedef struct { uint8_t type, cls, phase, code; } Cause_t;
@@ -309,6 +309,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         if ((f->a_heat[p] != 0U) && (MF_Rank(MLOG_T_HEAT) > MF_Rank(t))) t = MLOG_T_HEAT;
         out->appear[p] = t;
     }
+    if ((f->mode == (uint8_t)M_MODE_INDUSTRIAL) && (s->phase_seq != 0U) && (in->seq_state != 0U) && (MF_Rank(MLOG_T_PHASE_SEQ) > MF_Rank(out->appear[0]))) out->appear[0] = MLOG_T_PHASE_SEQ;      /* v0.9.54: a wrong sequence that holds the start is shown, not only one that trips a running unit */
     { uint8_t best = 0U, bp = 0U, r;
       for (p = 0U; p < 3U; p++) { r = MF_Rank(out->fault[p]); if (r > MF_Rank(best)) { best = out->fault[p]; bp = p; } }
       if (best == 0U) for (p = 0U; p < 3U; p++) { r = MF_Rank(out->appear[p]); if (r > MF_Rank(best)) { best = out->appear[p]; bp = p; } }

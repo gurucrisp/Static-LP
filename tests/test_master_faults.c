@@ -279,7 +279,7 @@ static void t_flip_retune_link(void)
     world(&w, M_MODE_SINGLE, 1U, 40000U); to_on(&w); w.code[0] = 19U; step(&w); step(&w);
     CHECK(w.out.shown == MLOG_T_RETUNE && unit_st(&w, 0) == (int)U_LATCHED, "slave code 19 (not tuned) is Re-tune Required, latched");
     run_ms(&w, 300000U); CHECK(unit_st(&w, 0) == (int)U_LATCHED, "it does not clear by itself");
-    MF_RetuneDone(&w.f); run_ms(&w, 100U);
+    MF_RetuneDone(&w.f, 0U); run_ms(&w, 100U);
     CHECK(unit_st(&w, 0) == (int)U_OFF && w.out.shown == 0U, "after the re-tune it is off and clear: START runs it");
     world(&w, M_MODE_SINGLE, 1U, 40000U); to_on(&w); w.code[0] = 18U; step(&w); step(&w);
     CHECK(w.out.shown == MLOG_T_RETUNE, "code 18 (loop unstable) is Re-tune Required too");

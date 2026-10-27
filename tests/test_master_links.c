@@ -23,11 +23,13 @@ static int e_frame(char *b, uint8_t seq, uint16_t flags2, uint8_t clr)
     LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period;
     return (int)LinkV2_BuildE(b, 96U, &e);
 }
-static int h_frame(char *b)
+static int h_frame_p(char *b, uint16_t cap)
 {
     LinkH_t h; memset(&h, 0, sizeof h); h.proto = 2U; h.fw = 948U; h.vin_min_dv = 1400U; h.vin_max_dv = 2500U; h.rst = LINKV2_RST_POWER_ON; h.tuned = 1U; h.vout_max_dv = 2400U;
+    if (cap != 0U) { h.prof_cap = cap; h.prof_kib = 950U; h.prof_kiu = 1010U; h.prof_vref_dv = 2000U; h.prof_maxc_dv = 600U; h.prof_n = 10U; }
     return (int)LinkV2_BuildH(b, 96U, &h);
 }
+static int h_frame(char *b) { return h_frame_p(b, 0U); }
 /* the receive rings, as the DMA fills them */
 #define RING 256U
 static volatile uint8_t ring[2][RING]; static uint32_t wr[2], rd[2];
@@ -64,6 +66,9 @@ static void t_module(void)
     /* the $H of a board on the Y port reaches the application */
     reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);
     feed(0, 1000U); MLinks_Fill(0, &s0, 1020U); CHECK(s0.h_valid == 1U && MLinks_HelloDue(0, 1020U) == 0U, "its hello is used and not asked again");
+    /* v0.9.54: the link's own $K ids (hello, SEQ) stay 1..127 forever: 128..255 are the Re-tune's */
+    { int q, bad = 0; reset(); for (q = 0; q < 600; q++) { LinkV2Frame_t f; LinkV2Rx_t rx; int32_t m, j, ty = -1; LinkV2Rx_Init(&rx); m = (q & 1) ? MLinks_BuildHello(0, b, sizeof b) : MLinks_BuildSeq(0, 1U, b, sizeof b); for (j = 0; j < m; j++) { int32_t r = LinkV2Rx_Feed(&rx, (uint8_t)b[j], &f); if (r >= 0) ty = r; } if ((ty != (int32_t)LINKV2_K) || (f.u.k.id == 0U) || (f.u.k.id > 127U)) bad++; }
+      CHECK(bad == 0, "600 hello and SEQ frames on a link: every id 1..127 (%d outside)", bad); }
     /* the OVERHEAT flag the slave may set one day reaches the engine */
     reset(); n = s_frame(b, 'Y', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_OVERHEAT, 0U); push(0, b, n); feed(0, 1000U); MLinks_Fill(0, &s0, 1020U);
     CHECK(s0.heat == 1U && s0.in_band == 0U, "the slave's OVERHEAT flag becomes heat = 1");
@@ -143,9 +148,10 @@ typedef struct
     char     letter; uint8_t silent, seq, state, fault, run_seen, clr_seen, h_pending, h_sent, rx_started;
     uint16_t vin, vout, ntc; uint32_t t_s, t_e, t_run, n_m; LinkV2Rx_t rx;
     uint32_t phi_us; uint8_t armed, no_seq; uint16_t arm_round, sq_id, sq_delay, sq_period;      /* the phase sequence: the time of its rising zero-cross within a period, armed by $K SEQ, the last result */
+    uint8_t  last_kid, tuning, tune_fail, n_tune, n_abort, max_aux_id, n_hello_rx; uint16_t prof_cap; uint32_t tune_t0, tune_t_last; uint8_t tune_k;   /* v0.9.54: its Re-tune, as the real slave (a $K with the id of the last one is a retry: not executed) */
 } Sim_t;
 static uint16_t raw_of(double tc) { double k = tc + 273.15, r = 10000.0 * exp(3950.0 * (1.0 / k - 1.0 / 298.15)); return (uint16_t)(4095.0 * r / (r + 1500.0) + 0.5); }
-static Sim_t SM[2];
+static Sim_t SM[2]; static uint32_t T_now_sim;
 static void sim_init(Sim_t *s, char letter) { memset(s, 0, sizeof *s); s->letter = letter; s->vin = 2300U; s->vout = 2300U; s->ntc = 3000U; s->h_pending = 3U; s->phi_us = 0U; LinkV2Rx_Init(&s->rx); }
 static void sim_tick(int link, uint32_t now)
 {
@@ -157,7 +163,13 @@ static void sim_tick(int link, uint32_t now)
     s->vout = (s->state == 2U) ? 2300U : s->vin;
     if ((uint32_t)(now - s->t_s) >= 10U) { s->t_s = now; g_frame_ntc = s->ntc; n = s_frame(b, s->letter, s->seq++, s->vin, s->vout, s->state, s->fault); g_frame_ntc = 3000U; push((uint8_t)link, b, n); }
     if ((uint32_t)(now - s->t_e) >= 100U) { s->t_e = now; g_e_sq_id = s->sq_id; g_e_sq_delay = s->sq_delay; g_e_sq_period = s->sq_period; n = e_frame(b, s->seq, (uint16_t)((s->state == 2U) ? LINKV2_FLAG_IN_BAND : 0U), s->clr_seen); g_e_sq_id = 0U; g_e_sq_delay = 0U; g_e_sq_period = 0U; push((uint8_t)link, b, n); }
-    if (s->h_pending != 0U) { s->h_pending--; n = h_frame(b); push((uint8_t)link, b, n); }
+    if (s->h_pending != 0U) { s->h_pending--; n = h_frame_p(b, s->prof_cap); push((uint8_t)link, b, n); }
+    if ((s->tuning != 0U) && ((uint32_t)(now - s->tune_t_last) >= 500U))
+    {   /* a $T frame every 500 ms: steps 1, 2, 3, then the result */
+        LinkT_t t; memset(&t, 0, sizeof t); s->tune_t_last = now; s->tune_k++; t.step = s->tune_k; t.ticks = (uint16_t)(100U * s->tune_k); t.vin_dv = 2000U; t.dv = (int16_t)(40 * s->tune_k);
+        if (s->tune_k >= 4U) { t.result = (s->tune_fail != 0U) ? LINKV2_T_NO_RESPONSE : LINKV2_T_FINISHED; s->tuning = 0U; if (s->tune_fail == 0U) s->prof_cap = (uint16_t)(1200U + (uint16_t)link); }
+        n = (int)LinkV2_BuildT(b, 96U, &t); push((uint8_t)link, b, n);
+    }
 }
 static void sim_rx(int link, const char *b, int n)       /* the $M and $K frames the master sent to this slave */
 {
@@ -167,7 +179,19 @@ static void sim_rx(int link, const char *b, int n)       /* the $M and $K frames
     {
         int32_t t = LinkV2Rx_Feed(&s->rx, (uint8_t)b[k], &f);
         if (t == (int32_t)LINKV2_M) { s->n_m++; s->run_seen = f.u.m.run; if (f.u.m.clr != s->clr_seen) { s->clr_seen = f.u.m.clr; if (s->state == 3U) { s->fault = 0U; s->state = 0U; } } }
-        else if (t == (int32_t)LINKV2_K) { if (f.u.k.cmd == LINKCMD_HELLO) s->h_pending = 1U; else if ((f.u.k.cmd == LINKCMD_SEQ) && (s->no_seq == 0U)) { s->armed = 1U; s->arm_round = (uint16_t)f.u.k.num; } }
+        else if (t == (int32_t)LINKV2_K)
+        {
+            char rb[64]; int rn; LinkR_t r; uint8_t retry = (uint8_t)((f.u.k.id == s->last_kid) && (s->last_kid != 0U));
+            s->last_kid = f.u.k.id;
+            if ((f.u.k.cmd == LINKCMD_HELLO) || (f.u.k.cmd == LINKCMD_SEQ)) { if (f.u.k.id > s->max_aux_id) s->max_aux_id = f.u.k.id; }
+            if (retry != 0U) { if ((f.u.k.cmd == LINKCMD_TUNE) || (f.u.k.cmd == LINKCMD_TABORT)) { r.id = f.u.k.id; r.status = 0U; r.value = 0; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn); } continue; }      /* answered again, executed once */
+            if (f.u.k.cmd == LINKCMD_HELLO) { s->h_pending = 1U; s->n_hello_rx++; }
+            else if ((f.u.k.cmd == LINKCMD_SEQ) && (s->no_seq == 0U)) { s->armed = 1U; s->arm_round = (uint16_t)f.u.k.num; }
+            else if (f.u.k.cmd == LINKCMD_TUNE) { s->n_tune++; s->tuning = 1U; s->tune_k = 0U; s->tune_t0 = s->tune_t_last = T_now_sim; r.id = f.u.k.id; r.status = 0U; r.value = 0; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn); }
+            else if (f.u.k.cmd == LINKCMD_TABORT)
+            {   LinkT_t tt; s->n_abort++; r.id = f.u.k.id; r.status = 0U; r.value = 0; rn = (int)LinkV2_BuildR(rb, sizeof rb, &r); push((uint8_t)link, rb, rn);
+                if (s->tuning != 0U) { s->tuning = 0U; memset(&tt, 0, sizeof tt); tt.result = LINKV2_T_BY_MASTER; rn = (int)LinkV2_BuildT(rb, sizeof rb, &tt); push((uint8_t)link, rb, rn); } }
+        }
     }
 }
 /* ---- the mains the three slaves see: a period and each phase's rising zero-cross time. KIND: 0 = R-Y-B (Y lags R by a third, B by two thirds), 1 = R-B-Y, 2 = Y on R's phase ---- */
@@ -202,19 +226,54 @@ static void seq_actions(void)
     }
     else if (act == 2U) { n_sync++; t_sync_ms = T; mains_sync(T); }
 }
+/* v0.9.54: the R slave's Re-tune, as the glue sees it (its $R goes to MApp_OnKResult, its $T frames into D) */
+static uint8_t r_last_kid, r_tuning, r_k, r_fail, r_n_tune, r_n_abort, r_ack_pending, r_ack_id; static uint32_t r_t_last; static int g_max_tuning, g_order[3], g_n_order;
+static void r_k_cmd(const MCalK_t *ck)
+{
+    uint8_t retry = (uint8_t)((ck->id == r_last_kid) && (r_last_kid != 0U)); r_last_kid = ck->id;
+    if ((ck->cmd != MAPP_KCMD_TUNE) && (ck->cmd != MAPP_KCMD_TABORT)) return;
+    r_ack_pending = 1U; r_ack_id = ck->id; if (retry != 0U) return;
+    if (ck->cmd == MAPP_KCMD_TUNE) { r_n_tune++; r_tuning = 1U; r_k = 0U; r_t_last = T; }
+    else { r_n_abort++; if (r_tuning != 0U) { r_tuning = 0U; D.tune_n++; D.tune_step = 0U; D.tune_result = LINKV2_T_BY_MASTER; } }
+}
+static void r_tick(void)
+{
+    if (r_ack_pending != 0U) { r_ack_pending = 0U; MApp_OnKResult(&A, r_ack_id, 0U, 0); }
+    if ((r_tuning != 0U) && ((uint32_t)(T - r_t_last) >= 500U))
+    {   r_t_last = T; r_k++; D.tune_n++; D.tune_step = r_k; D.tune_ticks = (uint16_t)(100U * r_k); D.tune_dv_dv = (int16_t)(40 * r_k); D.tune_result = 0U;
+        if (r_k >= 4U) { D.tune_result = (r_fail != 0U) ? LINKV2_T_NO_RESPONSE : LINKV2_T_FINISHED; r_tuning = 0U; if (r_fail == 0U) D.prof_cap = 1111U; } }
+}
 static void loop(uint32_t ms)
 {
     uint32_t e = T + ms;
     while (T < e)
     {
-        int i; char b[96]; int32_t n;
+        int i; char b[96]; int32_t n; static uint32_t r_seen_yb[2];
+        T_now_sim = T;
         for (i = 0; i < 2; i++) { sim_tick(i, T); feed((uint8_t)i, T); MLinks_Fill((uint8_t)i, &D.yb[i], T); }
+        r_tick();
         MApp_Step(&A, K[0], K[1], K[2], K[3], &D, T, F);
         seq_actions();
+        {   /* the glue: a $K goes on the link of its phase (v0.9.54) */
+            MCalK_t ck; LinkK_t k;
+            while (MApp_TakeKCommand(&A, &ck, T) != 0U)
+            {
+                if (ck.ph == 0U) { r_k_cmd(&ck); continue; }
+                memset(&k, 0, sizeof k); k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : LINKCMD_CALR); k.num = ck.num; k.letter = (ck.cmd == MAPP_KCMD_CALR) ? 'V' : '\0';
+                n = LinkV2_BuildK(b, sizeof b, &k); if ((n > 0) && (ck.ph <= 2U)) sim_rx(ck.ph - 1U, b, (int)n);
+            }
+            for (i = 0; i < 2; i++) { const MasterMon_t *ym = MLinks_Mon((uint8_t)i); if (ym->r_n != r_seen_yb[i]) { r_seen_yb[i] = ym->r_n; MApp_OnKResultPh(&A, (uint8_t)(1 + i), ym->r_id, ym->r_status, ym->r_value); } }
+        }
         for (i = 0; i < 2; i++)
         {
             n = MLinks_BuildM((uint8_t)i, MApp_ControlPh(&A, (uint8_t)(1 + i)), MApp_ControlValidPh(&A, (uint8_t)(1 + i)), T, b, sizeof b); if (n > 0) sim_rx(i, b, (int)n);
-            if (MLinks_HelloDue((uint8_t)i, T) != 0U) { n = MLinks_BuildHello((uint8_t)i, b, sizeof b); if (n > 0) sim_rx(i, b, (int)n); }
+            if ((MApp_TakeYbHello(&A, (uint8_t)i) | MLinks_HelloDue((uint8_t)i, T)) != 0U) { n = MLinks_BuildHello((uint8_t)i, b, sizeof b); if (n > 0) sim_rx(i, b, (int)n); }
+        }
+        {   /* never two stages tuning at once; the order the phases started in */
+            int nt = (int)r_tuning + (int)SM[0].tuning + (int)SM[1].tuning; if (nt > g_max_tuning) g_max_tuning = nt;
+            if ((g_n_order < 3) && ((r_tuning && (g_n_order == 0 || g_order[g_n_order - 1] != 0)) )) g_order[g_n_order++] = 0;
+            if ((g_n_order < 3) && SM[0].tuning && (g_n_order == 0 || g_order[g_n_order - 1] != 1)) g_order[g_n_order++] = 1;
+            if ((g_n_order < 3) && SM[1].tuning && (g_n_order == 0 || g_order[g_n_order - 1] != 2)) g_order[g_n_order++] = 2;
         }
         T += 10U;
     }
@@ -223,6 +282,7 @@ static int g_kind0 = 0, g_phase_seq0 = 0, g_noseq0 = 0, g_lettersR0 = 0;      /*
 static void setup(uint8_t mode)
 {
     memset(fm, 0xFF, sizeof fm); memset(&D, 0, sizeof D); memset(K, 0, sizeof K); T = 0U; reset();
+    r_last_kid = 0U; r_tuning = 0U; r_k = 0U; r_fail = 0U; r_n_tune = 0U; r_n_abort = 0U; r_ack_pending = 0U; g_max_tuning = 0; g_n_order = 0;
     D.have = 1U; D.link_ok = 1U; D.vin_dv = 2300U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.h_valid = 1U; D.in_band = 1U; D.load_ok = 1U;
     MApp_Init(&A, &FL, 0U, MFLASH_PAGE, 2U * MFLASH_PAGE, 3U * MFLASH_PAGE, T);
     A.settings.mode = mode; A.settings.scroll = 0U; A.settings.phase_seq = (uint8_t)g_phase_seq0; MF_Init(&A.eng, &A.settings, T);
@@ -304,6 +364,23 @@ static void t_sequence_loop(void)
     CHECK(MApp_Phase(&A)->state == MPH_REVERSE && o->contactor[0] == 0U && o->run[0] == 0U && MApp_ControlPh(&A, 1)->run == 0U, "Industrial on a reversed sequence: never starts, no slave is told to run");
     g_kind0 = 2; g_phase_seq0 = 1; setup((uint8_t)M_MODE_INDUSTRIAL); loop(20000U); o = MApp_Engine(&A);
     CHECK(MApp_Phase(&A)->state == MPH_SAME && o->contactor[0] == 0U, "Industrial with the Y slave on R's phase: SAME, never starts");
+    /* v0.9.54 (bench: "it shows 5 s and hangs there"): a sequence measured wrong BEFORE the start held the on-delay at "Start in 05 s" with no reason. It must SAY why. */
+    CHECK(strstr(A.status, "Start in") == NULL && strstr(A.status, "Phase Seq Same Ph") != NULL, "SAME before the start: the status row says so ('%s'), no frozen countdown", A.status);
+    CHECK(strstr(F[0], "PH SEQ SAME") != NULL, "and the status page names it on the R row ('%s')", F[0]);
+    CHECK(o->shown == MLOG_T_PHASE_SEQ, "and the fault display shows Phase Sequence (shown %u)", (unsigned)o->shown);
+    g_kind0 = 1; g_phase_seq0 = 1; setup((uint8_t)M_MODE_INDUSTRIAL); loop(20000U); o = MApp_Engine(&A);
+    CHECK(strstr(A.status, "Start in") == NULL && strstr(A.status, "Phase Seq Reverse") != NULL && o->shown == MLOG_T_PHASE_SEQ && strstr(F[0], "PH SEQ REVERSE") != NULL, "REVERSE before the start: 'Phase Seq Reverse' ('%s'), Phase Sequence shown (%u), status page '%s'", A.status, (unsigned)o->shown, F[0]);
+    g_kind = 0; apply_kind(); { uint32_t k, seen_cd = 0U, t_c = 0U; char prev[21] = ""; int counts = 0;
+      for (k = 0U; k < 300U; k++) { loop(100U); if (strstr(A.status, "Start in") != NULL) { seen_cd = 1U; if (strcmp(prev, A.status) != 0) { counts++; memcpy(prev, A.status, sizeof prev); } } if ((t_c == 0U) && (MApp_Engine(&A)->contactor[0] != 0U)) t_c = T; }
+      CHECK(t_c != 0U && seen_cd != 0U && counts >= 3, "the sequence is put right: the countdown RUNS (%d different values) and the unit starts by itself (closed at %u ms)", counts, (unsigned)t_c); }
+    o = MApp_Engine(&A); CHECK(o->shown != MLOG_T_PHASE_SEQ && strstr(A.status, "Phase Seq") == NULL, "and the Phase Sequence message is gone");
+    g_kind0 = 1; g_phase_seq0 = 0; setup((uint8_t)M_MODE_INDUSTRIAL);
+    { uint32_t k; int said = 0, cd = 0; for (k = 0U; k < 80U; k++) { loop(100U); if (strstr(A.status, "Phase Seq") != NULL) said = 1; if (strstr(A.status, "Start in") != NULL) cd = 1; }
+      CHECK(said == 0 && cd == 1 && MApp_Phase(&A)->state == MPH_REVERSE, "Phase Sequence = No, reversed: the start countdown runs and never names the sequence"); }
+    loop(12000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->shown != MLOG_T_PHASE_SEQ, "Phase Sequence = No: a reversed sequence is not reported as a fault and the unit runs");
+    g_kind0 = 1; g_phase_seq0 = 1; setup((uint8_t)M_MODE_DOMESTIC); loop(20000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 1U && o->contactor[1] == 1U && o->contactor[2] == 1U && o->shown != MLOG_T_PHASE_SEQ, "Domestic never checks it, even with the setting on");
     g_kind0 = 2; g_phase_seq0 = 0; setup((uint8_t)M_MODE_INDUSTRIAL); loop(20000U); o = MApp_Engine(&A);
     CHECK(MApp_Phase(&A)->state == MPH_SAME && o->contactor[0] == 1U, "with the Phase Sequence check OFF the same measurement is only shown: it starts");
     /* slaves built without the measurement: the rounds back off, Domestic is not affected, Industrial with the check waits and says so */
@@ -345,9 +422,76 @@ static void t_all_r_boards(void)
     printf("  identical boards: all three say R, the PORT is the identity: Domestic and Industrial run, the sequence and line voltages work, the monitor page names the port's phase\n");
 }
 
+
+/* ======================= v0.9.54: PER-PHASE RE-TUNE (R, Y, B, or all three one by one) over each phase's own link ======================= */
+static void retune(uint8_t sel) { A.ui.retune_sel = sel; A.ui.req |= MUI_REQ_RETUNE; }
+static void stop_all(void) { K[2] = 1U; loop(150U); K[2] = 0U; loop(1500U); D.state = 0U; loop(100U); }
+static int fr_row_has(char fr[4][21], int r, const char *t) { return strstr(fr[r], t) != NULL; }
+static void t_retune_phase(void)
+{
+    char fr[4][21]; const MFOut_t *o; uint32_t k;
+    /* Domestic, Re-tune Y: the TUNE goes on the Y link only, the screen says Y, the units stay off, Y's new profile is fetched */
+    g_kind0 = 0; g_phase_seq0 = 0; g_noseq0 = 0; setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all();
+    { uint8_t h0 = SM[0].n_hello_rx, h1 = SM[1].n_hello_rx;
+    retune(2U); loop(300U); MApp_TuneScreen(&A, T, fr);
+    CHECK(SM[0].n_tune == 1U && SM[1].n_tune == 0U && r_n_tune == 0U, "Re-tune Y: TUNE on the Y link only (R %u, Y %u, B %u)", (unsigned)r_n_tune, (unsigned)SM[0].n_tune, (unsigned)SM[1].n_tune);
+    CHECK((A.tune_id & 0x80U) != 0U && SM[0].max_aux_id < 128U, "its id is 128..255 (%u) and the link's own hello / SEQ ids stay below 128 (%u): the slave never takes one for a retry of the other", (unsigned)A.tune_id, (unsigned)SM[0].max_aux_id);
+    CHECK(MApp_ShowsTune(&A) && fr_row_has(fr, 0, "Transformer Tuning") && fr[0][19] == 'Y', "the tuning screen names the phase: '%s'", fr[0]);
+    loop(1200U); MApp_TuneScreen(&A, T, fr); o = MApp_Engine(&A);
+    CHECK(fr_row_has(fr, 1, "Step") && o->contactor[0] == 0U && o->contactor[1] == 0U && o->contactor[2] == 0U, "its steps arrive over the Y link ('%s') and every unit is held off", fr[1]);
+    loop(1500U); MApp_TuneScreen(&A, T, fr);
+    CHECK(fr_row_has(fr, 0, "Tuning Complete") && fr[0][19] == 'Y' && fr_row_has(fr, 3, "Press any key"), "the result: '%s' / '%s'", fr[0], fr[3]);
+    { loop(600U);
+      CHECK(SM[0].n_hello_rx > h0 && SM[1].n_hello_rx == h1 && D.yb[0].prof_cap == 1200U, "the Y slave (only) is asked for its hello again and its new profile arrives (cap %u)", (unsigned)D.yb[0].prof_cap); } }
+    MApp_ProfilePage(&A, 3000U, fr); CHECK(fr_row_has(fr, 0, "Transformer Prof. Y") && fr_row_has(fr, 1, "Cap 1200"), "the profile page shows Y's profile in its turn ('%s' / '%s')", fr[0], fr[1]);
+    MApp_ProfilePage(&A, 0U, fr); CHECK(fr_row_has(fr, 0, "Transformer Prof. R") && fr_row_has(fr, 1, "No profile"), "and R's in its own ('%s' / '%s')", fr[0], fr[1]);
+    MApp_ProfilePage(&A, 6000U, fr); CHECK(fr_row_has(fr, 0, "Transformer Prof. B"), "and B's ('%s')", fr[0]);
+    /* a second Re-tune of Y whose id would come out the same as the first (the counter wrapped by 128): it must still be executed, not taken for a retry */
+    { uint8_t first = A.tune_id, n0 = SM[0].n_tune; K[0] = 1U; loop(150U); K[0] = 0U; loop(300U);
+      A.k_id = (uint8_t)(first & 0x7FU); retune(2U); loop(300U);
+      CHECK(SM[0].n_tune == (uint8_t)(n0 + 1U) && A.tune_id != first, "a second Y Re-tune with the same id coming up (%u): a different id is used (%u) and the slave executes it (%u tunes)", (unsigned)first, (unsigned)A.tune_id, (unsigned)SM[0].n_tune);
+      loop(3000U); K[0] = 1U; loop(150U); K[0] = 0U; loop(300U); }
+    /* Industrial, Re-tune B */
+    setup((uint8_t)M_MODE_INDUSTRIAL); loop(15000U); stop_all(); retune(3U); loop(4000U); MApp_TuneScreen(&A, T, fr);
+    CHECK(SM[1].n_tune == 1U && SM[0].n_tune == 0U && r_n_tune == 0U && fr_row_has(fr, 0, "Tuning Complete") && fr[0][19] == 'B', "Industrial, Re-tune B: on the B link only, '%s'", fr[0]);
+    /* ALL, ONE BY ONE: R, then Y, then B, never two at once */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); retune(4U);
+    { int seen_next = 0; for (k = 0U; k < 400U; k++) { loop(100U); if (MApp_ShowsTune(&A)) { MApp_TuneScreen(&A, T, fr); if (fr_row_has(fr, 3, "Next: Y Phase")) seen_next |= 1; if (fr_row_has(fr, 3, "Next: B Phase")) seen_next |= 2; } }
+      CHECK(r_n_tune == 1U && SM[0].n_tune == 1U && SM[1].n_tune == 1U, "All: each phase tuned once (R %u, Y %u, B %u)", (unsigned)r_n_tune, (unsigned)SM[0].n_tune, (unsigned)SM[1].n_tune);
+      CHECK(g_max_tuning == 1 && g_n_order == 3 && g_order[0] == 0 && g_order[1] == 1 && g_order[2] == 2, "in the order R, Y, B and NEVER two stages at once (most at once %d)", g_max_tuning);
+      CHECK(seen_next == 3, "between them the screen says what comes next ('Next: Y Phase...', 'Next: B Phase...': %d)", seen_next); }
+    CHECK(D.prof_cap == 1111U && D.yb[0].prof_cap == 1200U && D.yb[1].prof_cap == 1201U && !MApp_ShowsTune(&A), "all three profiles stored and fetched (%u %u %u), the result screen gone by itself", (unsigned)D.prof_cap, (unsigned)D.yb[0].prof_cap, (unsigned)D.yb[1].prof_cap);
+    /* All, Y fails: B is never tuned */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); SM[0].tune_fail = 1U; retune(4U);
+    { int failed_y = 0; for (k = 0U; k < 200U; k++) { loop(100U); if (MApp_ShowsTune(&A)) { MApp_TuneScreen(&A, T, fr); if (fr_row_has(fr, 0, "Tuning Failed") && fr[0][19] == 'Y' && fr_row_has(fr, 3, "Press any key")) failed_y = 1; } }
+      CHECK(r_n_tune == 1U && SM[0].n_tune == 1U && SM[1].n_tune == 0U && failed_y, "All with Y failing: R tuned, Y failed and said so, B NOT started (B %u)", (unsigned)SM[1].n_tune); }
+    /* All, the result of R dismissed by a key: the chain ends */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); retune(4U); loop(2600U); K[0] = 1U; loop(150U); K[0] = 0U; loop(10000U);
+    CHECK(r_n_tune == 1U && SM[0].n_tune == 0U, "All: a key on R's result ends it there (Y %u)", (unsigned)SM[0].n_tune);
+    /* STOP during the Y sweep: TABORT on the Y link */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); retune(2U); loop(1200U); K[2] = 1U; loop(150U); K[2] = 0U; loop(500U); MApp_TuneScreen(&A, T, fr);
+    CHECK(SM[0].n_abort == 1U && r_n_abort == 0U && fr_row_has(fr, 0, "Tuning Stopped") && fr[0][19] == 'Y', "STOP during Y's sweep: TABORT on the Y link (%u), '%s'", (unsigned)SM[0].n_abort, fr[0]);
+    /* an answer on the wrong link never starts a phase's sweep */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); retune(1U); loop(10U);
+    CHECK(A.tune_state == 1U, "(R asked)"); MApp_OnKResultPh(&A, 1U, A.tune_id, 0U, 0); MApp_OnKResultPh(&A, 2U, A.tune_id, 0U, 0); CHECK(A.tune_state == 1U, "R's TUNE answered on the Y or B link: ignored");
+    MApp_OnKResultPh(&A, 0U, A.tune_id, 0U, 0); CHECK(A.tune_state == 2U, "answered on the R link: it runs");
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all(); SM[0].silent = 1U; loop(1000U); retune(2U); loop(10U);
+    CHECK(A.tune_state == 0U && SM[0].n_tune == 0U, "Re-tune Y with the Y link silent: refused ('Slave Link Lost'), nothing sent"); SM[0].silent = 0U;
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); stop_all();
+    retune(2U); loop(10U); { uint8_t id = A.tune_id; CHECK(A.tune_state == 1U && (id & 0x80U) != 0U, "(Y asked)"); MApp_OnKResult(&A, id, 0U, 0); CHECK(A.tune_state == 1U, "Y's TUNE answered on the R link: ignored"); }
+    /* the Re-tune latch: only the tuned phase's is cleared */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); SM[0].fault = 18U; SM[0].state = 3U; SM[1].fault = 18U; SM[1].state = 3U; loop(3000U);
+    CHECK(A.eng.u[1].st == (uint8_t)U_LATCHED && A.eng.u[2].st == (uint8_t)U_LATCHED, "Y and B latch 'Re-tune Required' (%u %u)", (unsigned)A.eng.u[1].st, (unsigned)A.eng.u[2].st);
+    retune(3U); loop(4000U);
+    CHECK(SM[1].n_tune == 1U && A.eng.u[2].st != (uint8_t)U_LATCHED && A.eng.u[1].st == (uint8_t)U_LATCHED, "Re-tune B from its latch: B's latch is cleared, Y's stays (%u %u)", (unsigned)A.eng.u[1].st, (unsigned)A.eng.u[2].st);
+    /* Single: the choice is always R */
+    setup((uint8_t)M_MODE_SINGLE); loop(8000U); stop_all(); retune(2U); loop(300U);
+    CHECK(r_n_tune == 1U && SM[0].n_tune == 0U, "Single: a Re-tune always goes to R (R %u, Y %u)", (unsigned)r_n_tune, (unsigned)SM[0].n_tune);
+    printf("  per-phase Re-tune: each phase on its own link, ids apart, screens name the phase, All = R then Y then B never together, a failure or a key ends it, STOP aborts the right one, latches per phase, profiles per phase\n");
+}
 int main(void)
 {
-    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards();
+    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards(); t_retune_phase();
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
     return g_fail ? 1 : 0;
 }

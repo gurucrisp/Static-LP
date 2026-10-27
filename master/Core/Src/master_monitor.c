@@ -727,7 +727,7 @@ void MasterApp_Run(void)
                     char bb[LINKV2_MAX_LEN + 8U]; int32_t nn;
                     nn = MLinks_BuildM(yb, MApp_ControlPh(&app, (uint8_t)(1U + yb)), MApp_ControlValidPh(&app, (uint8_t)(1U + yb)), now, bb, sizeof bb);
                     if (nn > 0) (void)HAL_UART_Transmit(s_uart_yb[yb], (uint8_t *)bb, (uint16_t)nn, 5U);
-                    if (MLinks_HelloDue(yb, now) != 0U)
+                    if ((MApp_TakeYbHello(&app, yb) | MLinks_HelloDue(yb, now)) != 0U)                     /* also after a Re-tune of this phase stored a new profile (v0.9.54) */
                     {
                         nn = MLinks_BuildHello(yb, bb, sizeof bb);
                         if (nn > 0) (void)HAL_UART_Transmit(s_uart_yb[yb], (uint8_t *)bb, (uint16_t)nn, 5U);
@@ -749,9 +749,18 @@ void MasterApp_Run(void)
                     LinkK_t k; char b[LINKV2_MAX_LEN + 8U]; int32_t n;
                     k.id = ck.id; k.cmd = (ck.cmd == MAPP_KCMD_CALV) ? LINKCMD_CALV : ((ck.cmd == MAPP_KCMD_CALO) ? LINKCMD_CALO : ((ck.cmd == MAPP_KCMD_TUNE) ? LINKCMD_TUNE : ((ck.cmd == MAPP_KCMD_TABORT) ? LINKCMD_TABORT : LINKCMD_CALR))); k.num = ck.num; k.letter = ck.letter; k.name[0] = '\0';
                     n = LinkV2_BuildK(b, sizeof b, &k);
+#if (MASTER_YB_LINKS == 1)
+                    if ((n > 0) && (ck.ph != 0U) && (ck.ph <= MLINKS_N)) (void)HAL_UART_Transmit(s_uart_yb[ck.ph - 1U], (uint8_t *)b, (uint16_t)n, 5U);      /* v0.9.54: a Re-tune of the Y or B phase goes on its own link */
+                    else
+#endif
                     if (n > 0) (void)HAL_UART_Transmit(&huart1, (uint8_t *)b, (uint16_t)n, 5U);
                 }
                 if (g_mon.r_n != r_seen) { r_seen = g_mon.r_n; MApp_OnKResult(&app, g_mon.r_id, g_mon.r_status, g_mon.r_value); }
+#if (MASTER_YB_LINKS == 1)
+                {   static uint32_t r_seen_yb[MLINKS_N]; uint8_t yb2;
+                    for (yb2 = 0U; yb2 < MLINKS_N; yb2++) { const MasterMon_t *ym = MLinks_Mon(yb2); if (ym->r_n != r_seen_yb[yb2]) { r_seen_yb[yb2] = ym->r_n; MApp_OnKResultPh(&app, (uint8_t)(1U + yb2), ym->r_id, ym->r_status, ym->r_value); } }
+                }
+#endif
             }
             {   const MFOut_t *eo = MApp_Engine(&app);
 #if (MASTER_DRIVE_CONTACTORS == 1)

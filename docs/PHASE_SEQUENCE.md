@@ -15,7 +15,7 @@ Rounds: every 300 ms until the sequence is known (about 1.5 s after power-up), t
 The ARM frame is checksummed, so a noise byte is never taken for a SYNC (a SYNC is only accepted for 100 ms after an ARM). Common delays (the SYNC byte's reception, each board's zero-cross circuit) cancel in the differences; what is left is a few tens of microseconds, about 1 degree.
 
 ## What you see
-* **Industrial, Phase Sequence = Yes:** until the first measurement the status row says `Checking Phase Seq` and the unit does not start (a unit that is already running is never touched by "not known yet"). Then it starts, or stays off on REVERSE / SAME.
+* **Industrial, Phase Sequence = Yes:** until the first measurement the status row says `Checking Phase Seq` and the unit does not start (a unit that is already running is never touched by "not known yet"). Then it starts, or stays off on REVERSE / SAME. **v0.9.54:** a REVERSE or SAME measured BEFORE the start is shown: `Phase Seq Reverse` / `Phase Seq Same Ph` on the status row, `R : PH SEQ REVERSE` / `PH SEQ SAME` on the status page, "Phase Sequence" as the fault shown (before, the start delay was held and the screen stayed at `Start in 05 s` with no reason). When the sequence is right again the countdown runs and the unit starts by itself.
 * **The second Run page:** `R-Y :  398 V`, `Y-B :  398 V`, `B-R :  398 V` for three 230 V phases. Dashes mean the angles are not known: a slave is missing or the measurement failed. **This page is the quickest bench check that the measurement works.**
 * Build switch: `SLAVE_SEQ_SYNC` (slave_features.h), on by default wherever a master runs the slave over link v2; 0 = the slave answers `$K SEQ` with UNKNOWN_CMD and the master sees no result.
 

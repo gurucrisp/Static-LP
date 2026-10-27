@@ -110,7 +110,7 @@ void MF_Init(MFaults_t *f, const MSettings_t *s, uint32_t now_ms);
 void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now_ms, MFOut_t *out);
 uint16_t MF_RestartLeftS(const MFaults_t *f, uint8_t unit);      /* seconds until the next automatic restart attempt of this unit (inrush / power stage / overheat), 0 = none */
 void MF_SetMaxRetries(MFaults_t *f, uint8_t n);   /* survives nothing: MF_Init sets it back to MF_RETRIES */
-void MF_RetuneDone(MFaults_t *f);     /* the user re-tuned: clears the Re-tune latch */
+void MF_RetuneDone(MFaults_t *f, uint8_t ph);     /* phase ph (0 R, 1 Y, 2 B; 3 = every phase) was re-tuned: clears the Re-tune latch it caused (v0.9.54: per phase) */
 uint8_t MF_Rank(uint8_t type);        /* display priority, higher = shown first */
 /* the fault type (MLOG_T_*) a slave fault code stands for; code 9 needs the input voltage and the Set Voltage to decide I/P LV or HV. Used by the engine AND the screens, so they cannot disagree. */
 uint8_t MF_SlaveFaultType(uint8_t code, uint16_t vin_dv, uint16_t set_v);

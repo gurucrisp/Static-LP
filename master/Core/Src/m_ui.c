@@ -222,13 +222,17 @@ void MUI_Notify(MUI_t *u, const char *l1, const char *l2, uint32_t now) { msg_se
 void MUI_SetClock(MUI_t *u, const MDateTime_t *now, uint8_t valid) { u->clk_now = *now; u->clk_now_valid = (uint8_t)(valid != 0U); }
 const MDateTime_t *MUI_ClockToSet(const MUI_t *u) { return &u->clk_set; }
 uint16_t MUI_CalValue(const MUI_t *u) { return u->cal_val; }
-uint8_t MUI_ShowsCal(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U) && (u->msg_on == 0U)); }
-uint8_t MUI_ShowsVCal(const MUI_t *u) { return (uint8_t)(((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->msg_on == 0U) && ((u->page == 5U) || (u->page == 6U))) ? (u->page - 4U) : 0U); }
-uint8_t MUI_ShowsProfile(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 8U) && (u->msg_on == 0U)); }
-uint8_t MUI_ShowsIout(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 7U) && (u->msg_on == 0U)); }
-uint8_t MUI_ShowsClock(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 4U) && (u->msg_on == 0U)); }
-uint8_t MUI_ShowsDiag(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 2U) && (u->msg_on == 0U)); }
-uint8_t MUI_ShowsMonitor(const MUI_t *u) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 1U) && (u->msg_on == 0U)); }
+/* the service page shown (1..9), 0 = a Run page. Single: its page number. v0.9.54: Industrial and Domestic reach the same pages (svc), their three Run pages keep page 0..2 */
+static uint8_t sp(const MUI_t *u) { return (u->live->mode == (uint8_t)M_MODE_SINGLE) ? u->page : u->svc; }
+static uint8_t shows(const MUI_t *u, uint8_t pg) { return (uint8_t)((u->screen == (uint8_t)MUI_RUN) && (sp(u) == pg) && (u->msg_on == 0U)); }
+uint8_t MUI_ShowsCal(const MUI_t *u) { return shows(u, 3U); }
+uint8_t MUI_ShowsVCal(const MUI_t *u) { return (uint8_t)(shows(u, 5U) ? 1U : (shows(u, 6U) ? 2U : 0U)); }
+uint8_t MUI_ShowsProfile(const MUI_t *u) { return shows(u, 8U); }
+uint8_t MUI_ShowsIout(const MUI_t *u) { return shows(u, 7U); }
+uint8_t MUI_ShowsClock(const MUI_t *u) { return shows(u, 4U); }
+uint8_t MUI_ShowsDiag(const MUI_t *u) { return shows(u, 2U); }
+uint8_t MUI_ShowsMonitor(const MUI_t *u) { return shows(u, 1U); }
+uint8_t MUI_RetuneSel(const MUI_t *u) { return u->retune_sel; }
 
 static void leave_set_saved(MUI_t *u, uint32_t now)
 {
@@ -242,13 +246,13 @@ static void leave_set_saved(MUI_t *u, uint32_t now)
     *u->live = u->work; u->req |= MUI_REQ_SAVE;
     if ((u->clk_pending != 0U) && (MC_Valid(&u->clk_work) != 0U)) { u->clk_set = u->clk_work; u->req |= MUI_REQ_SET_CLOCK; }      /* a changed Date or Time goes to the clock now, with the settings */
     u->clk_active = 0U; u->clk_pending = 0U; u->clk_dirty = 0U;
-    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
+    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->svc = 0U; u->t_page = now;
     msg_set(u, "Settings", "Saved", now, 1U);
 }
 static void leave_set_discard(MUI_t *u, uint32_t now, const char *l1, const char *l2)
 {
     u->clk_active = 0U; u->clk_pending = 0U; u->clk_dirty = 0U;                          /* a Date or Time edit is discarded with everything else */
-    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->t_page = now;
+    u->screen = (uint8_t)MUI_RUN; u->page = 0U; u->svc = 0U; u->t_page = now;
     msg_set(u, l1, l2, now, 1U);
 }
 
@@ -272,7 +276,7 @@ static void set_commit(MUI_t *u, uint32_t now)
         if (yes != 0U)
         {
             if (it->id == 2U) { if ((u->features & MUI_FEAT_CALIBRATE) != 0U) { u->req |= MUI_REQ_CALIBRATE; msg_set(u, "Calibration", "Requested", now, 0U); } else msg_set(u, "Calibration", "Not Available", now, 0U); }
-            else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
+            else if (it->id == 19U) { if ((u->features & MUI_FEAT_RETUNE) != 0U) { u->req |= MUI_REQ_RETUNE; u->retune_sel = (u->live->mode == (uint8_t)M_MODE_SINGLE) ? 1U : yes; msg_set(u, "Re-tune", "Requested", now, 0U); } else msg_set(u, "Re-tune", "Not Available", now, 0U); }
             else if (it->id == 20U) { u->req |= MUI_REQ_CLEAR_LOG; msg_set(u, "Fault Log", "Cleared", now, 0U); }
             else if (it->id == 21U) { leave_set_discard(u, now, "Changes", "Discarded"); return; }
             else if (it->id == 22U) { uint16_t kz = u->work.sl_zero_ca, kg = u->work.sl_gain; MS_Defaults(&u->work); u->work.sl_zero_ca = kz; u->work.sl_gain = kg; MS_ApplyLim(&u->work, u->lim); }      /* the load calibrations are not settings: they stay */
@@ -323,9 +327,9 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             if (u->live->password != 0U) { u->screen = (uint8_t)MUI_PW; u->pw[0] = u->pw[1] = u->pw[2] = 0U; u->cursor = 0U; }
             else open_set(u, now);
         }
-        else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 3U)) u->req |= MUI_REQ_CAL_SAVE;
-        else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && (u->page == 9U)) u->req |= MUI_REQ_SLCAL_SAVE;               /* the Slave Load Cal page: LOG saves the zero (00.0) or the gain */
-        else if ((ev == MK_LOG_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 5U) || (u->page == 6U))) u->req |= MUI_REQ_VCAL_SAVE;      /* on the calibration page LOG saves */
+        else if ((ev == MK_LOG_SHORT) && (sp(u) == 3U)) u->req |= MUI_REQ_CAL_SAVE;
+        else if ((ev == MK_LOG_SHORT) && (sp(u) == 9U)) u->req |= MUI_REQ_SLCAL_SAVE;               /* the Slave Load Cal page: LOG saves the zero (00.0) or the gain */
+        else if ((ev == MK_LOG_SHORT) && ((sp(u) == 5U) || (sp(u) == 6U))) u->req |= MUI_REQ_VCAL_SAVE;      /* on the calibration page LOG saves */
         else if (ev == MK_LOG_SHORT) { u->screen = (uint8_t)MUI_LOG; u->log_idx = 0U; }
         else if (ev == MK_MENU_SHORT)
         {
@@ -333,23 +337,24 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             {   /* ONE Run screen: MENU does nothing on it. The service pages (monitor, diagnostics, load calibration) are reached through the log (LOG, then MENU) and MENU cycles them. */
                 if (u->page != 0U) { u->page = (uint8_t)((u->page + 1U) % 10U); if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }     /* the cursor starts on the units of amps */
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
+            else if (u->svc != 0U) { u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
             else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
         }
-        else if ((ev == MK_START) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
+        else if ((ev == MK_START) && ((sp(u) == 3U) || (sp(u) == 5U) || (sp(u) == 6U) || (sp(u) == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
         {
             static const uint16_t PLACE[4] = { 1000U, 100U, 10U, 1U };
             uint16_t p = PLACE[u->cal_cursor & 3U], d = (uint16_t)((u->cal_val / p) % 10U);
             u->cal_val = (uint16_t)((d == 9U) ? (u->cal_val - 9U * p) : (u->cal_val + p));
         }
-        else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 5U) || (u->page == 6U)) && (u->unit_active != 0U)) u->req |= MUI_REQ_STOP;     /* "STOP the unit first": the STOP key does it */
-        else if ((ev == MK_STOP) && (u->live->mode == (uint8_t)M_MODE_SINGLE) && ((u->page == 3U) || (u->page == 5U) || (u->page == 6U) || (u->page == 9U))) u->cal_cursor = (uint8_t)((u->cal_cursor + 1U) & 3U);
+        else if ((ev == MK_STOP) && ((sp(u) == 5U) || (sp(u) == 6U)) && (u->unit_active != 0U)) u->req |= MUI_REQ_STOP;     /* "STOP the unit first": the STOP key does it */
+        else if ((ev == MK_STOP) && ((sp(u) == 3U) || (sp(u) == 5U) || (sp(u) == 6U) || (sp(u) == 9U))) u->cal_cursor = (uint8_t)((u->cal_cursor + 1U) & 3U);
         else if (ev == MK_START) u->req |= MUI_REQ_START;
         else if (ev == MK_STOP) u->req |= MUI_REQ_STOP;
         break;
     case MUI_LOG:
         if (ev == MK_START) { if ((uint16_t)(u->log_idx + 1U) < MLog_Count(u->log)) u->log_idx++; }               /* older */
         else if (ev == MK_STOP) { if (u->log_idx > 0U) u->log_idx--; }                                           /* newer */
-        else if ((ev == MK_MENU_SHORT) && (u->live->mode == (uint8_t)M_MODE_SINGLE)) { u->screen = (uint8_t)MUI_RUN; u->page = 1U; u->t_page = now; }     /* the way to the service pages */
+        else if (ev == MK_MENU_SHORT) { u->screen = (uint8_t)MUI_RUN; if (u->live->mode == (uint8_t)M_MODE_SINGLE) u->page = 1U; else u->svc = 1U; u->t_page = now; }     /* the way to the service pages (v0.9.54: in every mode) */
         else if ((ev == MK_LOG_SHORT) || (ev == MK_MENU_SHORT) || (ev == MK_COMBO)) u->screen = (uint8_t)MUI_RUN;
         break;
     case MUI_PW:
@@ -379,7 +384,8 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
         else if (ev == MK_MENU_SHORT) set_commit(u, now);
         else if (ev == MK_START)
         {
-            if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
+            if ((it->id == 19U) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) u->yn = (uint8_t)((u->yn + 1U) % 5U);     /* v0.9.54: No, R, Y, B, All (one phase at a time) */
+            else if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
             else if (it->kind == (uint8_t)K_MODE) { item_set(&u->work, 1U, (uint16_t)((u->work.mode + 1U) % 3U)); }
             else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN) || (it->kind == (uint8_t)K_LOADSRC)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
             else if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME)) clk_digit_inc(u, it->id);
@@ -397,11 +403,11 @@ static uint8_t blink_on(const MUI_t *u, uint32_t now);
 static uint32_t temp_text(const MUIRun_t *d, uint32_t p, char *o);          /* the heat-sink temperature as short text (below) */
 static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t now)
 {
-    uint8_t p; (void)now;
-    if (u->live->mode == (uint8_t)M_MODE_SINGLE)
-    {
+    uint8_t p, pg = sp(u); (void)now;
+    if ((u->live->mode == (uint8_t)M_MODE_SINGLE) || (pg != 0U))
+    {   /* Single's Run screen, and the service pages of every mode (they show the R slave) */
         uint8_t ok = d->have[0];
-        if (u->page == 9U)
+        if (pg == 9U)
         {   /* SLAVE LOAD CAL (v0.9.45): the converter current the slave measures, and the meter value being typed. With the unit RUNNING and NO load, type 00.0 and press LOG: the peak now is the zero. With a known load, type the meter's value and press LOG: the gain.
              * START edits the digit, STOP moves the cursor, LOG saves, MENU goes on. The conversion is: load = (peak - zero) x gain. */
             char v[8]; uint32_t c; uint16_t pk = (uint16_t)((d->sl_pk_ca + 5U) / 10U), rm = (uint16_t)((d->sl_rms_ca + 5U) / 10U);
@@ -416,22 +422,22 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
             f_put(f, 3U, 0U, (d->sl_valid == 0U) ? "No converter reading" : ((d->sl_run == 0U) ? "Run the unit first" : "LOG=Save  MENU=Next"));
             return;
         }
-        if ((u->page == 3U) || (u->page == 5U) || (u->page == 6U))
+        if ((pg == 3U) || (pg == 5U) || (pg == 6U))
         {   /* LOAD CALIBRATION (page 3) and the two VOLTAGE CALIBRATION pages (5 = input, 6 = output): the reading, and the meter value being typed. START edits the digit, STOP moves the cursor, LOG saves, MENU leaves. */
-            char v[8], un[2]; uint32_t c; uint16_t rd = (u->page == 3U) ? d->load_da[0] : ((u->page == 5U) ? d->vin_raw_dv : d->vout_raw_dv);
-            un[0] = (u->page == 3U) ? 'A' : 'V'; un[1] = '\0';
+            char v[8], un[2]; uint32_t c; uint16_t rd = (pg == 3U) ? d->load_da[0] : ((pg == 5U) ? d->vin_raw_dv : d->vout_raw_dv);
+            un[0] = (pg == 3U) ? 'A' : 'V'; un[1] = '\0';
             if (u->cal_init != 0U) { ((MUI_t *)u)->cal_val = (rd > 9999U) ? 9999U : rd; ((MUI_t *)u)->cal_init = 0U; }
-            f_center(f, 0U, (u->page == 3U) ? "Load Calibration" : ((u->page == 5U) ? "I/P Calibration" : "O/P Calibration"));
-            f_put(f, 1U, 0U, "Reading"); tenths_put(f, 1U, 11U, rd, 6U, (uint8_t)(ok && ((u->page != 3U) || (d->load_ok[0] != 0U)))); f_put(f, 1U, 18U, un);
+            f_center(f, 0U, (pg == 3U) ? "Load Calibration" : ((pg == 5U) ? "I/P Calibration" : "O/P Calibration"));
+            f_put(f, 1U, 0U, "Reading"); tenths_put(f, 1U, 11U, rd, 6U, (uint8_t)(ok && ((pg != 3U) || (d->load_ok[0] != 0U)))); f_put(f, 1U, 18U, un);
             f_put(f, 2U, 0U, "Actual");
             v[0] = (char)('0' + ((u->cal_val / 1000U) % 10U)); v[1] = (char)('0' + ((u->cal_val / 100U) % 10U)); v[2] = (char)('0' + ((u->cal_val / 10U) % 10U)); v[3] = '.'; v[4] = (char)('0' + (u->cal_val % 10U)); v[5] = '\0';
             c = (u->cal_cursor == 3U) ? 4U : u->cal_cursor;                           /* the digit's place in the text: 0 1 2 . 4 */
             if (blink_on(u, now) == 0U) v[c] = '_';
             f_put(f, 2U, 11U, v); f_put(f, 2U, 18U, un);
-            f_put(f, 3U, 0U, ((u->page != 3U) && (d->active != 0U)) ? "Press STOP first" : "LOG=Save  MENU=Next");
+            f_put(f, 3U, 0U, ((pg != 3U) && (d->active != 0U)) ? "Press STOP first" : "LOG=Save  MENU=Next");
             return;
         }
-        if (u->page != 0U) return;                                                  /* the monitor and diagnostics pages: the app draws them */
+        if (pg != 0U) return;                                                  /* the monitor and diagnostics pages: the app draws them */
         f_put(f, 0U, 0U, "O/P Voltage"); int_put(f, 0U, 12U, d->vout_dv[0], 6U, ok); f_put(f, 0U, 19U, "V");
         f_put(f, 1U, 0U, "I/P Voltage"); int_put(f, 1U, 12U, d->vin_dv[0], 6U, ok); f_put(f, 1U, 19U, "V");
         f_put(f, 2U, 0U, "Load"); tenths_put(f, 2U, 5U, d->load_da[0], 5U, (uint8_t)(ok && d->load_ok[0])); f_put(f, 2U, 10U, "A");
@@ -469,9 +475,9 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
         for (p = 0U; p < 3U; p++)
         {
             char c[3] = { N[p], ':', '\0' }; f_put(f, p, 0U, c);
-            int_put(f, p, 3U, d->vout_dv[p], 4U, d->have[p]); f_put(f, p, 7U, "V");
-            tenths_put(f, p, 12U, d->load_da[p], 5U, (uint8_t)(d->have[p] && d->load_ok[p])); f_put(f, p, 17U, "A");
-            { char tt[8]; if (temp_text(d, p, tt) != 0U) f_put(f, p, 8U, tt); }                                    /* the heat sink, in the gap between the voltage and the load: "R:  230V 47C  12.3A" */
+            int_put(f, p, 2U, d->vout_dv[p], 4U, d->have[p]); f_put(f, p, 6U, "V");                               /* v0.9.54: one column left, so a space separates the temperature: "R: 230V 47C   12.3A" */
+            tenths_put(f, p, 13U, d->load_da[p], 5U, (uint8_t)(d->have[p] && d->load_ok[p])); f_put(f, p, 18U, "A");          /* v0.9.54: one column right: a hot "82C!" and a load of 100 A or more never touch */
+            { char tt[8]; if (temp_text(d, p, tt) != 0U) f_put(f, p, 8U, tt); }                                    /* the heat sink, in the gap between the voltage and the load (columns 8 to 11) */
         }
         f_put(f, 3U, 0U, d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"));
     }
@@ -489,6 +495,8 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
             char c[5] = { N[p], ' ', ':', ' ', '\0' }; char s[20]; f_put(f, p, 0U, c);
             if (d->have[p] == 0U && d->fault[p] == 0U) f_put(f, p, 4U, "---");
             else { short_text(s, d->fault[p], d->fcode[p], d->seq_state); f_put(f, p, 4U, s); }
+            { char tt[8]; uint32_t n = temp_text(d, p, tt), l = 0U; if (d->have[p] == 0U && d->fault[p] == 0U) l = 3U; else while (s[l] != '\0') l++;
+              if ((n != 0U) && (4U + l + 1U + n <= MUI_COLS)) f_put_right(f, p, tt); }                                   /* v0.9.54: each phase's heat sink at the right, when the text leaves room */
         }
         f_put(f, 3U, 0U, mode_text(u->live->mode)); f_put_right(f, 3U, d->out_on ? "ON" : "OFF");
     }
@@ -547,6 +555,7 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
     const MItem_t *it = item_of(u->item); char v[24]; uint32_t n = 0U, i;
     f_center(f, 0U, "Set Mode");
     f_center(f, 1U, it->name);
+    if ((it->id == 19U) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { static const char *const RT[5] = { "No", "R Phase", "Y Phase", "B Phase", "All, One By One" }; f_center(f, 2U, RT[u->yn % 5U]); return; }
     if (is_action(it->id)) { const char *y = (u->yn != 0U) ? "Yes" : "No"; for (i = 0U; y[i] != '\0'; i++) v[n++] = y[i]; v[n] = '\0'; f_center(f, 2U, v); return; }
     if (it->kind == (uint8_t)K_MODE) { f_center(f, 2U, mode_text(u->work.mode)); return; }
     if (it->kind == (uint8_t)K_YN) { f_center(f, 2U, (item_get(&u->work, it->id) != 0U) ? "Yes" : "No"); return; }
@@ -592,13 +601,14 @@ void MUI_Tick(MUI_t *u, const MUIRun_t *d, uint32_t now, Frame_t out)
     {
         uint8_t shown = 0U, p;
         for (p = 0U; p < 3U; p++) if (d->fault[p] != 0U && MF_Rank(d->fault[p]) >= MF_Rank(shown)) shown = d->fault[p];
-        if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = 2U; u->t_page = now; }    /* a new fault jumps to the status page */
+        if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = 2U; u->svc = 0U; u->t_page = now; }    /* a new fault jumps to the status page (out of a service page too) */
+        if ((u->svc != 0U) && ((u->live->mode == (uint8_t)M_MODE_SINGLE) || ((uint32_t)(now - u->t_key) >= MUI_SERVICE_IDLE_MS))) u->svc = 0U;      /* a minute without a key: back to the Run pages */
         if (u->live->mode == (uint8_t)M_MODE_SINGLE)
         {   /* a new fault, or a minute without a key, takes a service page back to THE Run screen, where the parameters and the fault are */
             if (u->page != 0U && (((shown != 0U) && (shown != u->prev_shown)) || ((uint32_t)(now - u->t_key) >= MUI_SERVICE_IDLE_MS))) u->page = 0U;
         }
         u->prev_shown = shown;
-        if ((u->live->mode != (uint8_t)M_MODE_SINGLE) && (u->live->scroll != 0U) && ((uint32_t)(now - u->t_page) >= ((uint32_t)u->live->scroll_time * 1000UL)))
+        if ((u->live->mode != (uint8_t)M_MODE_SINGLE) && (u->svc == 0U) && (u->live->scroll != 0U) && ((uint32_t)(now - u->t_page) >= ((uint32_t)u->live->scroll_time * 1000UL)))
         { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
     }
     /* the frame */
