@@ -34,9 +34,20 @@ void MLinks_Feed(uint8_t i, const volatile uint8_t *ring, uint32_t ring_size, ui
     Mon_ProcessBytesCtx(&s_l[i].mon, &s_l[i].lrx, &s_l[i].l2rx, &s_l[i].fps, ring, ring_size, rd, wr, now_ms);
 }
 
-static uint8_t letter_ok(uint8_t i) { return (uint8_t)((s_l[i].mon.have_frame != 0U) && (s_l[i].mon.last.phase == s_phase[i])); }
+/* v0.9.52: the identity of a slave is its PORT: the Y link is the Y slave and the B link is the B slave, whatever letter the board was built with, so the three boards of a unit can run the SAME firmware.
+ * A board that says 'R' (the default) is accepted. Only an explicit letter of ANOTHER phase is refused (a board built as 'B' on the Y cable): that is a wiring mistake. */
+static uint8_t letter_ok(uint8_t i)
+{
+    char c = s_l[i].mon.last.phase;
+    return (uint8_t)((s_l[i].mon.have_frame != 0U) && ((c == s_phase[i]) || (c == 'R')));
+}
 
-uint8_t MLinks_PhaseBad(uint8_t i) { return (uint8_t)((i < MLINKS_N) && (s_l[i].mon.have_frame != 0U) && (s_l[i].mon.last.phase != s_phase[i])); }
+uint8_t MLinks_PhaseBad(uint8_t i) { return (uint8_t)((i < MLINKS_N) && (s_l[i].mon.have_frame != 0U) && (letter_ok(i) == 0U)); }
+void MLinks_DisplayMon(uint8_t i, MasterMon_t *out)
+{
+    *out = s_l[(i < MLINKS_N) ? i : 0U].mon;
+    if (out->last.phase == 'R') out->last.phase = s_phase[(i < MLINKS_N) ? i : 0U];             /* the monitor page names the PORT's phase for a board that says R */
+}
 const MasterMon_t *MLinks_Mon(uint8_t i) { return &s_l[(i < MLINKS_N) ? i : 0U].mon; }
 
 void MLinks_Fill(uint8_t i, MAppSlave_t *s, uint32_t now_ms)

@@ -5,7 +5,7 @@ Static (IGBT buck/boost + triac, no servo motor) voltage stabilizer, single and 
 ## Hardware
 * **Master** `master/`: board DISP SS3S LCD4 M1 V1.1, STM32G070RBT6 (128 KB flash, 16 MHz HSI), 4x20 LCD, 4 keys, 3 contactor outputs PA10/PA11/PA12 (high = closed), CT on ADC ch0.
 * **Slave** `slave/`: CRISP_PIGGYBACK_CIRCUIT, STM32G0B1RET6. Drives the IGBT H-bridge (PWM period 3200 ticks, dead time 128), triacs/relays; ADC 20 kHz scan of AC_IN, AC_OUT, NTC (PA5), I-OUT (converter current, CT2500, burden 68 ohm x3 = 22.67 ohm, clips at +-26.8 A peak). IGBT IKW50N120CS7. Hardware over-current comparators trip at about 108 A peak.
-* **Link** UART 500000 baud, text frames `$S $E $H $T $R $M $K` (docs/LINK_V2.md). One link per slave (no addressing): R = USART1 PC4/PC5, Y = USART4 PC10/PC11, B = USART3 PB2/PB0. Each slave board is built with its own `SLAVE_PHASE_ID` ('R' default, 'Y', 'B') in its `slave_config.h`; the master refuses a link with the wrong letter.
+* **Link** UART 500000 baud, text frames `$S $E $H $T $R $M $K` (docs/LINK_V2.md). One link per slave (no addressing): R = USART1 PC4/PC5, Y = USART4 PC10/PC11, B = USART3 PB2/PB0. The PORT is a slave's identity: all three boards can run the same firmware (a board that says R is accepted on the Y and B ports). An optional `SLAVE_PHASE_ID` letter in a board's `slave_config.h` makes the master refuse it on the wrong port (an explicit letter of another phase).
 
 ## Layout
 `slave/Core/{Src,Inc}`, `master/Core/{Src,Inc}` (CubeIDE projects, sources only), `tests/` (host tests, plus `stubs/`, `hal_check/` master HAL stand-in, `hal_check_slave/`), `tools/`, `configs/` (ready-made `slave_config.h` variants), `docs/`, `CHANGELOG.md` (the full history, newest first), `VERSION`, `MANIFEST.sha256`.
@@ -43,6 +43,6 @@ Docs to read before touching an area: MASTER_UI.md, MASTER_CORE.md, LINK_V2.md, 
 * Inrush retries default 3 (`MASTER_INRUSH_RETRIES`), 0 while commissioning. Factory Reset keeps the load calibration.
 * Per-phase Re-tune: one phase at a time, never three stages at once.
 
-## State (v0.9.51, committed and tagged)
+## State (v0.9.52, committed and tagged)
 Nothing from the autotune onwards, the three-phase work, the NTC or the phase sequence has been proven on the bench. A power stage was destroyed during an early autotune sweep: BEFORE any sweep on any stage the user must lower the hardware over-current trip (about 1.5 to 2 x the largest normal peak, not above about 75 A; reference = I_trip x 22.67 ohm / 2500), check the gate-driver desaturation, and use a current-limited source.
 Open: NTC part number / beta; three-phase bench bring-up (links alive with stages unpowered first, then Domestic, then Industrial); per-phase Re-tune (decision above) and per-phase load calibration (bytes 33 to 47 of the settings record); Y and B temperatures are protected but not displayed; power factor needs the load current waveform into a slave ADC input (the master CT is a plain average, the slave's I-OUT is the converter current): unanswered whether the CT signal is raw AC; the zero-cross reference must be the rising edge on every board.
