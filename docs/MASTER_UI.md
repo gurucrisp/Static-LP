@@ -270,3 +270,11 @@ Set-Mode item **Load Source** (after Overload Current): `Master CT` (default) or
 * **Overload Current default: 25 A** (was 99 A, the build constant `MASTER_RATED_CURRENT_A`). Factory Reset gives 25 A. A record saved earlier keeps its value.
 * **Three-phase calibration pages:** I/P Calibration, O/P Calibration and Slave Load Cal come for R, Y and B in turn (the phase letter in the title; MENU steps the phase, then the next page). Load Calibration (the master CT) stays R only. See SLAVE_LOAD_CAL.md and VOLTAGE_CALIBRATION.md.
 * **Y and B load on the Run page** come from their slave's converter current once their Slave Load Cal is done (`--.-A` until then, and no overload trip on that phase).
+
+## v0.9.57: missing phase, input page, blinking digit
+* **Phase Missing** (Industrial and Domestic): each slave is powered from its own phase, so a phase that goes takes its slave with it. A slave that goes silent while another is heard is a missing phase AT ONCE (after the 0.5 s link timeout); a phase still heard but under 60 V, or under half of the highest other phase, for 0.2 s is missing too. It trips at once (no Volt Cut Delay), holds the start, is logged ("Phase Missing", the phase), and restarts by itself when the phase is back (as the other voltage faults). Industrial: the whole unit; Domestic: that phase only. No imbalance check (your decision).
+* **Industrial, a missing phase or a wrong sequence:** the status page shows only the message, in the middle: `PHASE MISSING` / `Y Phase` (two: `R B Phase`), `PHASE REVERSE` or `SAME PHASE` / `Check R-Y-B Order`. Domestic keeps the three rows (`Y : PH MISSING`).
+* **The Y and B rows of the status page now show their own faults** (they always said OK before: only R's fault reached the screen).
+* **Three-phase Run pages are four:** 1 output (V, temperature, load), 2 **input voltage** (`R I/P :   228 V`), 3 phase-to-phase and frequency, 4 status. Display Scroll and MENU go through the four; a new fault jumps to the status page.
+* **No "Slave Waits" in the three-phase modes** (the R slave's start-up wait showed as `Slave Waits: R`); Single keeps it.
+* **Set-Mode:** the digit being edited blinks IN PLACE (it shows for 0.5 s after a key, then an underscore for 0.5 s); there is no underscore on the line below any more. The same for Date and Time.

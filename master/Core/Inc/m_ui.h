@@ -25,6 +25,10 @@ extern "C" {
 #define MUI_SPLASH_MS     3000UL
 #define MUI_SET_IDLE_MS   30000UL
 #define MUI_MSG_MS        1500UL
+#define MUI_RUN3_PAGES    4U        /* v0.9.57, three-phase Run pages: 0 output (V, temperature, load), 1 input voltage, 2 phase-to-phase and frequency, 3 status */
+#define MUI_PG_INPUT      1U
+#define MUI_PG_LINE       2U
+#define MUI_PG_STATUS     3U
 #define MUI_BLINK_MS      500UL
 
 /* one-shot requests for the app */

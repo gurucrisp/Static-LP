@@ -109,10 +109,13 @@ static const char *row(int r) { static char b[4][22]; int n; strcpy(b[r], F[r]);
 #define ROW(r, txt) CHECK(strcmp(row(r), txt) == 0, "row %d is '%s' (expected '%s')", r, row(r), txt)
 static void enter_set(void) { key(MK_COMBO); tick(100U); }
 /* Set-Mode text is centred: the expected row is the text with (20 - length) / 2 spaces in front */
-static int crow_ok(int r, const char *txt) { char b[24]; int n = (int)strlen(txt), i, c = (20 - n) / 2; for (i = 0; i < c; i++) b[i] = ' '; strcpy(&b[c], txt); return strcmp(row(r), b) == 0; }
+static int crow_ok(int r, const char *txt) { char b[24]; const char *g = row(r); int n = (int)strlen(txt), i, c = (20 - n) / 2; for (i = 0; i < c; i++) b[i] = ' '; strcpy(&b[c], txt);
+    if (strlen(g) != strlen(b)) return 0;
+    for (i = 0; b[i] != '\0'; i++) if ((g[i] != b[i]) && !((r == 2) && (g[i] == '_') && (b[i] >= '0') && (b[i] <= '9'))) return 0;      /* v0.9.57: the digit being edited blinks in place: an underscore stands for it half the time */
+    return 1; }
 #define CROW(r, txt) CHECK(crow_ok(r, txt), "row %d is '%s' (expected '%s' centred)", r, row(r), txt)
-/* the cursor: an underscore on row 3 under digit `idx` of a value `len` characters long that is centred; visible for 0.5 s after a key press */
-#define CUR(len, idx) do { char cu_e[24]; int cu_c = ((20 - (len)) / 2) + (idx), cu_i; for (cu_i = 0; cu_i < cu_c; cu_i++) cu_e[cu_i] = ' '; cu_e[cu_c] = '_'; cu_e[cu_c + 1] = '\0'; CHECK(strcmp(row(3), cu_e) == 0, "cursor row is '%s' (expected '%s')", row(3), cu_e); } while (0)
+/* the cursor (v0.9.57): digit `idx` of a value `len` characters long, centred on row 2, BLINKS IN PLACE: shown for 0.5 s after a key, then an underscore for 0.5 s; row 3 stays empty */
+#define CUR(len, idx) do { int cu_c = ((20 - (len)) / 2) + (idx); char cu_d = F[2][cu_c]; tick(520U); CHECK(F[2][cu_c] == '_' && cu_d != '_' && strchr(F[3], '_') == NULL && strchr(F[2], '_') == &F[2][cu_c], "cursor: the digit at column %d blinks in place (row 2 '%s', row 3 '%s')", cu_c, F[2], F[3]); tick(500U); } while (0)
 /* walk the items with MENU until Set-Mode is left; returns how many were visited, their numbers in ids[] */
 static int walk(uint8_t *ids) { int n = 0; while (MUI_SetModeOpen(&U) && n < 30) { ids[n++] = U.item; key(MK_MENU_SHORT); tick(1600U); } return n; }
 
@@ -158,13 +161,15 @@ static void t_screens(void)
     ui_reset(M_MODE_INDUSTRIAL); S.scroll = 0U; MUI_Tick(&U, &D, T, F); ROW(2, "Industrial"); to_run();
     ROW(0, "R: 230V       12.3A"); ROW(1, "Y: 230V       12.3A"); ROW(2, "B: 230V       12.3A"); ROW(3, "Output OFF");
     key(MK_MENU_SHORT);
-    CHECK(strstr(row(0), "R-Y") != NULL && strstr(row(0), "400") != NULL && strstr(row(3), "Freq") != NULL && strstr(row(3), "50.0") != NULL, "page 2: phase-to-phase and frequency ('%s' / '%s')", row(0), row(3));
+    CHECK(strcmp(row(0), "R I/P :   202 V") == 0 && strcmp(row(1), "Y I/P :   202 V") == 0 && strcmp(row(2), "B I/P :   202 V") == 0 && strcmp(row(3), "Input Voltage") == 0, "v0.9.57, page 2: the input voltages ('%s' / '%s')", row(0), row(3));
+    key(MK_MENU_SHORT);
+    CHECK(strstr(row(0), "R-Y") != NULL && strstr(row(0), "400") != NULL && strstr(row(3), "Freq") != NULL && strstr(row(3), "50.0") != NULL, "page 3: phase-to-phase and frequency ('%s' / '%s')", row(0), row(3));
     D.vll_dv[1] = 0U; tick(100U); CHECK(strstr(row(1), "Y-B") != NULL && strstr(row(1), "400") == NULL && strstr(row(1), "-") != NULL, "a missing phase shows dashes: '%s'", row(1));
     key(MK_MENU_SHORT);
     ROW(0, "R : OK"); ROW(3, "Industrial       OFF");
     key(MK_MENU_SHORT); ROW(0, "R: 230V       12.3A");
     CHECK(1, "the pages wrap");
-    D.have[1] = 0U; key(MK_MENU_SHORT); key(MK_MENU_SHORT); ROW(1, "Y : ---");
+    D.have[1] = 0U; key(MK_MENU_SHORT); CHECK(strstr(row(1), "Y I/P") != NULL && strstr(row(1), "202") == NULL && strstr(row(1), "-") != NULL, "a missing phase: dashes on the input page ('%s')", row(1)); key(MK_MENU_SHORT); key(MK_MENU_SHORT); ROW(1, "Y : ---");
     printf("  screens: splash, single-phase page and every fault text, Industrial pages, a missing phase or link\n");
 }
 
@@ -183,7 +188,10 @@ static void t_clock_items(void)
       CHECK(p18 >= 0 && p23 == p18 + 1 && p24 == p23 + 1 && p19 == p24 + 1 && ids[n - 1] == 22U, "the order is ... Restart Time, Date, Time, Re-tune ... Factory Reset (last)"); }
     /* the items start from the clock and are drawn centred */
     ui_reset(M_MODE_SINGLE); to_run(); with_clock(2026U, 10U, 21U, 14U, 32U, 1U); enter_set(); goto_item(23U);
-    CROW(1, "Date"); CROW(2, "21/10/2026"); key(MK_MENU_SHORT); CROW(1, "Time"); CROW(2, "14:32");
+    CROW(1, "Date"); CROW(2, "21/10/2026"); key(MK_STOP); tick(520U);
+    CHECK(F[2][6] == '_' && strchr(F[3], '_') == NULL, "v0.9.57: the Date digit being edited blinks in place ('%s' / '%s')", F[2], F[3]); tick(500U); CHECK(F[2][6] == '1', "and comes back ('%s')", F[2]);
+    key(MK_STOP); key(MK_STOP); key(MK_STOP); key(MK_STOP); key(MK_STOP); key(MK_STOP); key(MK_STOP);      /* round the eight digits back to the first */
+    key(MK_MENU_SHORT); CROW(1, "Time"); CROW(2, "14:32");
     /* a clock that was never set: the entry starts from a placeholder, 01/01/2026 00:00 */
     ui_reset(M_MODE_SINGLE); to_run(); with_clock(2000U, 1U, 1U, 0U, 0U, 0U); enter_set(); goto_item(23U); CROW(2, "01/01/2026"); key(MK_MENU_SHORT); CROW(2, "00:00");
     /* editing: START adds one to the digit under the cursor, STOP moves the cursor over the digits (the separators are skipped), 9 wraps to 0 */
@@ -340,12 +348,13 @@ static void t_pages(void)
     ui_reset(M_MODE_DOMESTIC); S.scroll = 1U; S.scroll_time = 5U; to_run();
     CHECK(strstr(row(0), "R:") != NULL, "starts on page 1");
     tick(4800U); CHECK(strstr(row(0), "R:") != NULL && strstr(row(0), "R-Y") == NULL, "Scroll Yes: still page 1 before the Scroll Time");
-    tick(400U); CHECK(strstr(row(0), "R-Y") != NULL, "after 5 s it moves on by itself");
+    tick(400U); CHECK(strstr(row(0), "R I/P") != NULL, "after 5 s it moves on by itself: the input voltages");
+    tick(5000U); CHECK(strstr(row(0), "R-Y") != NULL, "after 5 s more: phase to phase");
     tick(5000U); CHECK(strstr(row(0), "R : ") != NULL, "and again after 5 s: the status page");
     key(MK_MENU_SHORT); tick(100U); CHECK(strstr(row(0), "R : ") != NULL, "Scroll Yes: a MENU press does not turn the page (the timer does)");
     /* Scroll No: MENU turns the page, the timer does not */
     ui_reset(M_MODE_DOMESTIC); S.scroll = 0U; to_run(); tick(60000U); CHECK(strstr(row(0), "R:") != NULL && strstr(row(0), "R-Y") == NULL, "Scroll No: it stays on the page for a minute");
-    key(MK_MENU_SHORT); CHECK(strstr(row(0), "R-Y") != NULL, "a MENU press turns it");
+    key(MK_MENU_SHORT); CHECK(strstr(row(0), "R I/P") != NULL, "a MENU press turns it");
     /* a new fault jumps to the status page, once */
     ui_reset(M_MODE_INDUSTRIAL); S.scroll = 0U; to_run(); CHECK(strstr(row(0), "R:") != NULL, "on page 1");
     D.fault[1] = MLOG_T_IP_LV; tick(100U);
@@ -490,7 +499,9 @@ static void t_run_temperature(void)
         {   /* v0.9.54: the status page carries each phase's heat sink at the right, when the fault text leaves room */
             int k; uint8_t sc = S.scroll; S.scroll = 0U; for (k = 0; k < 4 && strstr(row(0), "R : ") == NULL; k++) { key(MK_MENU_SHORT); tick(100U); }
             ROW(0, "R : OK           47C"); ROW(1, "Y : OK          82C!"); ROW(2, "B : OK           ---");
-            D.fault[1] = (uint8_t)MLOG_T_PHASE_SEQ; D.seq_state = 1U; tick(100U); CHECK(strcmp(row(1), "Y : PH SEQ REVERSE") == 0, "a long fault text keeps its row: no temperature ('%s')", row(1));
+            D.fault[1] = (uint8_t)MLOG_T_PHASE_SEQ; D.seq_state = 1U; tick(100U);
+            if (m == 0) CHECK(strcmp(row(1), "Y : PH SEQ REVERSE") == 0, "a long fault text keeps its row: no temperature ('%s')", row(1));
+            else CHECK(row(0)[0] == '\0' && crow_ok(1, "PHASE REVERSE") && crow_ok(2, "Check R-Y-B Order") && row(3)[0] == '\0', "v0.9.57, Industrial: a wrong sequence is said alone, in the middle ('%s' / '%s')", row(1), row(2));
             D.fault[1] = (uint8_t)MLOG_T_IP_LV; D.fault[0] = (uint8_t)MLOG_T_IP_LV; tick(100U); ROW(0, "R : IP LV Appear 47C"); CHECK(strcmp(row(1), "Y : IP LV Appear") == 0, "exactly 20 fits ('47C'), 21 does not ('82C!': '%s')", row(1));
             D.fault[1] = 0U; D.fault[0] = 0U; D.seq_state = 0U; tick(100U);
             for (k = 0; k < 4 && strstr(row(0), "R: ") == NULL; k++) { key(MK_MENU_SHORT); tick(100U); }
@@ -602,12 +613,13 @@ static void t_cursor_and_layout(void)
     for (i = 0; i < 40; i++)
     {   /* 2 seconds in 50 ms steps with no key: the underscore is there for 0.5 s, gone for 0.5 s, and never moves */
         MUI_Tick(&U, &D, T, F); T += 50U;
-        if (strchr(F[3], '_') != NULL) { on++; if ((int)(strchr(F[3], '_') - F[3]) != 7) ok_pos = 0; } else off++;
+        if (F[2][7] == '_') off++; else if (F[2][7] == '2') on++; else ok_pos = 0;                          /* v0.9.57: the first digit of "230 V" blinks in place */
+        if ((strchr(F[3], '_') != NULL) || ((strchr(F[2], '_') != NULL) && (strchr(F[2], '_') != &F[2][7]))) ok_pos = 0;
     }
-    CHECK(on >= 15 && off >= 15 && ok_pos, "the cursor BLINKS: shown %d, hidden %d of 40 samples, always under the first digit (column 7)", on, off);
+    CHECK(on >= 15 && off >= 15 && ok_pos, "the digit BLINKS in place: shown %d, underscore %d of 40 samples, always the first digit (column 7), nothing on row 3", on, off);
     CHECK(strstr(F[3], "^") == NULL, "never a ^");
     (void)t0;
-    key(MK_STOP); CUR(5, 1); tick(520U); CHECK(strchr(F[3], '_') == NULL, "after 0.5 s without a key the cursor is hidden"); key(MK_STOP); CUR(5, 2);
+    key(MK_STOP); CHECK(F[2][8] == '3', "right after a key the digit is shown ('%s')", F[2]); tick(520U); CHECK(F[2][8] == '_', "then it blinks ('%s')", F[2]); key(MK_STOP); CUR(5, 2);
     CHECK(1, "and a key press shows it again at once");
     /* every item: centred, nothing in the last two columns of the first row, the cursor only on numbers */
     ui_reset(M_MODE_INDUSTRIAL); to_run(); enter_set();
@@ -781,7 +793,7 @@ static void t_three_service(void)
         CHECK(MUI_ShowsDiag(&U), "%s: Display Scroll does not turn a service page away", mn);
         tick(MUI_SERVICE_IDLE_MS); CHECK(U.svc == 0U && !MUI_ShowsDiag(&U), "%s: a minute without a key: back to the Run pages", mn);
         S.scroll = 0U; key(MK_LOG_SHORT); key(MK_MENU_SHORT); CHECK(MUI_ShowsMonitor(&U), "(monitor again)");
-        D.fault[1] = (uint8_t)MLOG_T_IP_LV; tick(100U); CHECK(U.svc == 0U && U.page == 2U && strstr(row(1), "Y : IP LV") != NULL, "%s: a new fault takes a service page to the status page ('%s')", mn, row(1));
+        D.fault[1] = (uint8_t)MLOG_T_IP_LV; tick(100U); CHECK(U.svc == 0U && U.page == MUI_PG_STATUS && strstr(row(1), "Y : IP LV") != NULL, "%s: a new fault takes a service page to the status page ('%s')", mn, row(1));
         D.fault[1] = 0U; tick(100U);
         /* the Re-tune item: START walks No, R, Y, B, All */
         ui_reset(mode); MUI_SetFeatures(&U, MUI_FEAT_RETUNE); to_run(); enter_set();
@@ -802,8 +814,24 @@ static void t_three_service(void)
     CHECK(MUI_Take(&U, MUI_REQ_RETUNE) && MUI_RetuneSel(&U) == 1U, "Single: Re-tune Yes asks for the (only) R phase");
     printf("  three-phase service pages (LOG, MENU: monitor ... slave load cal, back to Run), idle and fault exits, Re-tune R / Y / B / All\n");
 }
+
+/* v0.9.57: Industrial, a missing phase on the status page: alone, in the middle; two phases named together; Domestic keeps the rows */
+static void t_missing_screen(void)
+{
+    ui_reset(M_MODE_INDUSTRIAL); S.scroll = 0U; to_run(); { int p; for (p = 0; p < 3; p++) D.have[p] = 1U; }
+    D.fault[2] = (uint8_t)MLOG_T_PHASE_MISS; tick(100U);
+    CHECK(U.page == MUI_PG_STATUS && row(0)[0] == '\0' && crow_ok(1, "PHASE MISSING") && crow_ok(2, "B Phase") && row(3)[0] == '\0', "Industrial, B missing: 'PHASE MISSING' / 'B Phase' alone ('%s' / '%s')", row(1), row(2));
+    D.fault[0] = (uint8_t)MLOG_T_PHASE_MISS; tick(100U); CHECK(crow_ok(2, "R B Phase"), "R and B: 'R B Phase' ('%s')", row(2));
+    D.fault[0] = 0U; D.fault[2] = 0U; tick(100U); CHECK(strstr(row(0), "R : OK") != NULL, "gone: the rows are back ('%s')", row(0));
+    ui_reset(M_MODE_DOMESTIC); S.scroll = 0U; to_run(); { int p; for (p = 0; p < 3; p++) D.have[p] = 1U; }
+    D.fault[1] = (uint8_t)MLOG_T_PHASE_MISS; tick(100U);
+    CHECK(strcmp(row(0), "R : OK") == 0 && strcmp(row(1), "Y : PH MISSING") == 0, "Domestic: the rows stay, 'Y : PH MISSING' ('%s')", row(1));
+    D.fault[1] = 0U; tick(100U);
+    printf("  missing phase screen: Industrial alone in the middle (one or two phases), Domestic on its row\n");
+}
 int main(void)
 {
+    t_missing_screen();
     t_three_service();
     t_keys();
     t_keys_fuzz();

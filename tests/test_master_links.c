@@ -373,10 +373,10 @@ static void t_sequence_loop(void)
     CHECK(MApp_Phase(&A)->state == MPH_SAME && o->contactor[0] == 0U, "Industrial with the Y slave on R's phase: SAME, never starts");
     /* v0.9.54 (bench: "it shows 5 s and hangs there"): a sequence measured wrong BEFORE the start held the on-delay at "Start in 05 s" with no reason. It must SAY why. */
     CHECK(strstr(A.status, "Start in") == NULL && strstr(A.status, "Phase Seq Same Ph") != NULL, "SAME before the start: the status row says so ('%s'), no frozen countdown", A.status);
-    CHECK(strstr(F[0], "PH SEQ SAME") != NULL, "and the status page names it on the R row ('%s')", F[0]);
+    CHECK(strstr(F[1], "SAME PHASE") != NULL && F[0][0] == ' ' && strspn(F[0], " ") == 20U, "v0.9.57: Industrial, the status page says it alone in the middle ('%s')", F[1]);
     CHECK(o->shown == MLOG_T_PHASE_SEQ, "and the fault display shows Phase Sequence (shown %u)", (unsigned)o->shown);
     g_kind0 = 1; g_phase_seq0 = 1; setup((uint8_t)M_MODE_INDUSTRIAL); loop(20000U); o = MApp_Engine(&A);
-    CHECK(strstr(A.status, "Start in") == NULL && strstr(A.status, "Phase Seq Reverse") != NULL && o->shown == MLOG_T_PHASE_SEQ && strstr(F[0], "PH SEQ REVERSE") != NULL, "REVERSE before the start: 'Phase Seq Reverse' ('%s'), Phase Sequence shown (%u), status page '%s'", A.status, (unsigned)o->shown, F[0]);
+    CHECK(strstr(A.status, "Start in") == NULL && strstr(A.status, "Phase Seq Reverse") != NULL && o->shown == MLOG_T_PHASE_SEQ && strstr(F[1], "PHASE REVERSE") != NULL, "REVERSE before the start: 'Phase Seq Reverse' ('%s'), Phase Sequence shown (%u), status page '%s'", A.status, (unsigned)o->shown, F[1]);
     g_kind = 0; apply_kind(); { uint32_t k, seen_cd = 0U, t_c = 0U; char prev[21] = ""; int counts = 0;
       for (k = 0U; k < 300U; k++) { loop(100U); if (strstr(A.status, "Start in") != NULL) { seen_cd = 1U; if (strcmp(prev, A.status) != 0) { counts++; memcpy(prev, A.status, sizeof prev); } } if ((t_c == 0U) && (MApp_Engine(&A)->contactor[0] != 0U)) t_c = T; }
       CHECK(t_c != 0U && seen_cd != 0U && counts >= 3, "the sequence is put right: the countdown RUNS (%d different values) and the unit starts by itself (closed at %u ms)", counts, (unsigned)t_c); }
@@ -543,9 +543,53 @@ static void t_percal(void)
     else CHECK(0, "(the Y calibration should be waiting)");
     printf("  per-phase calibration: Y and B load from their own Slave Load Cal (zero, gain, overload trip of that phase only, no reading without one), I/P and O/P calibration on the chosen phase's link, refusals, answers on the wrong link ignored, Overload Current 25 A\n");
 }
+
+/* ======================= v0.9.57: A MISSING PHASE trips at once; Industrial says it in the middle of the screen; no "Slave Waits" in three phases ======================= */
+static uint32_t until_open(int c, uint32_t max_ms) { uint32_t t0 = T; while ((T - t0) < max_ms) { loop(10U); if (MApp_Engine(&A)->contactor[c] == 0U) return T - t0; } return 999999U; }
+static void t_phase_missing(void)
+{
+    const MFOut_t *o; uint32_t dt;
+    /* Industrial, the Y phase goes (its slave goes silent with it) */
+    g_kind0 = 0; g_phase_seq0 = 0; g_noseq0 = 0; setup((uint8_t)M_MODE_INDUSTRIAL); loop(15000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "(Industrial running)");
+    SM[0].silent = 1U; dt = until_open(0, 5000U); o = MApp_Engine(&A);
+    CHECK(dt <= 700U && o->shown == MLOG_T_PHASE_MISS, "Industrial, Y goes: the unit opens in %u ms (the link timeout, no Volt Cut Delay) and shows Phase Missing (%u)", (unsigned)dt, (unsigned)o->shown);
+    loop(200U); CHECK(strstr(F[1], "PHASE MISSING") != NULL && strstr(F[2], "Y Phase") != NULL && strspn(F[0], " ") == 20U && strspn(F[3], " ") == 20U, "the screen: 'PHASE MISSING' / 'Y Phase' in the middle, nothing else ('%s' / '%s')", F[1], F[2]);
+    { MLogRec_t r; CHECK(MLog_Count(&A.log) >= 1U && MLog_Get(&A.log, 0U, &r) == 0 && r.type == MLOG_T_PHASE_MISS && r.phase == 1U, "logged: Phase Missing, phase Y"); }
+    SM[0].silent = 0U; loop(30000U); o = MApp_Engine(&A); CHECK(o->contactor[0] == 1U && o->shown != MLOG_T_PHASE_MISS, "Y back: it restarts by itself");
+    /* Y still heard but its input collapsed: tripped in about 0.2 s, not after the 5 s Volt Cut Delay */
+    SM[0].vin = 500U; dt = until_open(0, 6000U); o = MApp_Engine(&A);
+    CHECK(dt <= 400U && o->shown == MLOG_T_PHASE_MISS, "Y's input at 50 V: open in %u ms, Phase Missing", (unsigned)dt);
+    SM[0].vin = 2300U; loop(30000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "(back)");
+    SM[0].vin = 1000U; dt = until_open(0, 3000U); CHECK(dt <= 400U && MApp_Engine(&A)->shown == MLOG_T_PHASE_MISS, "Y at 100 V with R and B at 230 V (under half): Phase Missing in %u ms", (unsigned)dt);
+    SM[0].vin = 2300U; loop(30000U);
+    SM[0].vin = 500U; loop(100U); SM[0].vin = 2300U; loop(2000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "a 100 ms dip to 50 V is not a missing phase");
+    SM[0].vin = 1800U; loop(3000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U && MApp_Engine(&A)->shown != MLOG_T_PHASE_MISS, "Y at 180 V (over half): not missing (the I/P limits judge it, after their delay)"); SM[0].vin = 2300U; loop(2000U);
+    /* the B phase missing at power-up: never starts, says so */
+    setup((uint8_t)M_MODE_INDUSTRIAL); SM[1].silent = 1U; loop(15000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 0U && o->run[0] == 0U && o->shown == MLOG_T_PHASE_MISS && strstr(F[1], "PHASE MISSING") != NULL && strstr(F[2], "B Phase") != NULL, "B missing from the start: nothing runs, 'PHASE MISSING' / 'B Phase' ('%s' / '%s')", F[1], F[2]);
+    SM[1].silent = 0U; loop(20000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "B comes: it starts");
+    setup((uint8_t)M_MODE_INDUSTRIAL); SM[1].vin = 1000U; loop(15000U); o = MApp_Engine(&A);
+    CHECK(o->contactor[0] == 0U && o->run[0] == 0U && o->shown == MLOG_T_PHASE_MISS, "B at 100 V from the start (above I/P LV 90 V, under half of R and Y): it does not start, Phase Missing (%u)", (unsigned)o->shown);
+    CHECK(MLog_Count(&A.log) == 0U && SM[0].n_m > 0U && SM[0].run_seen == 0U, "and it never even TRIES (no start-and-trip cycles in the log: %u entries)", (unsigned)MLog_Count(&A.log));
+    /* Domestic: only the missing phase's unit, and its row says it */
+    setup((uint8_t)M_MODE_DOMESTIC); loop(15000U); SM[0].silent = 1U; dt = until_open(1, 3000U); o = MApp_Engine(&A);
+    CHECK(dt <= 700U && o->contactor[0] == 1U && o->contactor[2] == 1U && o->fault[1] == MLOG_T_PHASE_MISS, "Domestic, Y goes: only Y opens (%u ms), R and B run", (unsigned)dt);
+    loop(300U); CHECK(strstr(F[1], "Y : PH MISSING") != NULL, "and the status page's Y row says it ('%s')", F[1]);
+    SM[0].silent = 0U; loop(1500U); CHECK(MApp_Engine(&A)->contactor[1] == 0U && strstr(F[1], "Y : PH MISSING") != NULL, "Y back: during the restart wait its row still names the trip ('%s')", F[1]);
+    loop(30000U); CHECK(MApp_Engine(&A)->contactor[1] == 1U, "Y back: Y restarts");
+    /* the Y and B rows of the status page show their own faults now */
+    SM[1].vin = 3050U; loop(1500U); CHECK(strstr(F[2], "B : IP HV Appear") != NULL, "B's input over the limit: 'B : IP HV Appear' on its row ('%s')", F[2]); SM[1].vin = 2300U;
+    /* Single: never */
+    setup((uint8_t)M_MODE_SINGLE); loop(10000U); SM[0].silent = 1U; SM[1].silent = 1U; loop(3000U); CHECK(MApp_Engine(&A)->contactor[0] == 1U, "Single mode: the Y and B links mean nothing");
+    setup((uint8_t)M_MODE_SINGLE); loop(10000U); D.vin_dv = 1000U; loop(1000U); o = MApp_Engine(&A); CHECK(o->contactor[0] == 1U && o->shown != MLOG_T_PHASE_MISS, "Single, R at 100 V with Y and B links alive at 230 V: no Phase Missing (only the I/P limits, after their delay)"); D.vin_dv = 2300U;
+    /* no "Slave Waits" in the three-phase modes (the R slave's start-up wait showed as 'Slave Waits: R') */
+    setup((uint8_t)M_MODE_DOMESTIC); D.state = 1U; D.wait_valid = 1U; D.wait_ctx = 0x40U; { uint32_t k; int saw = 0; for (k = 0U; k < 100U; k++) { loop(100U); if (strstr(A.status, "Slave Waits") != NULL) saw = 1; } CHECK(saw == 0, "Domestic: never 'Slave Waits'"); }
+    setup((uint8_t)M_MODE_SINGLE); D.wait_valid = 1U; D.wait_ctx = 0x40U; { uint32_t k; int saw = 0; for (k = 0U; k < 100U; k++) { D.state = 1U; loop(100U); if (strstr(A.status, "Slave Waits") != NULL) saw = 1; } CHECK(saw == 1, "Single still says what its slave waits for"); }
+    printf("  missing phase: a silent slave or a collapsed input trips at once (Industrial all, Domestic that phase), the screen says which in the middle, logged, restarts; Y/B rows show their faults; no 'Slave Waits' in three phases\n");
+}
 int main(void)
 {
-    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards(); t_retune_phase(); t_percal();
+    t_module(); t_r_link(); t_loop(); t_sequence_loop(); t_all_r_boards(); t_retune_phase(); t_percal(); t_phase_missing();
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
     return g_fail ? 1 : 0;
 }

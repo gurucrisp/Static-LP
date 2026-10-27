@@ -32,6 +32,9 @@ extern "C" {
 #define MF_HEAT_MAX_TRIPS   3U
 #define MF_RETRIES          3U
 #define MF_HYST_V           5U        /* a voltage fault clears this far back inside its limit */
+#define MF_MISS_DV          600U      /* v0.9.57, three-phase: a phase still heard but below 60 V ...                                     */
+#define MF_MISS_PCT         50U       /* ... or below half of the highest other phase ...                                                  */
+#define MF_MISS_MS          200U      /* ... for this long is MISSING: it trips at once (no Volt Cut Delay). A silent slave is missing at once */
 #define MF_FORGIVE_MS       300000UL  /* the retry count is forgotten after the unit has run this long without tripping (my choice: to confirm) */
 
 typedef struct
@@ -94,6 +97,7 @@ typedef struct
     uint8_t  mode;
     uint8_t  setmode_prev;
     uint8_t  ip_lv[3], ip_hv[3], op_lv[3], op_hv[3];        /* hysteresis memory: 1 = the limit is violated and has not yet cleared */
+    uint8_t  miss[3], miss_raw[3]; uint32_t t_miss[3];      /* v0.9.57: the phase is missing (confirmed) / the condition is there, since t_miss */
     uint32_t t_ip_lv[3], t_ip_hv[3], t_op_lv[3], t_op_hv[3], t_ovl[3], t_heat[3];   /* when the violation began */
     uint8_t  a_ovl[3], a_heat[3];
     uint8_t  hv_fast[3];                   /* the output is more than MF_OP_HV_FAST_V above the O/P HV setting          */

@@ -35,6 +35,7 @@ extern "C" {
 #define MLOG_T_RETUNE 12U
 #define MLOG_T_LINK_LOST 13U
 #define MLOG_T_WDG_RESET 14U    /* the master was restarted by its watchdog (logged at the next start) */
+#define MLOG_T_PHASE_MISS 15U   /* v0.9.57: a phase is missing (three-phase modes): its slave went silent while another is heard, or its input is far below the others */
 
 typedef struct
 {

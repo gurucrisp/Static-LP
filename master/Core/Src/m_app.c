@@ -101,8 +101,8 @@ static void make_status(const MApp_t *a, const MAppData_t *d, uint32_t now, char
     case U_OFF:      copy(o, "Press START"); break;
     case U_ONDELAY:  rem = (age_ms(now, u->t_enter) >= rd) ? 0U : ((rd - age_ms(now, u->t_enter) + 999UL) / 1000UL); copy(o, "Start in 00 s"); put2(&o[9], rem); break;
     case U_STARTING:
-        if ((d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U))
-        {   /* the slave was told to run but is waiting for something: SAY WHAT (letters, see wait_letters) */
+        if ((a->settings.mode == (uint8_t)M_MODE_SINGLE) && (d->wait_valid != 0U) && ((d->wait_ctx & 0x7FU) != 0U))
+        {   /* the slave was told to run but is waiting for something: SAY WHAT (letters, see wait_letters). v0.9.57: Single only (three phases: it only showed R's, and its start-up "R") */
             char w[10]; copy(o, "Slave Waits:"); (void)wait_letters((uint8_t)(d->wait_ctx & 0x7FU), w); { uint32_t i = 0U; while ((w[i] != '\0') && (12U + i < 20U)) { o[12U + i] = w[i]; i++; } o[12U + i] = '\0'; }
         }
         else if (u->inband_run == 0U)
@@ -609,6 +609,14 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     { uint8_t cp = MUI_CalPhase(&a->ui); if (cp != 0U) { const MAppSlave_t *s = &d->yb[cp - 1U]; r.vin_raw_dv = s->have ? s->vin_dv : 0U; r.vout_raw_dv = s->have ? s->vout_dv : 0U; r.active = (uint8_t)((a->eout.run[cp] != 0U) || (s->state != 0U)); } }       /* for the Voltage Calibration pages */
     r.wait_s[0] = (a->eout.fault[0] != 0U) ? MF_RestartLeftS(&a->eng, 0U) : 0U;                                      /* the automatic restart countdown for the status row */
     r.fcode[0] = (a->eout.fault[0] != 0U) ? a->eng.u[0].fcode : (((a->eout.appear[0] == 0U) && (d->have != 0U)) ? d->fault : 0U);      /* the slave code behind the fault shown */
+    if ((d->have == 0U) && (r.fault[0] == 0U) && (a->eout.appear[0] == (uint8_t)MLOG_T_PHASE_MISS)) r.fault[0] = (uint8_t)MLOG_T_PHASE_MISS;      /* v0.9.57: R missing before a start */
+    for (ph = 0U; ph < 2U; ph++)
+    {   /* v0.9.57: the Y and B rows of the status page show THEIR fault (they always said OK): the engine's, else what is violated now, else what their slave reports */
+        const MAppSlave_t *s = &d->yb[ph]; uint8_t q = (uint8_t)(1U + ph), u = (a->settings.mode == (uint8_t)M_MODE_DOMESTIC) ? q : 0U;
+        if (a->eout.fault[q] != 0U) { r.fault[q] = a->eout.fault[q]; r.fcode[q] = a->eng.u[u].fcode; }
+        else if ((a->eout.appear[q] != 0U) && ((s->have != 0U) || (a->eout.appear[q] == (uint8_t)MLOG_T_PHASE_MISS))) r.fault[q] = a->eout.appear[q];
+        else if ((s->have != 0U) && (s->fault != 0U)) { r.fault[q] = MF_SlaveFaultType(s->fault, s->vin_dv, a->settings.set_v); r.fcode[q] = s->fault; }
+    }
     MUI_Tick(&a->ui, &r, now, frame);
 
     if (MUI_Take(&a->ui, MUI_REQ_SAVE))

@@ -12,6 +12,7 @@ uint8_t MF_Rank(uint8_t type)
     case MLOG_T_POWER_STAGE: return 80U;
     case MLOG_T_RETUNE:      return 75U;
     case MLOG_T_HEAT:        return 70U;
+    case MLOG_T_PHASE_MISS:  return 65U;      /* v0.9.57: the cause, above what it brings (overload, low input, a lost link) */
     case MLOG_T_OVERLOAD:    return 60U;
     case MLOG_T_IP_LV: case MLOG_T_IP_HV: return 50U;
     case MLOG_T_PHASE_SEQ: case MLOG_T_MAINS: return 45U;
@@ -118,6 +119,20 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         else if (ph->vin_dv <= (uint16_t)((s->ip_hv - MF_HYST_V) * 10U))  f->ip_hv[p] = 0U;
         if (ph->heat != 0U) { if (f->a_heat[p] == 0U) { f->a_heat[p] = 1U; f->t_heat[p] = now; } } else f->a_heat[p] = 0U;
     }
+    /* ---- v0.9.57: a MISSING phase (Industrial and Domestic). Each slave is powered from its own phase: a phase that goes takes its slave with it, so a slave that is silent
+     *      while another is heard is a missing phase at once (the link timeout has already confirmed it). A phase still heard but under MF_MISS_DV, or under MF_MISS_PCT % of the
+     *      highest other phase, is missing after MF_MISS_MS. It trips at once (no Volt Cut Delay) and holds the start; it restarts as the other voltage faults do. ---- */
+    for (p = 0U; p < 3U; p++)
+    {
+        uint8_t q, others = 0U, raw = 0U; uint16_t vo = 0U;
+        for (q = 0U; q < 3U; q++) if ((q != p) && (in->ph[q].link_ok != 0U)) { others = 1U; if (in->ph[q].vin_dv > vo) vo = in->ph[q].vin_dv; }
+        if ((f->mode == (uint8_t)M_MODE_SINGLE) || (others == 0U)) { f->miss[p] = 0U; f->miss_raw[p] = 0U; continue; }
+        if (in->ph[p].link_ok == 0U) { f->miss[p] = 1U; f->miss_raw[p] = 1U; continue; }
+        raw = (uint8_t)((in->ph[p].vin_dv < MF_MISS_DV) || (((uint32_t)in->ph[p].vin_dv * 100U) < ((uint32_t)vo * MF_MISS_PCT)));
+        if (raw == 0U) { f->miss[p] = 0U; f->miss_raw[p] = 0U; }
+        else if (f->miss_raw[p] == 0U) { f->miss_raw[p] = 1U; f->t_miss[p] = now; }
+        else if (age(now, f->t_miss[p]) >= MF_MISS_MS) f->miss[p] = 1U;
+    }
 
     /* ---- every unit ---- */
     for (u = 0U; u < f->nunits; u++)
@@ -145,10 +160,11 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             const MPhaseIn_t *ph = &in->ph[p];
             if ((mask & (1U << p)) == 0U) continue;
             /* what stops a START */
-            if ((f->ip_lv[p] != 0U) || (f->ip_hv[p] != 0U) || (f->a_heat[p] != 0U) || (ph->link_ok == 0U)) can_start = 0U;
+            if ((f->ip_lv[p] != 0U) || (f->ip_hv[p] != 0U) || (f->a_heat[p] != 0U) || (ph->link_ok == 0U) || (f->miss[p] != 0U)) can_start = 0U;
             if (energised == 0U) continue;
             /* what TRIPS a running unit */
             if (ph->link_ok == 0U) consider(&best, &have, MLOG_T_LINK_LOST, (uint8_t)FC_VOLT, p, 0U);
+            if (f->miss[p] != 0U) consider(&best, &have, MLOG_T_PHASE_MISS, (uint8_t)FC_VOLT, p, 0U);      /* v0.9.57: at once */
             if ((ph->slave_fault != 0U) && (age(now, un->t_enter) >= MF_CLR_SETTLE_MS || un->clr_owed == 0U))
             {   Cause_t c; classify_slave(ph->slave_fault, ph->vin_dv, s->set_v, &c); consider(&best, &have, c.type, c.cls, p, c.code); }
             if (ph->ct_peak != 0U) consider(&best, &have, MLOG_T_INRUSH, (uint8_t)FC_RETRY, p, 0U);
@@ -307,6 +323,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         if ((f->op_hv[p] != 0U) && (MF_Rank(MLOG_T_OP_HV) > MF_Rank(t))) t = MLOG_T_OP_HV;
         if ((f->a_ovl[p] != 0U) && (MF_Rank(MLOG_T_OVERLOAD) > MF_Rank(t))) t = MLOG_T_OVERLOAD;
         if ((f->a_heat[p] != 0U) && (MF_Rank(MLOG_T_HEAT) > MF_Rank(t))) t = MLOG_T_HEAT;
+        if ((f->miss[p] != 0U) && (MF_Rank(MLOG_T_PHASE_MISS) > MF_Rank(t))) t = MLOG_T_PHASE_MISS;
         out->appear[p] = t;
     }
     if ((f->mode == (uint8_t)M_MODE_INDUSTRIAL) && (s->phase_seq != 0U) && (in->seq_state != 0U) && (MF_Rank(MLOG_T_PHASE_SEQ) > MF_Rank(out->appear[0]))) out->appear[0] = MLOG_T_PHASE_SEQ;      /* v0.9.54: a wrong sequence that holds the start is shown, not only one that trips a running unit */

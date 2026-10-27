@@ -69,7 +69,7 @@ static const char *full_text(uint8_t type)
     case MLOG_T_FLIP: return "Transformer Flip";     case MLOG_T_INRUSH: return "Inrush";
     case MLOG_T_PHASE_SEQ: return "Phase Sequence";  case MLOG_T_MAINS: return "Mains Unstable";
     case MLOG_T_POWER_STAGE: return "Power Stage Fault"; case MLOG_T_RETUNE: return "Re-tune Required";
-    case MLOG_T_LINK_LOST: return "Slave Link Lost"; case MLOG_T_WDG_RESET: return "Watchdog Reset"; default: return "";
+    case MLOG_T_LINK_LOST: return "Slave Link Lost"; case MLOG_T_WDG_RESET: return "Watchdog Reset"; case MLOG_T_PHASE_MISS: return "Phase Missing"; default: return "";
     }
 }
 /* the short text after "R : " in three-phase: at most 16 characters */
@@ -84,7 +84,7 @@ static void short_text(char *o, uint8_t type, uint8_t code, uint8_t seq)
     case MLOG_T_FLIP: s = "TRF Flip"; break;        case MLOG_T_INRUSH: s = "INRUSH"; break;
     case MLOG_T_PHASE_SEQ: s = (seq == 2U) ? "PH SEQ SAME" : "PH SEQ REVERSE"; break;
     case MLOG_T_RETUNE: s = "RETUNE REQ"; break;    case MLOG_T_LINK_LOST: s = "LINK LOST"; break;
-    case MLOG_T_WDG_RESET: s = "WDG RESET"; break;
+    case MLOG_T_WDG_RESET: s = "WDG RESET"; break;   case MLOG_T_PHASE_MISS: s = "PH MISSING"; break;
     case MLOG_T_MAINS: case MLOG_T_POWER_STAGE:
     {   uint32_t n = 0U; const char *p = (type == MLOG_T_MAINS) ? "MAINS F" : "PS F"; while (p[n] != '\0') { o[n] = p[n]; n++; }
         o[n++] = (char)('0' + ((code / 10U) % 10U)); o[n++] = (char)('0' + (code % 10U)); o[n] = '\0'; return; }
@@ -341,7 +341,7 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             }  /* the Run screen, the monitor diagnostics, the control diagnostics, the load calibration */
             else if ((u->svc != 0U) && ((u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) && (u->cal_ph < 2U)) { u->cal_ph++; u->cal_init = 1U; u->cal_cursor = 2U; }      /* v0.9.55: the calibration pages for R, then Y, then B */
             else if (u->svc != 0U) { u->cal_ph = 0U; u->svc = (uint8_t)((u->svc + 1U) % 10U); if ((u->svc == 3U) || (u->svc == 5U) || (u->svc == 6U) || (u->svc == 9U)) { u->cal_init = 1U; u->cal_cursor = 2U; } }      /* v0.9.54: the service pages, as in Single; after the last, back to the Run pages */
-            else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
+            else if (u->live->scroll == 0U) { u->page = (uint8_t)((u->page + 1U) % MUI_RUN3_PAGES); u->t_page = now; }
         }
         else if ((ev == MK_START) && ((sp(u) == 3U) || (sp(u) == 5U) || (sp(u) == 6U) || (sp(u) == 9U)))      /* on the calibration page START edits the digit and STOP moves the cursor: they never start or stop the unit */
         {
@@ -487,7 +487,13 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
         }
         f_put(f, 3U, 0U, d->out_on ? "Output ON" : (((d->status != 0) && (d->status[0] != '\0')) ? d->status : "Output OFF"));
     }
-    else if (u->page == 1U)
+    else if (u->page == MUI_PG_INPUT)
+    {   /* v0.9.57: the input voltage of each phase */
+        static const char N[3] = { 'R', 'Y', 'B' };
+        for (p = 0U; p < 3U; p++) { char c[8] = { N[p], ' ', 'I', '/', 'P', ' ', ':', '\0' }; f_put(f, p, 0U, c); int_put(f, p, 8U, d->vin_dv[p], 5U, d->have[p]); f_put(f, p, 14U, "V"); }
+        f_put(f, 3U, 0U, "Input Voltage");
+    }
+    else if (u->page == MUI_PG_LINE)
     {   /* phase-to-phase and frequency */
         static const char *L[3] = { "R-Y", "Y-B", "B-R" };
         for (p = 0U; p < 3U; p++) { f_put(f, p, 0U, L[p]); f_put(f, p, 4U, ":"); int_put(f, p, 6U, d->vll_dv[p], 5U, (uint8_t)(d->vll_dv[p] != 0U)); f_put(f, p, 12U, "V"); }
@@ -496,6 +502,13 @@ static void render_run(const MUI_t *u, const MUIRun_t *d, Frame_t f, uint32_t no
     else
     {   /* status */
         static const char N[3] = { 'R', 'Y', 'B' };
+        if (u->live->mode == (uint8_t)M_MODE_INDUSTRIAL)
+        {   /* v0.9.57: Industrial, a phase missing or a wrong sequence: the whole unit is off for it: say it alone, in the middle of the screen */
+            char ms[12]; uint32_t k = 0U; uint8_t seq = 0U;
+            for (p = 0U; p < 3U; p++) { if (d->fault[p] == (uint8_t)MLOG_T_PHASE_MISS) { if (k != 0U) ms[k++] = ' '; ms[k++] = N[p]; } if (d->fault[p] == (uint8_t)MLOG_T_PHASE_SEQ) seq = 1U; }
+            if (k != 0U) { const char *t = " Phase"; uint32_t i = 0U; while ((t[i] != '\0') && (k < 11U)) ms[k++] = t[i++]; ms[k] = '\0'; f_center(f, 1U, "PHASE MISSING"); f_center(f, 2U, ms); return; }
+            if (seq != 0U) { f_center(f, 1U, (d->seq_state == 2U) ? "SAME PHASE" : "PHASE REVERSE"); f_center(f, 2U, "Check R-Y-B Order"); return; }
+        }
         for (p = 0U; p < 3U; p++)
         {
             char c[5] = { N[p], ' ', ':', ' ', '\0' }; char s[20]; f_put(f, p, 0U, c);
@@ -582,7 +595,7 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
             pos = (u->cursor < 2U) ? u->cursor : (u->cursor + 1U);
         }
         f_center(f, 2U, s); col0 = (MUI_COLS - len) / 2U;
-        if (blink_on(u, now) != 0U) f_put(f, 3U, col0 + pos, "_");
+        if (blink_on(u, now) == 0U) { char us[2] = { '_', '\0' }; f_put(f, 2U, col0 + pos, us); }      /* v0.9.57: the digit being edited blinks in place (it was an underscore on the next line) */
         return;
     }
     {   char z[8]; fmt_zero(z, item_get(&u->work, it->id), it->digits);
@@ -590,7 +603,7 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
         if (it->unit != ' ') { v[n++] = ' '; v[n++] = it->unit; }
         if ((it->id == 4U) && (u->work.maxcorr_v == 0U)) { const char *ns = " Not Set"; for (i = 0U; ns[i] != '\0'; i++) v[n++] = ns[i]; }
         v[n] = '\0'; f_center(f, 2U, v);
-        if (blink_on(u, now) != 0U) f_put(f, 3U, ((MUI_COLS - n) / 2U) + u->cursor, "_");        /* a blinking underscore under the digit being edited */
+        if (blink_on(u, now) == 0U) f_put(f, 2U, ((MUI_COLS - n) / 2U) + u->cursor, "_");        /* v0.9.57: the digit being edited blinks IN PLACE (an underscore on the next line before) */
     }
 }
 
@@ -607,7 +620,7 @@ void MUI_Tick(MUI_t *u, const MUIRun_t *d, uint32_t now, Frame_t out)
     {
         uint8_t shown = 0U, p;
         for (p = 0U; p < 3U; p++) if (d->fault[p] != 0U && MF_Rank(d->fault[p]) >= MF_Rank(shown)) shown = d->fault[p];
-        if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = 2U; u->svc = 0U; u->t_page = now; }    /* a new fault jumps to the status page (out of a service page too) */
+        if ((shown != 0U) && (shown != u->prev_shown) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) { u->page = MUI_PG_STATUS; u->svc = 0U; u->t_page = now; }    /* a new fault jumps to the status page (out of a service page too) */
         if ((u->svc != 0U) && ((u->live->mode == (uint8_t)M_MODE_SINGLE) || ((uint32_t)(now - u->t_key) >= MUI_SERVICE_IDLE_MS))) u->svc = 0U;      /* a minute without a key: back to the Run pages */
         if (u->live->mode == (uint8_t)M_MODE_SINGLE)
         {   /* a new fault, or a minute without a key, takes a service page back to THE Run screen, where the parameters and the fault are */
@@ -615,7 +628,7 @@ void MUI_Tick(MUI_t *u, const MUIRun_t *d, uint32_t now, Frame_t out)
         }
         u->prev_shown = shown;
         if ((u->live->mode != (uint8_t)M_MODE_SINGLE) && (u->svc == 0U) && (u->live->scroll != 0U) && ((uint32_t)(now - u->t_page) >= ((uint32_t)u->live->scroll_time * 1000UL)))
-        { u->page = (uint8_t)((u->page + 1U) % 3U); u->t_page = now; }
+        { u->page = (uint8_t)((u->page + 1U) % MUI_RUN3_PAGES); u->t_page = now; }
     }
     /* the frame */
     f_clear(out);
