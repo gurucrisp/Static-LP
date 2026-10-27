@@ -1,3 +1,8 @@
+/* ########################################################################################################################
+ * WARNING (v0.9.42): this config switches the transformer AUTOTUNE'S TUNE MODE on: the unit drives its power stage open loop.
+ * v0.9.32 to v0.9.41 wrote the profile to flash with the converter and inverter still running; one unit lost IGBTs at the end of a sweep. Fixed in v0.9.42, but not proven on hardware.
+ * READ docs/AUTOTUNE_BENCH.md (the first section) before ANY sweep: current-limited source, a scope, the hardware over-current trip checked, Max Correction low, no load.
+ * ###################################################################################################################### */
 /**
   ******************************************************************************
   * @file    slave_config.h
@@ -28,12 +33,46 @@
   *     1  Bench only: request "run" automatically once conditions are met.
   ******************************************************************************
   */
+/* READY-MADE (v0.9.0): STAGE 3 CLOSED LOOP, FULL RANGE, RUN BY THE MASTER, FAST START: cap 2752 ticks (the duty ceiling) = about 27 V at 200 V and 38 V at 250 V; reaches 230 V from about 202 to 270 V (upper figure extrapolated). Input 205-265 V. NO LOAD, series lamp in. Copy over Core/Inc/slave_config.h */
 #ifndef SLAVE_CONFIG_H
 #define SLAVE_CONFIG_H
 
 #ifndef SLAVE_POWER_STAGE
-#define SLAVE_POWER_STAGE      1
+#define SLAVE_POWER_STAGE      3
 #endif
+
+/* ---- MASTER CONTROL (v0.9.0, roadmap step 3) -------------------------------------------------------------------------------------------------------
+ * THIS FILE IS FOR USE WITH THE MASTER (a master built from the same release, 500 kbaud link, its USART RX wired to the slave's TX and the reverse).
+ *   - The slave does NOT start by itself: the master's $M frames say run, the set voltage and the clear counter, every 100 ms.
+ *   - EVERY fault latches until the master changes the clear counter. There are no automatic retries.
+ *   - No valid $M for 1 s: the slave stops (and flags LINK_LOST).
+ *   - The slave sends $E, $H and $R frames as well as $S. A master older than v0.8.5 counts them as bad frames on its display; nothing else.
+ * Without a master it stays OFF with LINK_LOST. To bench it alone, use slave_config_STAGE3_cap2752_full_range.h instead. */
+#ifndef SLAVE_LINK_V2
+#define SLAVE_LINK_V2          1
+#endif
+#ifndef SLAVE_MASTER_CONTROL
+#define SLAVE_MASTER_CONTROL   1
+#endif
+/* A rare zero-cross glitch (F16, F04) while RUNNING skips one half-cycle instead of latching the unit (and opening the load contactor): at most 2 in 2 s, the third is the fault as before. See slave_features.h. */
+#ifndef SLAVE_GLITCH_SKIP
+#define SLAVE_GLITCH_SKIP      1
+#endif
+/* The TRANSFORMER-CONNECTION (FLIP) check at every start: if the output moves AGAINST the commanded direction the slave stops with fault 17, latched (the master shows Transformer Flip, buzzer in every mode). See slave_features.h. */
+#ifndef SLAVE_TF_RUN_CHECK
+#define SLAVE_TF_RUN_CHECK     1
+#endif
+/* Voltage calibration over the link ($K CALV / CALO / CALR from the master's Voltage Calibration pages): only while the unit is stopped, +-10 %, stored in two flash pages (0x0803F000 / 0x0803F800: the program must end below them). */
+#ifndef SLAVE_VOLTAGE_CAL
+#define SLAVE_VOLTAGE_CAL      1
+#endif
+/* ---- FAST SOFT START (the values of slave_config_STAGE3_cap2752_full_range_fast_start.h): the output reaches the set voltage about 1.4 s sooner from 205 V, and much sooner from a low input ---- */
+/* the soft-start ramp of the setpoint: 10 V/s for 0.5 s, then 30 V/s, then 10 V/s for the last 3 V (the standard values are 3 V/s for 2 s, 10 V/s, 5 V/s). Measured in simulation on the real regulator: no overshoot.
+ * The 3 s the converter runs alone before the inverter starts is a separate delay and is not changed. A faster ramp is a faster rise of the load voltage. */
+#define CTRL_SOFTSTART_SLOW_SLOPE_VPS   10.0f
+#define CTRL_SOFTSTART_FAST_SLOPE_VPS   30.0f
+#define CTRL_SOFTSTART_FINAL_SLOPE_VPS  10.0f
+#define CTRL_SOFTSTART_SLOW_TIME_MS     500UL
 
 #ifndef SLAVE_BENCH_AUTORUN
 #define SLAVE_BENCH_AUTORUN    0
@@ -51,15 +90,23 @@
 #ifndef SLAVE_RELAYS_MODE
 #define SLAVE_RELAYS_MODE      2
 #endif
-/* Optional: the OLD firmware only ran the converter from about 180 V (its LV cut-out, +5 V hysteresis). To compare against it, remove the
+
+/* ---- this file (v0.8.2): ---- */
+#define SLAVE_CONV_FIRST_AT_PEAK 1       /* the converter's first diagonal at the line peak (bench: starts reliably) */
+/* The MASTER owns the voltage limits: the slave's own outer envelope is NOT narrowed here. It keeps its built-in values (input trips below 80 V and above 300 V, it STARTS only from 90 V to 290 V;
+ * output trips above 280 V), and announces them in its $H frame, so Set-Mode refuses limits outside them. The master's I/P LV, I/P HV, O/P LV and O/P HV settings, with the Volt Cut Delay, decide inside that envelope
+ * (and a gross output over-voltage, 15 V above O/P HV, is cut within 0.2 s). The other full_range files narrow the slave to 195 / 275 / 265 V to mimic the old firmware: that is NOT wanted when the master is in control. */
+#define CTRL_STAGE3_MAX_EFF_TICKS 2752U   /* the cap: 2752 effective ticks, the duty ceiling: about 27 V at 200 V and 38 V at 250 V of correction; it reaches 230 V from about 202 V to 270 V (upper figure extrapolated) */
+/* (not active) the OLD firmware only ran the converter from about 180 V (its LV cut-out, +5 V hysteresis). To compare against it you would replace the 80 V line below by this, and remove the
  * comment marks below: the converter then starts at 190 V and trips below 180 V. (Defaults: trip below 140 V, start from 150 V.) */
 /* #define CTRL_VIN_MIN_V 180.0f */
 
-/* LOW INPUT VOLTAGE: to start the converter from 90 V (and trip below 80 V) use this line INSTEAD (only ONE CTRL_VIN_MIN_V line active). Firmware margins:
+/* LOW INPUT VOLTAGE (the line below is ACTIVE here): the converter starts from 90 V and trips below 80 V. Firmware margins:
  * the polarity sign detection has 3.2x margin at 90 V (1.6x at 45 V); HARDWARE limits are NOT confirmed: the ZCD IC only worked above about 70 V on the bench,
  * and the power board's own 12 V / 3.3 V rails and the relay coils at 90 V mains are untested. The bench-proven start rule (positive half, low sides on)
  * was found at 197-245 V and is NOT verified at 90 V. Converter-only: regulating from 90 V (the inverter) is a separate question. See docs/POWER_STAGE_BRINGUP.md. */
-/* #define CTRL_VIN_MIN_V 80.0f */
+/* ACTIVE in the master-control files since v0.9.17: the unit is specified to work from 90 V, so the slave's input trip is 80 V and it starts from 90 V (+10 V hysteresis). It announces that in $H. */
+#define CTRL_VIN_MIN_V 80.0f
 
 #ifndef SLAVE_RELAYS_CONFIRMED
 #define SLAVE_RELAYS_CONFIRMED 0
@@ -195,12 +242,6 @@
 #define BRINGUP_REPORT_MODE    2       /* 0 = ZC beep codes, 1 = voltage/frequency, 2 = silent */
 #endif
 
-/* BENCH ONLY, stage 0 with the debug PWM, GATE SUPPLY ONLY, NO MAINS: arms the FLT interrupt so that a FLT edge (a function generator on PD2) switches the debug PWM off.
- * It exists to MEASURE the delay from the FLT edge to the gate-driver inputs on a scope (decision D25). After the trip only a reset restarts the PWM. */
-#ifndef BRINGUP_FLT_TEST
-#define BRINGUP_FLT_TEST       0
-#endif
-
 /* ---- Compile-time safety cross-checks ------------------------------------ */
 #if (SLAVE_POWER_STAGE < 0) || (SLAVE_POWER_STAGE > 3)
 #error "SLAVE_POWER_STAGE must be 0, 1, 2 or 3"
@@ -208,10 +249,6 @@
 
 #if (SLAVE_POWER_STAGE >= 1) && (BRINGUP_PWM_MODE != 0)
 #error "The 50 % debug PWM (BRINGUP_PWM_MODE) must be OFF when the power stage is enabled"
-#endif
-
-#if (BRINGUP_FLT_TEST != 0) && ((SLAVE_POWER_STAGE != 0) || (BRINGUP_PWM_MODE != 1))
-#error "BRINGUP_FLT_TEST is for the stage-0 scope build only: SLAVE_POWER_STAGE 0 with BRINGUP_PWM_MODE 1 (gate supply only, no mains)"
 #endif
 
 #if (SLAVE_POWER_STAGE >= 1) && (BRINGUP_REPORT_MODE != 2)
@@ -242,5 +279,43 @@
 #if (SLAVE_BENCH_AUTORUN != 0) && (SLAVE_POWER_STAGE == 0)
 #error "SLAVE_BENCH_AUTORUN has no meaning with SLAVE_POWER_STAGE 0"
 #endif
+
+
+/* ======================= FAST CORRECTION profile, step 2 (v0.9.25) =======================
+ * The fast-start master-control config plus the fastest correction that the simulation and the protection tests accept:
+ *   CTRL_GUARD_RESTART_SLOPE_VPS 100  (default 30; the 60 profile is the milder step): after an input step of 15 V or more the correction restarts from zero and ramps back at this many V/s.
+ *   CTRL_GUARD_RESTART_FINAL_VPS  30  (default 10): the ramp speed in the last 3 V before the set voltage.
+ * Simulation, a 40 V input step: within 0.5 V of the set voltage in 0.6 s (1.6 s with the defaults, 1.0 s with the 60 profile).
+ * NOT changed, on purpose: the regulator gain (REG_KI_SCALE 1.0: a higher gain gave NO speed in the simulation and makes the transformer-flip check let the output move further the wrong way: 3.4 V of the 3.5 V allowed at x1.5)
+ * and the freeze debounce (300 ms: at 150 ms the flip tests failed).
+ * NOT tried on hardware. Measure with the response timer (LOG, MENU x2: the first row shows "3.4s/41V" = the last recovery: seconds / largest error) and go back to the 60 profile or the plain fast-start config if the unit trips (F02 / F01) on input steps. */
+#define CTRL_GUARD_RESTART_SLOPE_VPS  100.0f
+#define CTRL_GUARD_RESTART_FINAL_VPS  30.0f
+
+
+/* ======================= + CONVERTER-SIDE CURRENT (I-OUT on PA2) =======================
+ * This config = the 100 V/s fast-correction profile above + the 4th ADC channel for the CT2500 sense chain (net I-OUT, PA2): its AC RMS and peak go to the master in $E and are shown on the Converter Current page (LOG, MENU x7).
+ * Confirmed on the bench (v0.9.31): the voltages read as before and the current agrees with a clamp meter. The burden of THIS board is 68 ohm x 3 (the drawing has 180): 0.0617 V per ampere, the channel clips at +-26.8 A peak;
+ * the hardware short-circuit comparators then trip at about +-108 A peak. See docs/IOUT.md. */
+#define SLAVE_IOUT 1
+#define IOUT_BURDEN_R_EACH_OHM 68.0f
+
+
+/* ======================= + TRANSFORMER AUTOTUNE WITH THE CONTROLLER'S TUNE MODE (v0.9.34) =======================
+ * SLAVE_AUTOTUNE 1: the link commands ($K TUNE / TABORT), the $T progress frames, the profile store (two CRC copies in flash pages 124/125).
+ * SLAVE_TUNE_MODE 1: on a TUNE command the unit starts by itself (the master keeps the output contactor open and run = 0), and in RUN the sweep's duty is applied OPEN LOOP as a boost, slew-limited (1500 ticks/s),
+ * never above the 2752-tick cap, and never more than Max Correction + 8 V of injection (otherwise the controller stops and latches the over-voltage fault). Any fault ends tune mode.
+ * The sweep starts from Set-Mode, item 19 Re-tune (behind the password), with the unit STOPPED and Max Correction (item 4) set. READ docs/AUTOTUNE_BENCH.md BEFORE THE FIRST RUN: variac, NO LOAD, a low Max Correction first.
+ * The stored profile is NOT used by the regulator yet: a normal run behaves exactly as without it. */
+#define SLAVE_AUTOTUNE   1
+#define SLAVE_TUNE_MODE  1
+
+
+/* ======================= + THE STORED PROFILE IN USE (v0.9.35) =======================
+ * SLAVE_TUNE_APPLY 1: after a successful sweep the regulator USES the profile: its cap (the smaller of 2752 and the profile's) and its gain scale (the integral gain times reference gain / measured gain, boost and buck),
+ * and at every start in BOOST the injection really measured is compared with the one the profile predicts (30 % or 1 V): a different transformer gives fault 19, latched, the master shows "Re-tune Required"; Re-tune accepts the new transformer.
+ * Buck starts are not checked (the profile describes the boost injection). WITHOUT a profile the regulator is exactly as before, so this switch is safe to turn on BEFORE the first sweep; it only matters afterwards.
+ * SLAVE_TUNE_ENFORCE (NOT set here, on purpose): 1 = refuse to run without a valid profile (fault 18). Turn it on only when every unit leaves the factory tuned. */
+#define SLAVE_TUNE_APPLY 1
 
 #endif /* SLAVE_CONFIG_H */
