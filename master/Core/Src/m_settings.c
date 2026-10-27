@@ -63,7 +63,7 @@ void MS_Defaults(MSettings_t *s)
     MS_DefaultLimits(s, 0, &s->ip_lv, &s->ip_hv, &s->op_lv, &s->op_hv);
     s->volt_cut_delay = 5U; s->ovl_current = MASTER_RATED_CURRENT_A; s->ovl_cut_delay = 10U; s->heat_delay = 10U;
     s->phase_seq = 0U; s->scroll = 1U; s->scroll_time = 5U; s->password = 0U; s->restart_auto = 1U; s->restart_time = 5U;
-    s->load_src = 0U; s->sl_zero_ca = 0U; s->sl_gain = 0U; s->sl_zero_yb[0] = 0U; s->sl_zero_yb[1] = 0U; s->sl_gain_yb[0] = 0U; s->sl_gain_yb[1] = 0U; s->heat_temp = MS_HEAT_TEMP_DEFAULT; s->heat_reset = MS_HeatResetDefault(MS_HEAT_TEMP_DEFAULT);
+    s->load_src = MS_LOADSRC_SLAVE_NOCT; s->sl_zero_ca = 0U; s->sl_gain = 0U; s->sl_zero_yb[0] = 0U; s->sl_zero_yb[1] = 0U; s->sl_gain_yb[0] = 0U; s->sl_gain_yb[1] = 0U; s->heat_temp = MS_HEAT_TEMP_DEFAULT; s->heat_reset = MS_HeatResetDefault(MS_HEAT_TEMP_DEFAULT);
 }
 
 MSErr_t MS_Validate(const MSettings_t *s, const MLimits_t *lim)
@@ -91,7 +91,7 @@ MSErr_t MS_Validate(const MSettings_t *s, const MLimits_t *lim)
     if ((s->heat_temp < MS_HEAT_TEMP_MIN) || (s->heat_temp > MS_HEAT_TEMP_MAX)) return MS_BAD_HEAT_TEMP;
     if ((s->heat_reset < MS_HEAT_RESET_MIN) || ((uint32_t)s->heat_reset + MS_HEAT_RESET_GAP > (uint32_t)s->heat_temp)) return MS_BAD_HEAT_RESET;
     if ((s->phase_seq > 1U) || (s->scroll > 1U) || (s->restart_auto > 1U)) return MS_BAD_FLAG;
-    if ((s->load_src > 1U) || (s->sl_zero_ca > 4000U) || ((s->sl_gain != 0U) && ((s->sl_gain < 200U) || (s->sl_gain > 5000U)))) return MS_BAD_FLAG;
+    if ((s->load_src > MS_LOADSRC_SLAVE_NOCT) || (s->sl_zero_ca > 4000U) || ((s->sl_gain != 0U) && ((s->sl_gain < 200U) || (s->sl_gain > 5000U)))) return MS_BAD_FLAG;
     { uint32_t k; for (k = 0U; k < 2U; k++) if ((s->sl_zero_yb[k] > 4000U) || ((s->sl_gain_yb[k] != 0U) && ((s->sl_gain_yb[k] < 200U) || (s->sl_gain_yb[k] > 5000U)))) return MS_BAD_FLAG; }
     return MS_OK;
 }

@@ -24,7 +24,7 @@ static const MFlash_t FL = { f_read, f_prog, f_erase };
 static uint8_t last_clr; static uint32_t clr_at;   /* the slave model: it clears its fault 200 ms after the clear counter changes */
 static MApp_t A; static MAppData_t D; static uint32_t T; static char F[4][21]; static uint8_t K[4];
 static void boot(void) { MApp_Init(&A, &FL, SA, SB, LA, LB, T); memset(K, 0, sizeof K); }
-static void fresh(void) { memset(fm, 0xFF, sizeof fm); fail_prog = 0; memset(&D, 0, sizeof D); D.have = 1U; D.link_ok = 1U; D.vin_dv = 2015U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.in_band = 1U; D.load_ok = 1U; D.load_da = 123U; D.clr_echo = 0U; T = 50000U; last_clr = 0U; clr_at = 0U; boot();  LEGACY_LIMITS(A.settings); }
+static void fresh(void) { memset(fm, 0xFF, sizeof fm); fail_prog = 0; memset(&D, 0, sizeof D); D.have = 1U; D.link_ok = 1U; D.vin_dv = 2015U; D.vout_dv = 2300U; D.freq_chz = 5000U; D.state = 2U; D.e_valid = 1U; D.in_band = 1U; D.load_ok = 1U; D.load_da = 123U; D.clr_echo = 0U; T = 50000U; last_clr = 0U; clr_at = 0U; boot();  LEGACY_LIMITS(A.settings); A.settings.load_src = MS_LOADSRC_CT; }      /* these tests drive the master CT (v0.9.59: the factory default is Slave, No CT) */
 static void run(uint32_t ms)
 {
     uint32_t e = T + ms;
@@ -893,6 +893,15 @@ static void t_slave_load(void)
     CHECK(A.settings.sl_gain == 5000U && strstr(row(1), "Calibrated") != NULL, "0.60 A above the zero for 3.0 A: accepted, gain 5.000 (%u) ('%s')", (unsigned)A.settings.sl_gain, row(1));
     run(3000U); D.iout_pk_ca = 1030U; run(300U); A.ui.cal_val = 100U; tap(3, 100U); CHECK(A.settings.sl_gain == 1282U, "(put back: 1.282)");
     boot(); CHECK(A.settings.sl_zero_ca == 250U && A.settings.sl_gain == 1282U && A.settings_from_flash, "after a restart the calibration is still there (zero %u, gain %u)", (unsigned)A.settings.sl_zero_ca, (unsigned)A.settings.sl_gain);
+    /* v0.9.59: Load Source = Slave, No CT: the master CT is never read */
+    {   fresh(); A.settings.load_src = MS_LOADSRC_SLAVE_NOCT; A.settings.ovl_current = 20U; to_run(); run(12000U); D.ct_raw = 1U; D.ct_x16 = x16_for_da(900U); D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(3000U);
+        CHECK(MApp_Engine(&A)->contactor[0] == 1U && MLog_Count(&A.log) == 0U, "Slave, No CT: the CT input at full scale (noise on an unconnected input) is NOT an inrush, and its 90 A is not a load");
+        CHECK(strstr(row(2), "--.-A") != NULL, "no slave calibration: no load reading at all ('%s'), not the CT's", row(2));
+        A.settings.sl_zero_ca = 100U; A.settings.sl_gain = 1000U; D.iout_valid = 1U; D.iout_pk_ca = 600U; run(1500U);
+        CHECK(strstr(row(2), " 5.0A") != NULL, "calibrated: the slave's 5.0 A ('%s')", row(2));
+        D.iout_valid = 0U; run(1500U); CHECK(strstr(row(2), "--.-A") != NULL, "the slave's reading gone: none (no fall back to a CT that is not there) ('%s')", row(2));
+        fresh(); A.settings.ovl_current = 20U; to_run(); run(12000U); D.ct_max_x16 = (uint16_t)MAPP_CT_FULL_X16; run(100U);
+        CHECK(MApp_Engine(&A)->contactor[0] == 0U, "the same with Load Source Master CT: the backup trips (it is there for a CT that IS fitted)"); }
     /* the refusals, each with its words, and nothing changes */
     { static const struct { int what; const char *l1; } E[] = { {0, "Run The Unit"}, {1, "No Converter"}, {2, "Reading Clipped"}, {3, "Load Too Low"}, {4, "Enter 2.0-180.0 A"}, {5, "Out Of Range"}, {6, "Save Failed"} };
       unsigned e; for (e = 0U; e < sizeof E / sizeof E[0]; e++)

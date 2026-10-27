@@ -278,3 +278,6 @@ Set-Mode item **Load Source** (after Overload Current): `Master CT` (default) or
 * **Three-phase Run pages are four:** 1 output (V, temperature, load), 2 **input voltage** (`R I/P :   228 V`), 3 phase-to-phase and frequency, 4 status. Display Scroll and MENU go through the four; a new fault jumps to the status page.
 * **No "Slave Waits" in the three-phase modes** (the R slave's start-up wait showed as `Slave Waits: R`); Single keeps it.
 * **Set-Mode:** the digit being edited blinks IN PLACE (it shows for 0.5 s after a key, then an underscore for 0.5 s); there is no underscore on the line below any more. The same for Date and Time.
+
+## v0.9.59
+Load Source: `Master CT` / `Slave` / `Slave, No CT` (default). See SLAVE_LOAD_CAL.md.

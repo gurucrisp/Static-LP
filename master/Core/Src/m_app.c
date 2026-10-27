@@ -156,7 +156,7 @@ static void rec_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 static void ct_peak_update(MApp_t *a, const MAppData_t *d, uint32_t now)
 {
     uint8_t hi = 0U;
-    if (d->ct_max_x16 != 0U)
+    if ((d->ct_max_x16 != 0U) && (a->settings.load_src != MS_LOADSRC_SLAVE_NOCT))          /* v0.9.59: no master CT fitted: its input is noise, never a peak */
     {
         uint32_t lim_da = (uint32_t)a->settings.ovl_current * 10U * MAPP_CT_PEAK_FACTOR;
         if ((d->ct_max_x16 >= MAPP_CT_FULL_X16) || ((uint32_t)ct_to_da(&a->cal, d->ct_max_x16) > lim_da)) hi = 1U;
@@ -507,7 +507,8 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
     r.vout_dv[0] = disp_filter(&a->f_vout, d->vout_dv, d->have, 10, 7, now);
     ld = d->load_da; lok = d->load_ok;
     if (d->ct_raw != 0U) { ld = ct_to_da(&a->cal, d->ct_x16); lok = 1U; }                      /* from the CT count and the calibration */
-    if ((a->settings.load_src != 0U) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
+    if (a->settings.load_src == MS_LOADSRC_SLAVE_NOCT) { ld = 0U; lok = 0U; }                  /* v0.9.59: no master CT: the slave's reading below, or none (--.-A, no overload trip) */
+    if ((a->settings.load_src != MS_LOADSRC_CT) && (a->settings.sl_gain != 0U) && (d->have != 0U) && (d->iout_valid != 0U) && (d->iout_clip == 0U))
     {   /* "Load Source = Slave": the slave's converter current, calibrated. NOT calibrated, no reading or a clipped one: the master CT stays in charge (the overload trip must never depend on a reading that is not there). */
         ld = sl_to_da(a->settings.sl_zero_ca, a->settings.sl_gain, d->iout_pk_ca); lok = 1U;
     }

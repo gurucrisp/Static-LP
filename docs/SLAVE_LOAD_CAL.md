@@ -41,3 +41,9 @@ The master's CT serves one phase (R). The Y and B phases get their load ONLY fro
 
 ## v0.9.58
 * The gain needs the converter peak at least **0.5 A** above the zero (it was 1 A). When it is less, the message says both numbers: `Load Too Low` / `Pk 2.90 Zero 2.50` (the peak now and the stored zero, amperes). A zero taken with the load already on, a load on another phase's output, or a converter that hardly works at this input voltage (its current follows the CORRECTION it makes, so near 230 V in it barely moves) all show up there. Calibrate with the input well away from the set voltage (a variac) and the load on THAT phase's output.
+
+## v0.9.59: Load Source "Slave, No CT" (the factory default)
+Set-Mode **Load Source** now has three choices (START steps them): `Master CT`, `Slave` (the slave's reading, the master CT as its fallback and as the inrush backup), and **`Slave, No CT`**: no master CT is fitted, so it is never read. With no CT connected its ADC input is noise, which the inrush backup took for a peak (an "Inrush" with no fault code when the contactor closed on a load). With `Slave, No CT`:
+* the load of R is the slave's converter current with R's Slave Load Cal, or none (`--.-A`, no overload trip) until it is calibrated or while its reading is missing or clipped, exactly as Y and B;
+* the master CT inrush backup is off (the slave's own hardware over-current trip, F01 / F02, still protects the stage).
+It is the factory default; a unit with saved settings keeps what it had: **set Load Source to `Slave, No CT` in Set-Mode** on a unit without a master CT.

@@ -390,7 +390,8 @@ void MUI_Key(MUI_t *u, MKEvent_t ev, uint32_t now)
             if ((it->id == 19U) && (u->live->mode != (uint8_t)M_MODE_SINGLE)) u->yn = (uint8_t)((u->yn + 1U) % 5U);     /* v0.9.54: No, R, Y, B, All (one phase at a time) */
             else if (is_action(it->id)) u->yn = (uint8_t)(u->yn ^ 1U);
             else if (it->kind == (uint8_t)K_MODE) { item_set(&u->work, 1U, (uint16_t)((u->work.mode + 1U) % 3U)); }
-            else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN) || (it->kind == (uint8_t)K_LOADSRC)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
+            else if (it->kind == (uint8_t)K_LOADSRC) item_set(&u->work, it->id, (uint16_t)((item_get(&u->work, it->id) + 1U) % 3U));      /* v0.9.59: Master CT, Slave, Slave No CT */
+            else if ((it->kind == (uint8_t)K_YN) || (it->kind == (uint8_t)K_AUTOMAN)) item_set(&u->work, it->id, (uint16_t)(item_get(&u->work, it->id) ^ 1U));
             else if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME)) clk_digit_inc(u, it->id);
             else digit_inc(u, it);
         }
@@ -579,7 +580,7 @@ static void render_set(const MUI_t *u, Frame_t f, uint32_t now)
     if (it->kind == (uint8_t)K_MODE) { f_center(f, 2U, mode_text(u->work.mode)); return; }
     if (it->kind == (uint8_t)K_YN) { f_center(f, 2U, (item_get(&u->work, it->id) != 0U) ? "Yes" : "No"); return; }
     if (it->kind == (uint8_t)K_AUTOMAN) { f_center(f, 2U, (u->work.restart_auto != 0U) ? "Auto" : "Manual"); return; }
-    if (it->kind == (uint8_t)K_LOADSRC) { f_center(f, 2U, (u->work.load_src != 0U) ? "Slave" : "Master CT"); return; }
+    if (it->kind == (uint8_t)K_LOADSRC) { f_center(f, 2U, (u->work.load_src == MS_LOADSRC_SLAVE_NOCT) ? "Slave, No CT" : ((u->work.load_src == MS_LOADSRC_SLAVE) ? "Slave" : "Master CT")); return; }
     if ((it->kind == (uint8_t)K_DATE) || (it->kind == (uint8_t)K_TIME))
     {   /* dd/mm/yyyy or HH:MM, centred, the blinking underscore under the digit being edited */
         const MDateTime_t *t = &u->clk_work; char s[12]; uint32_t len, pos, col0;

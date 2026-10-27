@@ -44,13 +44,17 @@ typedef struct
     uint16_t password;         /* 000..999                                                         */
     uint8_t  restart_auto;     /* 1 = Auto, 0 = Manual                                             */
     uint16_t restart_time;     /* seconds 1..999: also the power-up on-delay and the IN_BAND hold before the contactor closes */
-    uint8_t  load_src;         /* 0 = the load current is the master CT's, 1 = the slave's converter current, converted by the slave load calibration (v0.9.45)  */
+    uint8_t  load_src;         /* 0 = the load current is the master CT's, 1 = the slave's converter current, converted by the slave load calibration (v0.9.45), the CT as its fallback and inrush backup,
+                                  2 = the slave's, and NO master CT fitted (v0.9.59): the CT is never read, no CT inrush backup, no CT fallback (the factory default) */
     uint16_t sl_zero_ca;       /* the slave load calibration's zero: the converter-current PEAK at no load with the unit running, hundredths of an ampere 0..4000 */
     uint16_t sl_gain;          /* its gain, thousandths: load = (peak - zero) x gain / 1000; 0 = not calibrated, else 200..5000 */
     uint8_t  heat_reset;       /* Overheat Restart: the unit may restart when the heat sink is at or below this, degC, MS_HEAT_RESET_MIN..(Overheat Temp - 5) (v0.9.50). Byte 32 of the record; 0 there means the default */
     uint8_t  heat_temp;        /* Overheat Temp: the heat-sink temperature that trips the unit, degC 50..120 (v0.9.49). Stored in byte 27 of the record; 0 there (an older record) means the default */
     uint16_t sl_zero_yb[2], sl_gain_yb[2];   /* v0.9.55: the Y [0] and B [1] slave load calibrations, as sl_zero_ca / sl_gain (the Y and B phases have no master CT: their load is always their slave's). Bytes 33 to 40; zeros there (older records) = not calibrated */
 } MSettings_t;
+#define MS_LOADSRC_CT          0U
+#define MS_LOADSRC_SLAVE       1U
+#define MS_LOADSRC_SLAVE_NOCT  2U     /* v0.9.59: no master CT fitted (the factory default) */
 #define MS_HEAT_TEMP_DEFAULT  75U
 #define MS_HEAT_TEMP_MIN      50U
 #define MS_HEAT_TEMP_MAX     120U

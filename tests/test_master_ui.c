@@ -425,12 +425,12 @@ static void t_load_source_item(void)
     CHECK(p10 >= 0 && p25 == p10 + 1 && p11 == p25 + 1, "Load Source (25) sits right after Overload Current (10) and before Overload Cut Delay (11)");
     ui_reset(M_MODE_SINGLE); to_run(); S.load_src = 0U; enter_set(); goto_item(25U);
     CROW(1, "Load Source"); CROW(2, "Master CT");
-    key(MK_START); CROW(2, "Slave"); key(MK_START); CROW(2, "Master CT"); key(MK_START); CROW(2, "Slave");
+    key(MK_START); CROW(2, "Slave"); key(MK_START); CROW(2, "Slave, No CT"); key(MK_START); CROW(2, "Master CT"); key(MK_START); CROW(2, "Slave");      /* v0.9.59: three choices */
     { int g; for (g = 0; g < 40 && MUI_SetModeOpen(&U); g++) { key(MK_MENU_SHORT); tick(100U); } }
     CHECK(!MUI_SetModeOpen(&U) && S.load_src == 1U && MUI_Take(&U, MUI_REQ_SAVE), "START toggles Master CT / Slave; leaving Set-Mode saves it (load_src = %u)", (unsigned)S.load_src);
     /* the slave load calibration is not a setting that Factory Reset throws away */
     ui_reset(M_MODE_SINGLE); to_run(); S.sl_zero_ca = 123U; S.sl_gain = 1280U; S.load_src = 1U; enter_set(); goto_item(22U); CROW(1, "Factory Reset"); key(MK_START); key(MK_MENU_SHORT); tick(100U);
-    CHECK(S.set_v == 230U && S.load_src == 0U && S.sl_zero_ca == 123U && S.sl_gain == 1280U && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset resets the settings (Load Source back to Master CT) but KEEPS the slave load calibration (zero %u, gain %u)", (unsigned)S.sl_zero_ca, (unsigned)S.sl_gain);
+    CHECK(S.set_v == 230U && S.load_src == MS_LOADSRC_SLAVE_NOCT && S.sl_zero_ca == 123U && S.sl_gain == 1280U && MUI_Take(&U, MUI_REQ_SAVE), "Factory Reset resets the settings (Load Source back to Master CT) but KEEPS the slave load calibration (zero %u, gain %u)", (unsigned)S.sl_zero_ca, (unsigned)S.sl_gain);
     ui_reset(M_MODE_DOMESTIC); to_run(); S.sl_zero_yb[0] = 210U; S.sl_gain_yb[0] = 990U; S.sl_zero_yb[1] = 220U; S.sl_gain_yb[1] = 1010U; S.ovl_current = 60U; enter_set(); goto_item(22U); key(MK_START); key(MK_MENU_SHORT); tick(100U);
     CHECK(S.ovl_current == 25U && S.sl_zero_yb[0] == 210U && S.sl_gain_yb[0] == 990U && S.sl_zero_yb[1] == 220U && S.sl_gain_yb[1] == 1010U, "v0.9.55: Factory Reset keeps the Y and B load calibrations too, and the Overload Current goes back to 25 A (%u)", (unsigned)S.ovl_current);
     printf("  load source item: after Overload Current, toggles Master CT / Slave, saved; Factory Reset keeps the slave load calibration\n");

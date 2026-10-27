@@ -272,7 +272,7 @@ static void t_settings_slave_load(void)
     MStore_t st, o1; MSettings_t a, b; uint8_t raw[MS_PACK_LEN], def[MS_PACK_LEN], v1[MS_PACK_LEN_V1]; int i, same = 1; uint32_t k;
     MS_Defaults(&a); a.set_v = 235U; a.maxcorr_v = 45U; { uint16_t x1, x2, x3, x4; MS_DefaultLimits(&a, 0, &x1, &x2, &x3, &x4); a.ip_lv = x1; a.ip_hv = x2; a.op_lv = x3; a.op_hv = x4; }
     MS_Pack(&a, def);
-    CHECK(def[26] == 0U && def[27] == MS_HEAT_TEMP_DEFAULT && def[28] == 0U && def[29] == 0U && def[30] == 0U && def[31] == 0U && def[32] == 65U, "defaults: bytes 26, 28 to 31 are zero, byte 27 = 75 (Overheat Temp), byte 32 = 65 (Overheat Restart)");
+    CHECK(def[26] == MS_LOADSRC_SLAVE_NOCT && def[27] == MS_HEAT_TEMP_DEFAULT && def[28] == 0U && def[29] == 0U && def[30] == 0U && def[31] == 0U && def[32] == 65U, "defaults: byte 26 = 2 (Slave, No CT, v0.9.59), 28 to 31 zero, byte 27 = 75 (Overheat Temp), byte 32 = 65 (Overheat Restart)");
     { int zero = 1; for (k = 33U; k < MS_PACK_LEN; k++) if (def[k] != 0U) zero = 0; CHECK(zero, "bytes 33 to 47 are zero (room for the three-phase calibrations)"); }
     a.load_src = 1U; a.sl_zero_ca = 250U; a.sl_gain = 1282U; a.heat_temp = 90U; a.heat_reset = 80U; MS_Pack(&a, raw);
     for (i = 0; i < 26; i++) if (raw[i] != def[i]) same = 0;
@@ -302,7 +302,7 @@ static void t_settings_slave_load(void)
     CHECK(MS_Load(&st, &b) == 0U && b.set_v == 230U, "a version 1 record with an Overheat Temp of 49 (breaks the rules) gives the defaults");
     /* what is refused */
     flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    { MSettings_t x; static const struct { int field; uint16_t v; } BAD[] = { {0, 2}, {0, 255}, {1, 4001}, {1, 65535}, {2, 199}, {2, 5001}, {2, 100}, {2, 65535} };
+    { MSettings_t x; static const struct { int field; uint16_t v; } BAD[] = { {0, 3}, {0, 255}, {1, 4001}, {1, 65535}, {2, 199}, {2, 5001}, {2, 100}, {2, 65535} };
       unsigned q; for (q = 0U; q < sizeof BAD / sizeof BAD[0]; q++) { x = a; if (BAD[q].field == 0) x.load_src = (uint8_t)BAD[q].v; else if (BAD[q].field == 1) x.sl_zero_ca = BAD[q].v; else x.sl_gain = BAD[q].v;
           CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG && MS_Save(&st, &x) != 0, "refused: field %d = %u (%d)", BAD[q].field, (unsigned)BAD[q].v, (int)MS_Validate(&x, 0)); } }
     { static const uint8_t ht[] = { 49U, 121U, 255U }; unsigned q; MSettings_t x;
@@ -323,7 +323,9 @@ static void t_settings_slave_load(void)
     { MSettings_t x = a; x.sl_gain = 0U; x.sl_zero_ca = 4000U; CHECK(MS_Validate(&x, 0) == MS_OK, "gain 0 (not calibrated) and a zero of 40.00 A are valid"); x.sl_gain = 200U; CHECK(MS_Validate(&x, 0) == MS_OK, "so are the ends of the gain range, 0.200"); x.sl_gain = 5000U; CHECK(MS_Validate(&x, 0) == MS_OK, "and 5.000"); }
     /* a version 2 record whose bytes break the rules but whose CRC is good is not trusted either */
     memcpy(raw, def, MS_PACK_LEN); raw[26] = 7U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
-    CHECK(MS_Load(&st, &b) == 0U && b.load_src == 0U && b.sl_gain == 0U, "a record with Load Source 7 and a good CRC is not trusted: the defaults");
+    CHECK(MS_Load(&st, &b) == 0U && b.load_src == MS_LOADSRC_SLAVE_NOCT && b.sl_gain == 0U, "a record with Load Source 7 and a good CRC is not trusted: the defaults (Slave, No CT)");
+    { MSettings_t x = a; x.load_src = 2U; CHECK(MS_Validate(&x, 0) == MS_OK, "v0.9.59: Load Source 2 (Slave, No CT) is valid"); x.load_src = 3U; CHECK(MS_Validate(&x, 0) == MS_BAD_FLAG, "3 is refused"); }
+    { MSettings_t dd; MS_Defaults(&dd); CHECK(dd.load_src == MS_LOADSRC_SLAVE_NOCT, "the factory default is Slave, No CT (%u)", (unsigned)dd.load_src); }
     memcpy(raw, def, MS_PACK_LEN); raw[32] = 34U; flash_blank(); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN); (void)MStore_Save(&st, raw); MStore_Init(&st, &FL, PG(0), PG(1), MS_VERSION, MS_PACK_LEN);
     CHECK(MS_Load(&st, &b) == 0U && b.heat_reset == 65U, "nor one with an Overheat Restart of 34: the defaults");
     /* v0.9.55: the Y and B slave load calibrations in bytes 33 to 40 (zero Y, gain Y, zero B, gain B): no new version, an older version 2 record has zeros there = not calibrated */
