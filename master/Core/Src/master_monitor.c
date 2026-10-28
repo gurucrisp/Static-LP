@@ -600,6 +600,7 @@ void MasterApp_Run(void)
     MApp_BootReset(&app, g_mon.rst_wdg);                                         /* a restart by the watchdog is logged */
     MApp_SetTestNoCuts(&app, MASTER_TEST_NO_VOLTAGE_CUTS);
     MApp_SetInrushRetries(&app, MASTER_INRUSH_RETRIES);
+    MApp_SetContactorFirst(&app, (uint8_t)MASTER_CONTACTOR_FIRST);                     /* v0.9.64 */
     MApp_SetCtFitted(&app, (uint8_t)MASTER_CT_FITTED);                                 /* v0.9.60: without a CT the application never uses one */
     MApp_SetNtcHeat(&app, (uint8_t)MASTER_NTC_HEAT);                              /* the heat-sink temperature trips the unit (the Overheat Temp in Set-Mode) */
     rx_start();

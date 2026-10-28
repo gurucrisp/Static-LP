@@ -2708,6 +2708,7 @@ int main(void)
     run_isolated(t_mc_load_hold,              "master control: the load-connect hold (v0.9.61)");
 #endif
     run_isolated(t_mc_app_load_hold,          "master control: the load-connect hold, real master application");
+    run_isolated(t_mc_app_con_first,          "master control: contactor first, real master application (v0.9.64)");
 #if (SLAVE_TUNE_MODE != 0)
     run_isolated(t_mc_tune,                   "tune mode: the real controller, the real sweep, the real master");
 #endif

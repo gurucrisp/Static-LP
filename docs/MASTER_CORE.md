@@ -33,3 +33,7 @@ The contactor closes only after IN_BAND has held for the Restart Time (D27). Set
 
 ## Next
 7b Set-Mode / Run-Mode screens and key handling (rendered to a 20x4 buffer and tested); 7c the hardware glue (pins, LCD, keys, contactors, buzzer, CT, link to the slaves); 7d integration against a simulated slave.
+
+
+## v0.9.64: contactor first (`MASTER_CONTACTOR_FIRST`, master_monitor.h, 0 by default)
+With 1, a start whose input (every phase of the unit) is inside O/P LV .. O/P HV closes the contactor with the slaves off (run 0: their relays short the primary, output = input), and the slaves are told to run `MF_CF_BYPASS_MS` (1 s) later; ON once in band for 1 s as usual. Outside the O/P limits: the normal start. In the bypass the output limits apply, the inverter-off rule does not, a trip / STOP / lost link opens the contactor on the same tick. `MUnit_t.cf`: 0 normal, 1 bypass, 2 slaves started with the contactor closed.

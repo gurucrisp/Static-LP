@@ -573,6 +573,7 @@ void MApp_Step(MApp_t *a, uint8_t menu, uint8_t start, uint8_t stop, uint8_t log
         }
         in.setmode = (uint8_t)((MUI_SetModeOpen(&a->ui) != 0U) || (a->tune_state != 0U)); in.key_start = k_start; in.key_stop = k_stop; in.run_min = (d->clock_ok != 0U) ? MC_Stamp(&d->clock) : a->run_min_total;       /* the log time: the real-time clock when it is set, else the running minutes */
         a->eng.max_retries = a->retries_cfg;                                           /* MF_Init (a mode change) resets it: apply it every step */
+        a->eng.con_first = a->con_first_cfg;                                           /* v0.9.64: the same */
         {   MSettings_t es = a->settings;                                                /* what the engine judges by */
             if (a->no_cuts != 0U) { es.ip_lv = 1U; es.ip_hv = 999U; es.op_lv = 1U; es.op_hv = 999U; }   /* TEST: no voltage limits */
             MF_Tick(&a->eng, &es, &in, now, &a->eout);
@@ -841,6 +842,8 @@ void MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t
     if ((a->tune_state != TS_IDLE) && (a->tune_ph == ph) && (id == a->tune_id)) { tune_on_result(a, status, value, a->t_now); return; }      /* the Y and B links: only the answer to that phase's TUNE or TABORT */
     if ((a->vcal_wait != 0U) && (a->vcal_ph == ph) && (id == a->vcal_id)) { a->vcal_wait = 0U; a->vcal_due = 0U; vcal_message(a, status, value); }      /* v0.9.55: or to its voltage calibration */
 }
+void MApp_SetContactorFirst(MApp_t *a, uint8_t on) { a->con_first_cfg = (uint8_t)(on != 0U); }
+
 void MApp_SetCtFitted(MApp_t *a, uint8_t fitted)
 {
     a->no_ct = (uint8_t)(fitted == 0U);

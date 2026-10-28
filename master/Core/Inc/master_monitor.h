@@ -89,6 +89,9 @@ extern "C" {
 
 /* 1 = the CT peak backup: the CT channel is also sampled once per pass of the main loop and the largest reading of each 10 ms step goes to the application, which treats more than 3 x the Overload Current (or the ADC full scale) for 20 ms
  * as an Inrush. 0 = off (the slave's own over-current protection stays the only one). */
+#ifndef MASTER_CONTACTOR_FIRST
+#define MASTER_CONTACTOR_FIRST  0        /* v0.9.64: 1 = CONTACTOR FIRST: a start whose input is inside the O/P limits closes the contactor with the slaves still off (output = input, no IGBT in the load step), the slaves start 1 s later; outside the O/P limits the normal start (regulate, then close). 0 = always the normal start */
+#endif
 #ifndef MASTER_CT_FITTED
 #define MASTER_CT_FITTED        0        /* v0.9.60: 0 = NO master CT is fitted (the units of v0.9.60): the CT channel is never read (no CT load, no CT inrush backup, no Load Source item, no Load Calibration page); the load is the slaves'. 1 = a CT on ADC channel 0 */
 #endif

@@ -602,6 +602,32 @@ static void t_mc_app_load_hold(void)
 }
 
 
+/* v0.9.64, end to end: contactor first. The real master closes the contactor while the real slave is OFF (relays shorted, inverter disabled), then starts it */
+static void t_mc_app_con_first(void)
+{
+    int32_t t_c = -1, t_r = -1; uint32_t k; int slave_on_at_close = 1, inv_at_close = 1, opened = 0;
+    ma_start(1U, 225.0f); MApp_SetContactorFirst(&ma, 1U);
+    for (k = 0U; k < 4000U && !(t_r >= 0 && ma_c_contactor() && MApp_Engine(&ma)->unit_state[0] == (uint8_t)U_ON); k++)
+    {
+        if (t_c < 0 && ma_c_contactor()) { t_c = (int32_t)(k * 10U); slave_on_at_close = (g_ctrl.state != CTRL_OFF); inv_at_close = inv_enabled; W.out_offset = -5.0; }
+        if (t_c >= 0 && !ma_c_contactor()) opened++;
+        if (t_r < 0 && g_ctrl.state == CTRL_RUN) t_r = (int32_t)(k * 10U);
+        ma_ms10();
+    }
+    CHECK(t_c >= 0 && !slave_on_at_close && !inv_at_close, "225 V in (inside the O/P limits): the contactor closes with the slave OFF and its inverter disabled");
+    CHECK(t_r > t_c + (int32_t)MF_CF_BYPASS_MS && opened == 0, "the slave reaches RUN %d ms later, the contactor closed throughout", (int)(t_r - t_c));
+    ma_run(8000U);
+    CHECK(ma_c_contactor() && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && MLog_Count(&ma.log) == 0U && (double)W.vout > 228.0 && (double)W.vout < 232.0, "it regulates the loaded output to 230 V (%.1f V), no fault, nothing logged", (double)W.vout);
+    W.out_offset = 0.0;
+    /* 190 V in: below O/P LV 200 V: the normal order */
+    ma_start(1U, 190.0f); MApp_SetContactorFirst(&ma, 1U);
+    (void)ma_until(ma_c_run, 40000U);
+    CHECK(g_ctrl.state == CTRL_RUN && !ma_c_contactor(), "190 V in: the slave runs first, the contactor still open (the normal start)");
+    check_invariants("master control: contactor first, end to end");
+    printf("  contactor first end to end: closed with the real slave off, the slave started 1 s later under load, the normal order below O/P LV\n");
+}
+
+
 #if (SLAVE_INJ_GUARD != 0)
 /* ---- input steps while running: the guard protects the first moments, then the output must come back FAST and never stay stuck ---- */
 static double mc_back_within(double band_v, uint32_t limit_ms, uint16_t setv_dv)

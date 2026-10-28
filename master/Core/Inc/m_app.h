@@ -124,6 +124,7 @@ typedef struct
     uint8_t      clr_cnt, clr_synced;  /* the clear counter sent to the slave; synced to the slave's own on its first $E */
     uint8_t      lim_set;
     uint8_t      retries_cfg;
+    uint8_t      con_first_cfg;                    /* v0.9.64: contactor first (MApp_SetContactorFirst), given to the engine every step */
     uint8_t      k_id;                 /* the next $K id, 1..255 */
     uint8_t      tune_state, tune_id, tune_cmd, tune_due, tune_tx_n, tune_seen, tune_step, tune_result, tune_abort_sent;   /* the autotune: see m_app.c */
     uint8_t      tune_sl_state, tune_sl_wv, tune_sl_wait, tune_sl_fault;      /* what the slave is doing (its $S state, the start-up wait, its fault), shown on the tuning screen */
@@ -220,6 +221,7 @@ void    MApp_OnKResult(MApp_t *a, uint8_t id, uint8_t status, int32_t value); /*
 void    MApp_OnKResultPh(MApp_t *a, uint8_t ph, uint8_t id, uint8_t status, int32_t value);   /* v0.9.54: a $R on link ph (0 R, 1 Y, 2 B): only the Re-tune of that phase takes it from the Y and B links */
 uint8_t MApp_TakeYbHello(MApp_t *a, uint8_t i);
 void    MApp_SetCtFitted(MApp_t *a, uint8_t fitted);                          /* v0.9.60: 0 = no master CT: no CT load, no CT inrush backup, the Load Source item and the Load Calibration page hidden */                               /* v0.9.54: 1 once when the Y (0) or B (1) slave must be asked for its hello again (a Re-tune stored a new profile) */
+void MApp_SetContactorFirst(MApp_t *a, uint8_t on);   /* v0.9.64: 1 = close the contactor before the slaves start (MF_CF_BYPASS_MS, only with the input inside the O/P limits) */
 /* a Date or Time saved in Set-Mode: returns 1 once, with the value to write to the real-time clock (seconds are set to 0 by the glue) */
 uint8_t MApp_TakeClockSet(MApp_t *a, MDateTime_t *out);
 void    MApp_NoteFrameSent(MApp_t *a);          /* the glue calls this for every $M it sends (the diagnostics count them) */

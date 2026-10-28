@@ -27,6 +27,10 @@ extern "C" {
  * with the converter correcting tripped the hardware short-circuit comparators (F02) on every phase; the same load added after the start did not. The slave also ends a hold by itself (CTRL_LOAD_HOLD_MAX_MS). */
 #define MF_HOLD_LEAD_MS     150UL     /* the $M frame goes at once on a change: 150 ms is a margin for a few lost frames */
 #define MF_HOLD_AFTER_MS    500UL     /* the contactor's closing time and bounce, and the output measurement settling with the load on */
+/* v0.9.64, CONTACTOR FIRST (MFaults_t.con_first, the build switch MASTER_CONTACTOR_FIRST): a start whose input is inside the O/P limits closes the contactor FIRST with the
+ * slaves still off (their relays short the primary: the output is the input, no IGBT carries the load step), and tells them to run MF_CF_BYPASS_MS later. Outside the O/P
+ * limits the start is the normal one (regulate, then close). Asked for against F02 at the contactor's closing onto a load. */
+#define MF_CF_BYPASS_MS     1000UL
 #define MF_OP_HV_FAST_V     30U       /* an output this many volts ABOVE the O/P HV setting is cut without waiting for the Volt Cut Delay ... (30 since v0.9.26; it was 15: a variac step up passes straight through the series transformer and tripped it) */
 #define MF_OP_HV_FAST_MS    200UL     /* ... once it has lasted this long: the load must not sit on a gross over-voltage for the whole delay */
 #define MF_INV_OFF_MS       200UL     /* the contactor opens when the slave has not been RUNNING (state 2) for this long while the output is live: PWM off means the load must be off too */
@@ -93,6 +97,7 @@ typedef struct
     uint16_t left_s;                   /* seconds until the next automatic restart attempt (0 = none or not counting), for the screen */
     uint32_t t_enter, t_inband, t_on;
     uint32_t t_heat_trip[3];           /* when the last overheat trips happened */
+    uint8_t  cf;                       /* v0.9.64 contactor first: 0 = a normal start, 1 = contactor closed, slaves off (bypass), 2 = slaves told to run, contactor already closed */
 } MUnit_t;
 
 typedef struct
@@ -112,6 +117,7 @@ typedef struct
     uint8_t  buzzer;
     uint8_t  inited;
     uint8_t  max_retries;      /* inrush / power-stage retries before the latch: MF_RETRIES (3, the approved rule) or 0 = latch at the FIRST trip (commissioning a repaired power stage) */
+    uint8_t  con_first;        /* v0.9.64: 1 = contactor first (MF_CF_BYPASS_MS); MF_Init sets it to 0: the application applies it every step */
 } MFaults_t;
 
 /* power-up: the units start per the mode and restart mode */

@@ -139,7 +139,10 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
     {
         MUnit_t *un = &f->u[u]; uint8_t mask = pmask(f, u);
         Cause_t best = { 0U, 0U, 0U, 0U }; uint8_t have = 0U; uint8_t can_start = 1U;
-        const uint8_t live = (uint8_t)(un->st == (uint8_t)U_ON), energised = (uint8_t)((un->st == (uint8_t)U_ON) || (un->st == (uint8_t)U_STARTING));
+        uint8_t bypass;
+        if ((un->st != (uint8_t)U_STARTING) && (un->st != (uint8_t)U_ON)) un->cf = 0U;                  /* contactor first is only ever a phase of a start */
+        bypass = (uint8_t)((un->st == (uint8_t)U_STARTING) && (un->cf != 0U));                           /* v0.9.64: starting with the contactor already closed */
+        const uint8_t live = (uint8_t)((un->st == (uint8_t)U_ON) || (bypass != 0U)), energised = (uint8_t)((un->st == (uint8_t)U_ON) || (un->st == (uint8_t)U_STARTING));
 
         /* output limits and overload only count while the output is LIVE (the contactor closed) */
         for (p = 0U; p < 3U; p++)
@@ -169,7 +172,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             {   Cause_t c; classify_slave(ph->slave_fault, ph->vin_dv, s->set_v, &c); consider(&best, &have, c.type, c.cls, p, c.code); }
             if (ph->ct_peak != 0U) consider(&best, &have, MLOG_T_INRUSH, (uint8_t)FC_RETRY, p, 0U);
             /* the inverter is OFF but the load is still connected: whatever the reason (mains unstable, a slave that stopped without a fault code), the slave leaving RUNNING for MF_INV_OFF_MS opens the contactor */
-            if ((live != 0U) && (ph->state_valid != 0U) && (ph->slave_state != 2U))
+            if ((un->st == (uint8_t)U_ON) && (ph->state_valid != 0U) && (ph->slave_state != 2U))         /* not during a contactor-first start: the slaves are off or starting by design */
             {
                 if (f->st_bad[p] == 0U) { f->st_bad[p] = 1U; f->t_st_bad[p] = now; }
                 else if (age(now, f->t_st_bad[p]) >= MF_INV_OFF_MS) consider(&best, &have, MLOG_T_MAINS, (uint8_t)FC_VOLT, p, 0U);
@@ -240,6 +243,7 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             case U_STARTING:
             {
                 uint8_t all = 1U;
+                if ((un->cf == 1U) && (age(now, un->t_enter) >= MF_CF_BYPASS_MS)) un->cf = 2U;              /* v0.9.64: the load is on: now the slaves start */
                 for (p = 0U; p < 3U; p++) if (((mask & (1U << p)) != 0U) && (in->ph[p].in_band == 0U)) all = 0U;
                 if (all == 0U) un->inband_run = 0U;
                 else if (un->inband_run == 0U) { un->inband_run = 1U; un->t_inband = now; }
@@ -292,8 +296,15 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
             }
             if ((attempt != 0U) && (in->setmode == 0U))
             {
-                un->st = (uint8_t)U_STARTING; un->t_enter = now; un->inband_run = 0U; un->clr_owed = 1U;
+                un->st = (uint8_t)U_STARTING; un->t_enter = now; un->inband_run = 0U; un->clr_owed = 1U; un->cf = 0U;
                 for (p = 0U; p < 3U; p++) if ((mask & (1U << p)) != 0U) out->clr_pulse[p] = 1U;  /* the slaves latched their faults: the counter must change */
+                if (f->con_first != 0U)
+                {   /* v0.9.64 contactor first: only when the raw input may go to the load: every phase of the unit heard and inside the O/P limits */
+                    uint8_t ok = 1U;
+                    for (p = 0U; p < 3U; p++) if ((mask & (1U << p)) != 0U)
+                        if ((in->ph[p].link_ok == 0U) || (in->ph[p].vin_dv < (uint16_t)(s->op_lv * 10U)) || (in->ph[p].vin_dv > (uint16_t)(s->op_hv * 10U))) ok = 0U;
+                    if (ok != 0U) un->cf = 1U;
+                }
             }
         }
         if ((un->st == (uint8_t)U_STARTING) && (age(now, un->t_enter) >= MF_CLR_SETTLE_MS)) un->clr_owed = 0U;
@@ -303,16 +314,17 @@ void MF_Tick(MFaults_t *f, const MSettings_t *s, const MFIn_t *in, uint32_t now,
         for (p = 0U; p < 3U; p++)
         {
             if ((mask & (1U << p)) == 0U) continue;
-            out->run[p] = (uint8_t)((un->st == (uint8_t)U_STARTING) || (un->st == (uint8_t)U_ON));
-            /* v0.9.61: the duty is held steady while the contactor connects the load: from MF_HOLD_LEAD_MS before it closes (the in-band count nearly done) to MF_HOLD_AFTER_MS after */
-            if ((un->st == (uint8_t)U_STARTING) && (un->inband_run != 0U) && (age(now, un->t_inband) >= (MF_CLOSE_HOLD_MS - MF_HOLD_LEAD_MS))) out->hold[p] = 1U;
-            if ((un->st == (uint8_t)U_ON) && (age(now, un->t_on) < MF_HOLD_AFTER_MS)) out->hold[p] = 1U;
+            out->run[p] = (uint8_t)(((un->st == (uint8_t)U_STARTING) && (un->cf != 1U)) || (un->st == (uint8_t)U_ON));      /* v0.9.64: not during the contactor-first bypass */
+            /* v0.9.61: the duty is held steady while the contactor connects the load: from MF_HOLD_LEAD_MS before it closes (the in-band count nearly done) to MF_HOLD_AFTER_MS after.
+             * Not after a contactor-first start (cf != 0): the load was connected with the slaves off. */
+            if ((un->cf == 0U) && (un->st == (uint8_t)U_STARTING) && (un->inband_run != 0U) && (age(now, un->t_inband) >= (MF_CLOSE_HOLD_MS - MF_HOLD_LEAD_MS))) out->hold[p] = 1U;
+            if ((un->cf == 0U) && (un->st == (uint8_t)U_ON) && (age(now, un->t_on) < MF_HOLD_AFTER_MS)) out->hold[p] = 1U;
             if ((un->st == (uint8_t)U_FAULT) || (un->st == (uint8_t)U_LATCHED))
             {
                 if ((un->fphase == 3U) || (un->fphase == p)) out->fault[p] = un->ftype;
             }
         }
-        if (un->st == (uint8_t)U_ON)
+        if ((un->st == (uint8_t)U_ON) || ((un->st == (uint8_t)U_STARTING) && (un->cf != 0U)))     /* the state AFTER this tick: a trip in the bypass opens it at once */
         {   if (f->mode == (uint8_t)M_MODE_DOMESTIC) out->contactor[u] = 1U; else out->contactor[0] = 1U; }
     }
 

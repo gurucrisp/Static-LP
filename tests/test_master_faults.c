@@ -582,6 +582,74 @@ static void t_load_hold(void)
     printf("  load-connect hold: from %u ms before the contactor closes to %u ms after, per unit, never to a stopped slave\n", (unsigned)MF_HOLD_LEAD_MS, (unsigned)MF_HOLD_AFTER_MS);
 }
 
+/* v0.9.64: contactor first. With con_first and the input inside the O/P limits the contactor closes with the slaves off, they start MF_CF_BYPASS_MS later. */
+static void t_con_first(void)
+{
+    W_t w; uint32_t k; int32_t t_con = -1, t_run = -1, t_on = -1; int opened = 0, held = 0;
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    for (k = 0U; k < 200U; k++)
+    {
+        step(&w);
+        if (t_con < 0 && w.out.contactor[0]) t_con = (int32_t)(k * 100U);
+        if (t_run < 0 && w.out.run[0]) t_run = (int32_t)(k * 100U);
+        if (t_on < 0 && unit_st(&w, 0) == (int)U_ON) t_on = (int32_t)(k * 100U);
+        if (t_con >= 0 && !w.out.contactor[0]) opened++;
+        if (w.out.hold[0]) held++;
+    }
+    CHECK(t_con >= 0 && t_run >= 0 && t_run - t_con >= (int32_t)MF_CF_BYPASS_MS && t_run - t_con <= (int32_t)MF_CF_BYPASS_MS + 100, "input 200 V inside the O/P limits: the contactor closes FIRST, the slave is told to run %d ms later", (int)(t_run - t_con));
+    CHECK(t_on > t_run && opened == 0 && held == 0, "the unit reaches ON with the contactor closed the whole time (never re-opened), and no load-connect hold");
+    CHECK(w.n_log == 0 && w.out.shown == 0U, "nothing logged");
+    /* the slave not running during the bypass is not "Mains Unstable" */
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U; w.state_valid = 1U; w.slave_state = 0U;
+    for (k = 0U; k < 200U && !w.out.contactor[0]; k++) step(&w);
+    run_ms(&w, 900U);
+    CHECK(w.out.contactor[0] && !w.out.run[0] && w.n_log == 0, "in the bypass a stopped slave (state 0 for 0.9 s) trips nothing");
+    /* outside the O/P limits: the normal start */
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    for (k = 0U; k < 3U; k++) w.in.ph[k].vin_dv = 1900U;
+    t_con = t_run = -1;
+    for (k = 0U; k < 200U; k++) { step(&w); if (t_con < 0 && w.out.contactor[0]) t_con = (int32_t)(k * 100U); if (t_run < 0 && w.out.run[0]) t_run = (int32_t)(k * 100U); }
+    CHECK(t_run >= 0 && t_con > t_run + 1500, "input 190 V, below O/P LV 200 V: the normal start, regulate first, the contactor %d ms after run", (int)(t_con - t_run));
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U; w.in.ph[0].vin_dv = 2600U;
+    for (k = 0U; k < 200U && !w.out.run[0]; k++) step(&w);
+    CHECK(w.out.run[0] && !w.out.contactor[0], "input 260 V, above O/P HV 250 V: run first, contactor still open");
+    /* a trip in the bypass opens the contactor at once */
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    for (k = 0U; k < 200U && !w.out.contactor[0]; k++) step(&w);
+    w.in.ph[0].link_ok = 0U; step(&w);
+    CHECK(!w.out.contactor[0] && !w.out.run[0] && w.n_log == 1 && w.log[0].type == MLOG_T_LINK_LOST, "the link lost in the bypass: the contactor opens on that tick, logged as Slave Link Lost");
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    for (k = 0U; k < 200U && !w.out.contactor[0]; k++) step(&w);
+    w.in.ph[0].vout_dv = 2900U; run_ms(&w, 500U);
+    CHECK(!w.out.contactor[0] && w.n_log == 1 && w.log[0].type == MLOG_T_OP_HV, "the output limits apply in the bypass: 290 V out trips O/P HV at once (gross over-voltage)");
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    for (k = 0U; k < 200U && !w.out.contactor[0]; k++) step(&w);
+    press_stop(&w); CHECK(!w.out.contactor[0] && !w.out.run[0] && unit_st(&w, 0) == (int)U_OFF, "STOP in the bypass: open, off");
+    /* after a trip the restart is contactor first again */
+    world(&w, M_MODE_SINGLE, 1U, 1000U); w.f.con_first = 1U;
+    to_on(&w); run_ms(&w, 3000U); w.code[0] = 2U; run_ms(&w, 300U); w.code[0] = 0U;
+    CHECK(!w.out.contactor[0] && w.n_log == 1 && w.log[0].type == MLOG_T_INRUSH, "an Inrush while ON: open, logged");
+    for (k = 0U; k < 500U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0] && !w.out.run[0], "the retry 30 s later is contactor first too: closed with the slave off");
+    /* Industrial: one contactor, all three slaves off in the bypass; Domestic: per phase */
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U); w.f.con_first = 1U;
+    for (k = 0U; k < 400U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0] && !w.out.run[0] && !w.out.run[1] && !w.out.run[2], "Industrial: the contactor closes with R, Y and B off");
+    for (k = 0U; k < 400U && unit_st(&w, 0) != (int)U_ON; k++) step(&w);
+    CHECK(unit_st(&w, 0) == (int)U_ON && w.out.contactor[0] && w.out.run[0] && w.out.run[1] && w.out.run[2], "and reaches ON with all three running");
+    world(&w, M_MODE_INDUSTRIAL, 1U, 50000U); w.f.con_first = 1U; w.in.ph[2].vin_dv = 1900U;
+    for (k = 0U; k < 400U && !w.out.run[0]; k++) step(&w);
+    CHECK(w.out.run[0] && !w.out.contactor[0], "Industrial with B at 190 V: the normal start for the unit (every phase must be inside)");
+    world(&w, M_MODE_DOMESTIC, 1U, 50000U); w.f.con_first = 1U; w.in.ph[1].vin_dv = 1900U;
+    for (k = 0U; k < 400U && !(w.out.contactor[0] && w.out.contactor[2]); k++) step(&w);
+    CHECK(w.out.contactor[0] && w.out.contactor[2] && !w.out.run[0] && !w.out.run[2] && w.out.run[1] && !w.out.contactor[1], "Domestic: R and B close first with their slaves off, Y (190 V) runs first with its contactor open");
+    /* off: unchanged */
+    world(&w, M_MODE_SINGLE, 1U, 1000U);
+    for (k = 0U; k < 200U && !w.out.contactor[0]; k++) step(&w);
+    CHECK(w.out.contactor[0] && w.out.run[0], "con_first 0: the contactor only ever closes with the slave running (as before)");
+    printf("  contactor first: closed with the slaves off, they start 1 s later; only inside the O/P limits; trips, STOP, retries, Industrial, Domestic\n");
+}
+
 static uint32_t rs = 99U;
 static uint32_t rnd(void) { rs = (rs * 1664525U) + 1013904223U; return rs >> 8; }
 
@@ -591,7 +659,7 @@ static void t_fuzz(void)
     for (round = 0U; round < 60U; round++)
     {
         W_t w; uint32_t k; uint8_t was_latched[3] = { 0U, 0U, 0U }; uint8_t prev_run_state[3] = { 0U, 0U, 0U };
-        world(&w, (uint8_t)(rnd() % 3U), (uint8_t)(rnd() & 1U), rnd());
+        world(&w, (uint8_t)(rnd() % 3U), (uint8_t)(rnd() & 1U), rnd()); w.f.con_first = (uint8_t)(rnd() & 1U);
         w.s.phase_seq = (uint8_t)(rnd() & 1U); w.s.restart_time = (uint16_t)(1U + rnd() % 8U); w.s.volt_cut_delay = (uint8_t)(1U + rnd() % 6U);
         for (k = 0U; k < 20000U; k++)
         {
@@ -611,9 +679,11 @@ static void t_fuzz(void)
             if (ev == 11U) w.stuck[rnd() % 3U] = (uint8_t)((rnd() % 3U == 0U) ? (rnd() % 22U) : 0U);
             step(&w); ticks++;
             for (p = 0; p < 3; p++)
-            {   /* (a) a closed contactor means every phase of its unit is told to run */
-                if (w.out.contactor[p] && !w.out.run[p]) bad_con++;
-                if (w.f.mode == (uint8_t)M_MODE_INDUSTRIAL && w.out.contactor[0] && !(w.out.run[0] && w.out.run[1] && w.out.run[2])) bad_con++;
+            {   /* (a) a closed contactor means every phase of its unit is told to run, unless the unit is in a contactor-first bypass (v0.9.64) */
+                uint8_t bp = (uint8_t)((w.f.mode == (uint8_t)M_MODE_DOMESTIC) ? (w.f.u[p].st == (uint8_t)U_STARTING && w.f.u[p].cf == 1U) : (w.f.u[0].st == (uint8_t)U_STARTING && w.f.u[0].cf == 1U));
+                if (w.out.contactor[p] && !w.out.run[p] && !bp) bad_con++;
+                if (w.f.mode == (uint8_t)M_MODE_INDUSTRIAL && w.out.contactor[0] && !bp && !(w.out.run[0] && w.out.run[1] && w.out.run[2])) bad_con++;
+                if (bp && (w.out.run[p] || !w.f.con_first)) bad_con++;                                            /* and a bypass only exists with con_first, slaves off */
                 /* (b) nothing is energised or closed while Set-Mode is open */
                 if (w.in.setmode && (w.out.contactor[p] || w.out.run[p])) bad_set++;
                 /* (e) v0.9.61: the hold goes only to a slave that is told to run */
@@ -657,6 +727,7 @@ int main(void)
     t_setmode_and_stale();
     t_priority();
     t_load_hold();
+    t_con_first();
     t_fuzz();
     printf("  %d checks, %d failures\n  RESULT: %s\n", g_checks, g_fail, g_fail ? "FAILURES" : "ALL PASSED");
     return g_fail ? 1 : 0;
