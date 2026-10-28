@@ -74,6 +74,8 @@ void     SlaveZC_OnEdge(uint32_t now_us, uint8_t rising);
 
 /* Current TIM2 time in microseconds (wraps every ~71.6 minutes). */
 uint32_t SlaveZC_NowUs(void);
+void     SlaveZC_FltIrqFiltered(void);  /* v0.9.62: the FLT interrupt with the glitch filter (SLAVE_FLT_FILTER_US > 0), see slave_flt_filter.h */
+uint32_t SlaveZC_FltIgnored(void);      /* FLT spikes ignored by the filter since power-up */
 
 /* Microseconds since the latest edge of any kind; 0xFFFFFFFF if none yet. */
 uint32_t SlaveZC_AgeUs(void);

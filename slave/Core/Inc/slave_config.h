@@ -300,6 +300,10 @@
  * short-circuit comparators trip at about +-41 A peak (it was 108 A with 68 ohm). With 68 ohm resistors fitted put 68.0f back here. See docs/IOUT.md. */
 #define SLAVE_IOUT 1
 #define IOUT_BURDEN_R_EACH_OHM 180.0f
+/* v0.9.62: the FLT glitch filter (slave_flt_filter.h): the FLT interrupt shuts down only if FLT is STILL asserted this many microseconds after the edge; a shorter spike
+ * (noise: F02 came even when a heavy load nearby was switched) is ignored, more than 4 in one millisecond trip. A real short circuit is switched off this much later:
+ * 0 = off (the old behaviour), at most 2 (refused above). 1 us chosen with you; 2 only with gate-driver desaturation protection. NOT measured on the hardware. */
+#define SLAVE_FLT_FILTER_US 1U
 
 
 /* ======================= + TRANSFORMER AUTOTUNE WITH THE CONTROLLER'S TUNE MODE (v0.9.34) =======================

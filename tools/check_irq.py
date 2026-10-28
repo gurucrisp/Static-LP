@@ -3,7 +3,9 @@
 
  1. every HAL_NVIC_SetPriority call in slave/Core/Src names its priority with IRQ_PRIO_* (no bare numbers);
  2. the FLT interrupt (EXTI2_3_IRQn) is the ONLY one at IRQ_PRIO_FLT, and the header's levels are strictly ordered;
- 3. the FIRST statement of EXTI2_3_IRQHandler (stm32g0xx_it.c) is SlavePower_AllOffNow();
+ 3. the FIRST statement of EXTI2_3_IRQHandler (stm32g0xx_it.c) is SlavePower_AllOffNow(); OR (v0.9.62, the FLT glitch filter) it is SlaveZC_FltIrqFiltered(); under
+    #if (SLAVE_FLT_FILTER_US > 0U) ... with the plain SlavePower_AllOffNow(); first in its #else, and in slave_zc.c that function does nothing but wait, clear the edge
+    flags and read the pin before its judge, and SlavePower_AllOffNow(); is the statement right after the judge;
  4. the FIRST statement of SlaveCtrl_OnFltIrq (slave_ctrl.c) is SlavePower_AllOffNow();
 
 Exit code 0 = all fine. Run from anywhere: python3 tools/check_irq.py"""
@@ -70,7 +72,22 @@ if not any(irq == "EXTI2_3_IRQn" for _, irq, _ in calls):
 # 3 and 4: the first statement of the two FLT functions
 it = strip_comments(read(os.path.join(src, "stm32g0xx_it.c")))
 fs = first_statement(it, "EXTI2_3_IRQHandler")
-if fs != "SlavePower_AllOffNow();":
+if fs == "SlaveZC_FltIrqFiltered();":
+    m = re.search(r"void\s+EXTI2_3_IRQHandler\s*\(\s*void\s*\)\s*\{(.*?)\n\}", it, flags=re.S)
+    body = m.group(1) if m else ""
+    lines = [l.strip() for l in body.splitlines() if l.strip()]
+    ok = (len(lines) >= 5 and lines[0].startswith("#if (SLAVE_FLT_FILTER_US > 0U)") and lines[1] == "SlaveZC_FltIrqFiltered();" and lines[2] == "#else"
+          and lines[3] == "SlavePower_AllOffNow();")
+    if not ok:
+        problems.append("EXTI2_3_IRQHandler: the filtered form must be '#if (SLAVE_FLT_FILTER_US > 0U) ... SlaveZC_FltIrqFiltered(); #else SlavePower_AllOffNow(); ...'")
+    zc = strip_comments(read(os.path.join(src, "slave_zc.c")))
+    m = re.search(r"void\s+SlaveZC_FltIrqFiltered\s*\(\s*void\s*\)\s*\{(.*?)\n\}", zc, flags=re.S)
+    st = [x.strip() for x in (m.group(1) if m else "").split(";") if x.strip()]
+    allowed = ("const uint32_t cyc", "uint8_t asserted", "FltFilter_Wait(", "__HAL_GPIO_EXTI_CLEAR_FALLING_IT(", "__HAL_GPIO_EXTI_CLEAR_RISING_IT(", "asserted = ")
+    j = next((i for i, x in enumerate(st) if x.startswith("if (FltFilter_Judge(")), None)
+    if (m is None) or (j is None) or any(not x.startswith(allowed) for x in st[:j]) or (j + 1 >= len(st)) or (st[j + 1] != "SlavePower_AllOffNow()"):
+        problems.append("slave_zc.c SlaveZC_FltIrqFiltered: only the wait, the flag clears and the pin read before the judge, and SlavePower_AllOffNow(); right after it")
+elif fs != "SlavePower_AllOffNow();":
     problems.append("EXTI2_3_IRQHandler: the first statement is %r, expected 'SlavePower_AllOffNow();'" % fs)
 ct = strip_comments(read(os.path.join(src, "slave_ctrl.c")))
 fs2 = first_statement(ct, "SlaveCtrl_OnFltIrq")

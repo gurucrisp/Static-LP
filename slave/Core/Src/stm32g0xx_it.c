@@ -25,6 +25,8 @@
 #include "slave_ctrl.h"
 #endif
 #if (SLAVE_POWER_STAGE >= 1) || (BRINGUP_FLT_TEST != 0)
+#include "slave_zc.h"
+#include "slave_flt_filter.h"
 #include "slave_power.h"          /* the FLT handler calls SlavePower_AllOffNow(); the stage-0 FLT bench build needs it too */
 #endif
 
@@ -170,7 +172,11 @@ void EXTI2_3_IRQHandler(void)
 {
     /* FIRST, before the HAL handler and before any bookkeeping (decision D25): the CT over-current comparators arrive here, so every instruction before this line is
      * time during which the IGBTs keep carrying the fault current. Outputs off; the counting and the trip record follow in SlaveCtrl_OnFltIrq(). */
+#if (SLAVE_FLT_FILTER_US > 0U) && (SLAVE_POWER_STAGE >= 1) && (BRINGUP_FLT_TEST == 0)
+    SlaveZC_FltIrqFiltered();     /* v0.9.62: the glitch filter (slave_flt_filter.h): the shutdown comes SLAVE_FLT_FILTER_US later, only if FLT is still asserted */
+#else
     SlavePower_AllOffNow();
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_2);
+#endif
 }
 #endif

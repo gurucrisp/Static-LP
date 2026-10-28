@@ -14,6 +14,10 @@
 #if (SLAVE_POWER_STAGE >= 1)
 #include "slave_ctrl.h"
 #endif
+#include "slave_flt_filter.h"
+#if (SLAVE_FLT_FILTER_US > 0U) && (SLAVE_POWER_STAGE >= 1)
+#include "slave_power.h"
+#endif
 #if (SLAVE_SEQ_SYNC != 0)
 #include "slave_phase.h"           /* the phase sequence measurement (v0.9.51) */
 #endif
@@ -151,6 +155,29 @@ void SlaveZC_Init(void)
     HAL_NVIC_SetPriority(EXTI0_1_IRQn, IRQ_PRIO_TIMING, 0);
     HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
 }
+
+#if (SLAVE_FLT_FILTER_US > 0U) && (SLAVE_POWER_STAGE >= 1)
+/* v0.9.62, the FLT glitch filter (slave_flt_filter.h), called by EXTI2_3_IRQHandler INSTEAD of the plain shutdown when SLAVE_FLT_FILTER_US > 0.
+ * Wait the window on the CPU clock, clear the edge flags, THEN read the pin (an edge after the clear raises a new interrupt; one before it is seen by the read).
+ * Still asserted, or too many spikes in this millisecond: the outputs off at once and the normal FLT handling. Released: ignored. */
+static FltFilter_t s_fltf;
+static uint32_t flt_systick_val(void) { return SysTick->VAL; }
+uint32_t SlaveZC_FltIgnored(void) { return s_fltf.ignored; }
+void SlaveZC_FltIrqFiltered(void)
+{
+    const uint32_t cyc = (uint32_t)SLAVE_FLT_FILTER_US * (SystemCoreClock / 1000000U);
+    uint8_t asserted;
+    FltFilter_Wait(flt_systick_val, SysTick->LOAD + 1U, cyc, cyc + 16U);
+    __HAL_GPIO_EXTI_CLEAR_FALLING_IT(GPIO_PIN_2);
+    __HAL_GPIO_EXTI_CLEAR_RISING_IT(GPIO_PIN_2);
+    asserted = (uint8_t)(SlavePower_FltAsserted() | SlavePower_FltAsserted());
+    if (FltFilter_Judge(&s_fltf, asserted, HAL_GetTick()) == 0U) return;
+    SlavePower_AllOffNow();
+    SlaveCtrl_OnFltIrq();
+}
+#else
+uint32_t SlaveZC_FltIgnored(void) { return 0U; }
+#endif
 
 /* EXTI callbacks (called from HAL_GPIO_EXTI_IRQHandler, which
  * EXTI0_1_IRQHandler in stm32g0xx_it.c invokes). Keep these tiny. */
