@@ -7,6 +7,8 @@
     #if (SLAVE_FLT_FILTER_US > 0U) ... with the plain SlavePower_AllOffNow(); first in its #else, and in slave_zc.c that function does nothing but wait, clear the edge
     flags and read the pin before its judge, and SlavePower_AllOffNow(); is the statement right after the judge;
  4. the FIRST statement of SlaveCtrl_OnFltIrq (slave_ctrl.c) is the FLT shutdown;
+ 3b. (v0.9.66) with the cycle-by-cycle limit the handler is '#if CBC SlaveZC_FltIrqCbc(); #elif FILTER SlaveZC_FltIrqFiltered(); #else the shutdown', the CBC handler's first
+    statement is SlavePower_InverterForceOffNow(); and that function is exactly the two forced-inactive writes (TIM1, TIM15);
  5. (v0.9.65) the FLT shutdown is SlavePower_FltOffNow(): in slave_power.c, with SLAVE_FLT_KEEP_LOWS its first two statements force BOTH inverter channels inactive
     (TIM1 and TIM15 CCMR1, OC1M_2: high sides off at once, low sides on), then the converter off; without it, SlavePower_AllOffNow(); and SlavePower_InverterEnable()
     restores PWM mode 1 on both timers.
@@ -77,12 +79,32 @@ if not any(irq == "EXTI2_3_IRQn" for _, irq, _ in calls):
 SHUT = "SlavePower_FltOffNow();"
 it = strip_comments(read(os.path.join(src, "stm32g0xx_it.c")))
 fs = first_statement(it, "EXTI2_3_IRQHandler")
+if fs == "SlaveZC_FltIrqCbc();":
+    # v0.9.66: #if CBC -> SlaveZC_FltIrqCbc(); #elif FILTER -> SlaveZC_FltIrqFiltered(); #else the plain shutdown
+    m = re.search(r"void\s+EXTI2_3_IRQHandler\s*\(\s*void\s*\)\s*\{(.*?)\n\}", it, flags=re.S)
+    lines = [l.strip() for l in (m.group(1) if m else "").splitlines() if l.strip()]
+    ok = (len(lines) >= 7 and lines[0].startswith("#if (SLAVE_FLT_CBC != 0)") and lines[1] == "SlaveZC_FltIrqCbc();" and lines[2].startswith("#elif (SLAVE_FLT_FILTER_US > 0U)")
+          and lines[3] == "SlaveZC_FltIrqFiltered();" and lines[4] == "#else" and lines[5] == SHUT)
+    if not ok:
+        problems.append("EXTI2_3_IRQHandler: expected '#if (SLAVE_FLT_CBC != 0) SlaveZC_FltIrqCbc(); #elif (SLAVE_FLT_FILTER_US > 0U) SlaveZC_FltIrqFiltered(); #else %s ...'" % SHUT)
+    zc = strip_comments(read(os.path.join(src, "slave_zc.c")))
+    if first_statement(zc, "SlaveZC_FltIrqCbc") != "SlavePower_InverterForceOffNow();":
+        problems.append("slave_zc.c SlaveZC_FltIrqCbc: the first statement must be SlavePower_InverterForceOffNow(); (found %r)" % first_statement(zc, "SlaveZC_FltIrqCbc"))
+    pw0 = strip_comments(read(os.path.join(src, "slave_power.c")))
+    m = re.search(r"void\s+SlavePower_InverterForceOffNow\s*\(\s*void\s*\)\s*\{(.*?)\n\}", pw0, flags=re.S)
+    body = [l.strip() for l in (m.group(1) if m else "").splitlines() if l.strip()]
+    if body != ["TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;", "TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;"]:
+        problems.append("slave_power.c SlavePower_InverterForceOffNow: must be exactly the two forced-inactive writes (TIM1, TIM15), found %r" % body)
+    # and the filtered path inside it must still be right
+    fs = "SlaveZC_FltIrqFiltered();"
+    it_filtered_checked_by_cbc = True
 if fs == "SlaveZC_FltIrqFiltered();":
     m = re.search(r"void\s+EXTI2_3_IRQHandler\s*\(\s*void\s*\)\s*\{(.*?)\n\}", it, flags=re.S)
     body = m.group(1) if m else ""
     lines = [l.strip() for l in body.splitlines() if l.strip()]
     ok = (len(lines) >= 5 and lines[0].startswith("#if (SLAVE_FLT_FILTER_US > 0U)") and lines[1] == "SlaveZC_FltIrqFiltered();" and lines[2] == "#else"
           and lines[3] == SHUT)
+    ok = ok or ("it_filtered_checked_by_cbc" in globals())          # v0.9.66: the layout was checked above with the CBC branch first
     if not ok:
         problems.append("EXTI2_3_IRQHandler: the filtered form must be '#if (SLAVE_FLT_FILTER_US > 0U) ... SlaveZC_FltIrqFiltered(); #else %s ...'" % SHUT)
     zc = strip_comments(read(os.path.join(src, "slave_zc.c")))

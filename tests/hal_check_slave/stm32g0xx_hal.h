@@ -124,6 +124,7 @@ HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *htim);
 #define TIM_BDTR_MOE   0x8000U
 #define TIM_CR1_CEN    0x0001U
 #define TIM_DIER_BIE   0x0080U
+#define TIM_DIER_UIE   0x0001U
 #define TIM_EGR_UG     0x0001U
 #define TIM_SR_UIF     0x0001U
 #define TIM_SR_BIF     0x0080U

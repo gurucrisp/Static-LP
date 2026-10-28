@@ -15,7 +15,8 @@
 #include "slave_ctrl.h"
 #endif
 #include "slave_flt_filter.h"
-#if (SLAVE_FLT_FILTER_US > 0U) && (SLAVE_POWER_STAGE >= 1)
+#include "slave_flt_cbc.h"
+#if ((SLAVE_FLT_FILTER_US > 0U) || (SLAVE_FLT_CBC != 0)) && (SLAVE_POWER_STAGE >= 1)
 #include "slave_power.h"
 #endif
 #if (SLAVE_SEQ_SYNC != 0)
@@ -177,6 +178,29 @@ void SlaveZC_FltIrqFiltered(void)
 }
 #else
 uint32_t SlaveZC_FltIgnored(void) { return 0U; }
+#endif
+
+#if (SLAVE_FLT_CBC != 0) && (SLAVE_POWER_STAGE >= 1)
+/* v0.9.66, the cycle-by-cycle limit (slave_flt_cbc.h), called by EXTI2_3_IRQHandler INSTEAD of the plain shutdown when SLAVE_FLT_CBC is 1.
+ * FIRST the inverter PWM forced inactive (high sides off, low sides on), then the edge flags cleared, then the decision (limit, or the full FLT shutdown). */
+void SlaveZC_FltIrqCbc(void)
+{
+    SlavePower_InverterForceOffNow();
+    __HAL_GPIO_EXTI_CLEAR_FALLING_IT(GPIO_PIN_2);
+    __HAL_GPIO_EXTI_CLEAR_RISING_IT(GPIO_PIN_2);
+    SlaveCtrl_OnFltCbcIrq();
+}
+/* TIM1 update (a PWM period start): only while the limit is armed (TIM1 DIER UIE) */
+void SlaveZC_Tim1UpdateIrq(void)
+{
+    if (((TIM1->SR & TIM_SR_UIF) != 0U) && ((TIM1->DIER & TIM_DIER_UIE) != 0U))
+    {
+        TIM1->SR = ~TIM_SR_UIF;
+        SlaveCtrl_OnPwmPeriodIrq();
+    }
+}
+#else
+void SlaveZC_Tim1UpdateIrq(void) { }
 #endif
 
 /* EXTI callbacks (called from HAL_GPIO_EXTI_IRQHandler, which

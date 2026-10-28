@@ -362,6 +362,7 @@ uint8_t SlavePower_InverterEnable(void)
 
 void SlavePower_InverterDisable(void)
 {
+    TIM1->DIER &= ~TIM_DIER_UIE;                  /* v0.9.66: no cycle-by-cycle resume after the outputs are off */
     TIM1->CCR1  = 0U;
     TIM15->CCR1 = 0U;
     TIM1->BDTR  &= ~TIM_BDTR_MOE;
@@ -404,6 +405,29 @@ void SlavePower_FltOffNow(void)
 #else
     SlavePower_AllOffNow();
 #endif
+}
+
+void SlavePower_InverterForceOffNow(void)
+{
+    TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;     /* forced inactive: high side off now, low side on after the dead time */
+    TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;
+}
+
+void SlavePower_InverterResume(void)
+{
+    TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);     /* PWM mode 1 */
+    TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);
+}
+
+void SlavePower_CbcArm(void)
+{
+    TIM1->SR    = ~TIM_SR_UIF;                    /* only a period start AFTER the edge counts */
+    TIM1->DIER |= TIM_DIER_UIE;
+}
+
+void SlavePower_CbcDisarm(void)
+{
+    TIM1->DIER &= ~TIM_DIER_UIE;
 }
 
 uint32_t SlavePower_TakeBreakFlags(void)

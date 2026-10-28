@@ -478,6 +478,9 @@ void     SlaveCtrl_OnWatchdogIrq(void);                         /* TIM2 CC4: eve
 void     SlaveCtrl_OnSampleTick(void);                          /* TIM3 20 kHz: polarity guard */
 void     SlaveCtrl_OnBreakIrq(uint32_t power_break_flags);      /* TIM1 / TIM15 break     */
 void     SlaveCtrl_OnFltIrq(void);                              /* PD2 asserting edge     */
+void     SlaveCtrl_OnFltCbcIrq(void);                           /* v0.9.66: PD2 edge with the cycle-by-cycle limit (SLAVE_FLT_CBC); the PWM is already forced off */
+void     SlaveCtrl_OnPwmPeriodIrq(void);                        /* v0.9.66: TIM1 update while the limit is armed */
+uint32_t SlaveCtrl_CbcCount(void);                              /* v0.9.66: limited FLT edges since power-up (0 without SLAVE_FLT_CBC) */
 
 /* Pure helper, exposed for the host tests: which timer gets the duty. */
 void     SlaveCtrl_LegsFor(int8_t polarity, uint8_t boost, uint16_t duty,

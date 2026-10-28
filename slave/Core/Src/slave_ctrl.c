@@ -11,6 +11,10 @@
 #include <stddef.h>
 #include "slave_ctrl.h"
 #include "slave_flt_filter.h"         /* SLAVE_FLT_FILTER_US (v0.9.62) */
+#include "slave_flt_cbc.h"            /* SLAVE_FLT_CBC (v0.9.66) */
+#if (SLAVE_FLT_CBC != 0) && (SLAVE_FLT_FILTER_US > 0U)
+#error "SLAVE_FLT_CBC and SLAVE_FLT_FILTER_US together: choose one (the cycle-by-cycle limit already rides through short pulses)"
+#endif
 #include "link_v2.h"          /* LINKV2_FLAG_* for the $E frame */
 #include "slave_ctrl_hw.h"
 #include "slave_power.h"
@@ -433,6 +437,41 @@ void SlaveCtrl_OnBreakIrq(uint32_t flags)
         if (g_ctrl.isr_fault == 0U) g_ctrl.isr_fault = CF_BREAK;
     }
 }
+
+#if (SLAVE_FLT_CBC != 0)
+/* v0.9.66, the cycle-by-cycle limit (slave_flt_cbc.h). The FLT handler (SlaveZC_FltIrqCbc) has ALREADY forced the PWM inactive (SlavePower_InverterForceOffNow) when this runs.
+ * Only in RUN, with nothing else in progress, is it a limit; anywhere else, or too many, it is the full FLT shutdown. */
+static FltCbc_t s_cbc;
+uint32_t SlaveCtrl_CbcCount(void) { return s_cbc.total; }
+void SlaveCtrl_OnFltCbcIrq(void)
+{
+    if ((g_ctrl.state == CTRL_RUN) && (g_ctrl.run_allowed != 0U) && (g_ctrl.isr_fault == 0U) && (FltCbc_OnEdge(&s_cbc, CtrlHw_NowMs()) == FLT_CBC_LIMIT))
+    {
+        SlavePower_CbcArm();                                      /* resume at a PWM period start with FLT released */
+        return;
+    }
+    FltCbc_Reset(&s_cbc); SlavePower_CbcDisarm();
+    SlaveCtrl_OnFltIrq();                                         /* a real fault: F02, the low-sides-on unwinding */
+}
+/* TIM1 update (a PWM period start) while armed */
+void SlaveCtrl_OnPwmPeriodIrq(void)
+{
+    uint8_t r;
+    if ((g_ctrl.state != CTRL_RUN) || (g_ctrl.run_allowed == 0U) || (g_ctrl.isr_fault != 0U))
+    {   /* a stop or another fault meanwhile: that path owns the outputs (the low sides stay on until the inverter is disabled; the next enable restores the PWM) */
+        FltCbc_Reset(&s_cbc); SlavePower_CbcDisarm(); return;
+    }
+    r = FltCbc_OnPeriod(&s_cbc, SlavePower_FltAsserted());
+    if (r == FLT_CBC_HOLD) return;
+    SlavePower_CbcDisarm();
+    if (r == FLT_CBC_RESUME) SlavePower_InverterResume();
+    else                     SlaveCtrl_OnFltIrq();                /* held for FLT_CBC_MAX_HOLD periods: a real fault */
+}
+#else
+uint32_t SlaveCtrl_CbcCount(void) { return 0U; }
+void     SlaveCtrl_OnFltCbcIrq(void)    { SlaveCtrl_OnFltIrq(); }      /* no limit: every FLT edge is the full shutdown */
+void     SlaveCtrl_OnPwmPeriodIrq(void) { }
+#endif
 
 void SlaveCtrl_OnFltIrq(void)
 {
@@ -897,12 +936,16 @@ static uint8_t SelectedGood(void)
     return 0U;
 }
 
-#if (SLAVE_FLT_FILTER_US > 0U)
-/* v0.9.62: with the FLT glitch filter, the main loop's LEVEL check of FLT (a backup for an edge the interrupt did not see) must not take a single low reading
+#if (SLAVE_FLT_FILTER_US > 0U) || (SLAVE_FLT_CBC != 0)
+/* v0.9.62: with the FLT glitch filter (and v0.9.66 the cycle-by-cycle limit, which holds FLT asserted for up to 1 ms by design), the main loop's LEVEL check of FLT (a backup for an edge the interrupt did not see) must not take a single low reading
  * as F02 either: a noise burst read once bypassed the filter. FLT must read asserted on every pass for CTRL_FLT_POLL_CONFIRM_US. A real short circuit is the
  * interrupt's job (microseconds); this backup only waits a little longer. */
 #ifndef CTRL_FLT_POLL_CONFIRM_US
+#if (SLAVE_FLT_CBC != 0)
+#define CTRL_FLT_POLL_CONFIRM_US 2000U      /* longer than the limit's own hold (FLT_CBC_MAX_HOLD periods, 1 ms): the limit decides first */
+#else
 #define CTRL_FLT_POLL_CONFIRM_US 100U
+#endif
 #endif
 #define CTRL_FLT_POLL_STALE_US   10000U     /* readings further apart than this are not "consecutive passes": the count starts again */
 static uint8_t  s_flt_seen;
@@ -922,7 +965,7 @@ static uint16_t RunningChecks(uint32_t now_ms, uint32_t now_us, uint8_t relay_ex
 {
     if ((relay_expect == 1U) && (SlaveRelay_IsShorted() == 0U))           return CF_RELAY;
     if ((relay_expect == 2U) && (SlaveRelay_IsFree() == 0U))              return CF_RELAY;
-#if (SLAVE_FLT_FILTER_US > 0U)
+#if (SLAVE_FLT_FILTER_US > 0U) || (SLAVE_FLT_CBC != 0)
     if (FltLevelConfirmed(now_us) != 0U)                                  return CF_FLT;
 #else
     if (SlavePower_FltAsserted() != 0U)                                   return CF_FLT;
@@ -951,8 +994,11 @@ void SlaveCtrl_Init(void)
     g_ctrl.mode        = CTRL_ZC_UNKNOWN;
     g_ctrl.run_request = (uint8_t)(SLAVE_BENCH_AUTORUN != 0);       /* with master control SLAVE_BENCH_AUTORUN is 0: the master decides */
     s_mc_last_m_ms = CtrlHw_NowMs();                                 /* the link timeout runs from the start */
-#if (SLAVE_FLT_FILTER_US > 0U)
+#if (SLAVE_FLT_FILTER_US > 0U) || (SLAVE_FLT_CBC != 0)
     s_flt_seen = 0U;
+#endif
+#if (SLAVE_FLT_CBC != 0)
+    { uint8_t *c = (uint8_t *)&s_cbc; uint32_t j; for (j = 0U; j < (uint32_t)sizeof(s_cbc); j++) c[j] = 0U; }
 #endif
     s_mc_link_lost = 0U; s_mc_clr_valid = 0U; s_mc_clr = 0U; s_mc_setv_dv = 0U; s_mc_maxc_dv = 0U; s_hold_lvl = 0U; s_hold_since_ms = 0U;
 #if (TUNE_ENABLED != 0)

@@ -72,3 +72,7 @@ v0.9.63: the main loop's FLT LEVEL check (`RunningChecks`) is filtered too when 
 
 ## v0.9.65: the FLT response keeps the low sides on (`SLAVE_FLT_KEEP_LOWS`, 1 by default)
 The first statement of the FLT interrupt is `SlavePower_FltOffNow()`: TIM1 and TIM15 CCMR1 OC1M = 0100 (forced inactive): the high sides off at once, the low sides on after the dead time, so the primary stays shorted; then the converter off. The controller unwinds (shunts closed, then the inverter disabled), reporting F02 at once; `SlavePower_InverterEnable()` restores PWM mode 1. Before, everything went off at once and the primary was open under load for the relays' travel time. BKIN is unchanged (silicon all-off).
+
+
+## v0.9.66: the cycle-by-cycle limit (`SLAVE_FLT_CBC`, 0 by default)
+EXTI2_3 -> `SlaveZC_FltIrqCbc()`: first `SlavePower_InverterForceOffNow()` (TIM1/TIM15 forced inactive, the converter untouched), then `SlaveCtrl_OnFltCbcIrq()`: in RUN a limit (TIM1 update armed), else the full FLT shutdown. TIM1 update -> `SlaveZC_Tim1UpdateIrq()` -> `SlaveCtrl_OnPwmPeriodIrq()`: FLT released = PWM mode 1 again; asserted 20 period starts (1 ms) or more than 40 edges in 10 ms = the full shutdown (F02, low sides on). The main loop's level check waits 2 ms. Not with the glitch filter.

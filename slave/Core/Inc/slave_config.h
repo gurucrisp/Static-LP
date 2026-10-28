@@ -303,7 +303,12 @@
 /* v0.9.62: the FLT glitch filter (slave_flt_filter.h): the FLT interrupt shuts down only if FLT is STILL asserted this many microseconds after the edge; a shorter spike
  * (noise: F02 came even when a heavy load nearby was switched) is ignored, more than 4 in one millisecond trip. A real short circuit is switched off this much later:
  * 0 = off (the old behaviour), at most 2 (refused above). 1 us chosen with you; 2 only with gate-driver desaturation protection. NOT measured on the hardware. */
-#define SLAVE_FLT_FILTER_US 1U
+/* v0.9.66: 0. The gate drivers (TLP152) have no desaturation protection: every microsecond of filter is taken from the IGBTs' short-circuit margin. */
+#define SLAVE_FLT_FILTER_US 0U
+/* v0.9.66: the cycle-by-cycle limit (slave_flt_cbc.h), like a dsPIC's PWM fault input in current-limit mode: a FLT edge in RUN forces only the inverter PWM off (high sides off,
+ * low sides on), it resumes at the next PWM period start with FLT released; FLT held 1 ms, or more than 40 limited edges in 10 ms, is the full F02 shutdown. 0 = off.
+ * Not with SLAVE_FLT_FILTER_US (refused). NOT proven on hardware: scope the gate signals of one leg on a FLT pulse before relying on it. */
+#define SLAVE_FLT_CBC 0
 
 
 /* ======================= + TRANSFORMER AUTOTUNE WITH THE CONTROLLER'S TUNE MODE (v0.9.34) =======================

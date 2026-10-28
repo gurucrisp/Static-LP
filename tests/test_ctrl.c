@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+#include "slave_flt_cbc.h"      /* v0.9.66: FLT_CBC_* */
 #include "slave_ctrl.h"
 #include "slave_features.h"
 #if (SLAVE_VOLTAGE_CAL != 0)
@@ -202,7 +203,8 @@ void SlavePower_ConverterOffNow(void)
     if (diag != 0) { diag = 0; t_diag_off = sim_t; have_off_time = 1; }
 }
 static int inv_forced;
-void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; inv_forced = 0; leg1 = leg2 = 0; }
+static int cbc_armed;
+void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; inv_forced = 0; cbc_armed = 0; leg1 = leg2 = 0; }
 static void probe_shutdown(void)
 {
     if (probe_armed && !probe_taken)
@@ -218,6 +220,12 @@ void SlavePower_AllOffNow(void)
 }
 /* v0.9.65: the FLT shutdown. SLAVE_FLT_KEEP_LOWS: the PWM channels are FORCED inactive (high sides off, low sides on) until the next InverterEnable; the inverter stays enabled */
 static int n_fltoff; static long v_duty_forced;
+/* v0.9.66: the cycle-by-cycle limit's hardware */
+static int n_force_off, n_resume; static uint64_t next_pwm; static unsigned fs_tot, fs_forced;
+void SlavePower_InverterForceOffNow(void) { probe_shutdown(); if (inv_enabled) inv_forced = 1; n_force_off++; }
+void SlavePower_InverterResume(void)      { inv_forced = 0; n_resume++; }
+void SlavePower_CbcArm(void)              { cbc_armed = 1; next_pwm = sim_t + 50U - (sim_t % 50U); }      /* the next period start */
+void SlavePower_CbcDisarm(void)           { cbc_armed = 0; }
 void SlavePower_FltOffNow(void)
 {
 #if (SLAVE_FLT_KEEP_LOWS != 0)
@@ -318,7 +326,7 @@ uint8_t SlavePower_InverterEnable(void)
 void SlavePower_SetLegDuty(uint16_t l1, uint16_t l2)
 {
     n_setduty++;
-    if (inv_forced && (l1 || l2)) v_duty_forced++;            /* v0.9.65: a duty command while the FLT shutdown holds the PWM forced inactive */
+    if (inv_forced && (l1 || l2) && !((SLAVE_FLT_CBC != 0) && (g_ctrl.state == CTRL_RUN))) v_duty_forced++;     /* v0.9.65: a duty command while the FLT shutdown holds the PWM forced inactive (the v0.9.66 limit in RUN keeps regulating underneath) */
     leg1 = l1; leg2 = l2;
     if (!(l1 || l2)) t_duty_zero_last = sim_t;
     if (l1 || l2)
@@ -430,6 +438,7 @@ static void sim_run_until(uint64_t t_end)
         if (next_service < t_next)                 { t_next = next_service;      ev = 3; }
         if (next_meas < t_next)                    { t_next = next_meas;         ev = 4; }
         if (next_sample < t_next)                  { t_next = next_sample;       ev = 5; }
+        if (cbc_armed && next_pwm < t_next)        { t_next = next_pwm;          ev = 8; }
         if (ev < 0) { sim_t = t_end; return; }
 
         sim_t = t_next;
@@ -455,12 +464,15 @@ static void sim_run_until(uint64_t t_end)
                 double d = (double)((leg1 > leg2) ? leg1 : leg2);
                 d = (d > W.plant_dead) ? (d - W.plant_dead) : 0.0;          /* a pulse shorter than the dead time is NOT generated at all */
                 double inj = d * (W.plant_curve ? plant_g_of_vin((double)W.vin) : W.plant_gain);
+                if (fs_tot != 0U) inj *= 1.0 - (double)fs_forced / (double)fs_tot;      /* v0.9.66: no injection while the PWM is forced off */
                 W.vout = (float)((g_ctrl.boost ? W.vin + inj : W.vin - inj) + W.out_offset);
             }
+            fs_tot = 0U; fs_forced = 0U;
             next_meas += 10000; break;
-        case 5: sample_invariants(); next_sample += 100; break;
+        case 5: sample_invariants(); fs_tot++; if (inv_forced) fs_forced++; next_sample += 100; break;
         case 6: SlaveCtrl_OnSampleTick(); next_tick += 50; break;
         case 7: pf_armed = 0; SlaveCtrl_OnPredictOffIrq(); break;
+        case 8: next_pwm += 50; SlaveCtrl_OnPwmPeriodIrq(); break;          /* v0.9.66: TIM1 update while the cycle-by-cycle limit is armed */
         }
     }
 }
@@ -490,7 +502,7 @@ static void world_reset(uint64_t start_t)
     unctl_us = max_unctl_run_us = cur_unctl_run_us = 0; unctl_limit_us = 0;
     t_conv_first = t_inv_enable_first = t_free_cmd_first = t_first_duty = t_shorted_cmd_last = t_inv_disable_last = t_duty_zero_last = 0;
     diag = 0; have_off_time = 0; min_gap_us = 1000000; inv_enabled = 0; leg1 = leg2 = 0;
-    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0;
+    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0; cbc_armed = 0; n_force_off = n_resume = 0; fs_tot = fs_forced = 0U;
     v_both = v_dead = v_polarity = v_duty_disabled = v_duty_no_conv = v_two_legs = v_over_cap = v_leg_table = v_energised_not_running = 0;
     wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
     resync_crossings();
@@ -1315,6 +1327,7 @@ static void t_flt_filter_poll(void)
     printf("  FLT glitch filter, main-loop side: single noisy readings ignored, a held FLT trips, the interrupt path unchanged\n");
 }
 #endif
+
 
 /* "START but nothing happens": the SYNC state reports exactly which conditions are not met. */
 static void t_wait_reasons(void)
@@ -2292,6 +2305,58 @@ static L3Res_t l3_run(double secs, double settle)
     return r;
 }
 
+#if (SLAVE_FLT_CBC != 0) && defined(TEST_LEGACY_REG)
+/* v0.9.66: the cycle-by-cycle limit. cbc_edge() is what SlaveZC_FltIrqCbc does: the PWM forced off FIRST, then the decision */
+static void cbc_edge(void) { SlavePower_InverterForceOffNow(); SlaveCtrl_OnFltCbcIrq(); }
+static void cbc_pulse(uint64_t width_us) { W.flt = 1; cbc_edge(); run_for(width_us); W.flt = 0; }
+static void t_flt_cbc(void)
+{
+    int k; uint64_t t0, t_trip = 0;
+    /* a) one short pulse while regulating: the PWM off at once, back at the next period start, nothing else */
+    l3_world(190000000ULL, 215.0f); l3_wait_run(); (void)l3_run(12.0, 0.0);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.duty_counts > (uint16_t)POWER_DEADTIME_TICKS, "regulating first (CCR %u)", g_ctrl.duty_counts);
+    W.flt = 1; cbc_edge();
+    CHECK(inv_enabled && inv_forced && diag != 0 && cbc_armed && g_ctrl.state == CTRL_RUN, "a FLT edge: the PWM forced off at once (low sides on), the converter still running, the limit armed");
+    run_for(10); W.flt = 0; run_for(200);
+    CHECK(!inv_forced && !cbc_armed && g_ctrl.state == CTRL_RUN && g_ctrl.isr_fault == 0U && g_ctrl.fault == CF_NONE && SlaveCtrl_CbcCount() == 1U, "released: the PWM resumes at the next period start, still RUN, no fault (limited %u)", (unsigned)SlaveCtrl_CbcCount());
+    /* b) isolated pulses, one every 5 ms for 1 s (contactor bounce, nearby load switching): ridden through, it keeps regulating */
+    for (k = 0; k < 200; k++) { cbc_pulse(20); run_for(4980); }
+    (void)l3_run(2.0, 0.0);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && fabs((double)W.vout - 230.0) < 2.5, "200 isolated pulses in 1 s: still RUN, no fault, the output at %.1f V", (double)W.vout);
+    CHECK(SlaveCtrl_CbcCount() == 201U && n_resume >= 201, "every one limited and resumed (limited %u, resumed %d)", (unsigned)SlaveCtrl_CbcCount(), n_resume);
+    /* e) FLT low for 0.6 ms (12 periods, under the 1 ms hold): no trip, not even by the main loop's level check */
+    W.flt = 1; cbc_edge(); run_for(600); W.flt = 0; run_for(5000);
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && !inv_forced, "FLT held 0.6 ms: held off, then resumed; the main loop's check (2 ms) did not trip it");
+    check_invariants("cycle-by-cycle: pulses ridden through");
+    /* c) FLT held: after FLT_CBC_MAX_HOLD period starts (1 ms) it is a real fault: F02 with the low-sides-on unwinding */
+    t0 = sim_t; W.flt = 1; cbc_edge();
+    while (sim_t < t0 + 5000ULL) { run_for(10); if (t_trip == 0 && (g_ctrl.isr_fault != 0U || g_ctrl.state != CTRL_RUN)) t_trip = sim_t - t0; }
+    CHECK(t_trip >= 900ULL && t_trip <= 1300ULL, "FLT held: the full shutdown after %llu us (about 1 ms: %u periods)", (unsigned long long)t_trip, (unsigned)FLT_CBC_MAX_HOLD);
+    CHECK(flt_outputs_safe(), "and the outputs are safe (converter off, low sides on)");
+    run_for(FLT_UNWIND_US); W.flt = 0;
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "F02 (%d/%d)", g_ctrl.state, g_ctrl.fault);
+    check_invariants("cycle-by-cycle: held");
+    /* d) chatter: more than FLT_CBC_MAX_EVENTS limited edges in 10 ms is a real fault */
+    l3_world(191000000ULL, 215.0f); l3_wait_run(); (void)l3_run(6.0, 0.0);
+    for (k = 0; k < (int)FLT_CBC_MAX_EVENTS; k++) { cbc_pulse(10); run_for(173); }        /* 183 us apart: not locked to the simulated 200 us main loop */
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.isr_fault == 0U, "%u limited edges in 7.3 ms: still limiting", (unsigned)FLT_CBC_MAX_EVENTS);
+    cbc_pulse(10); run_for(2000);
+    CHECK(g_ctrl.state != CTRL_RUN && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT, "the next one in the same 10 ms: F02 (state %d)", g_ctrl.state);
+    run_for(FLT_UNWIND_US);
+    check_invariants("cycle-by-cycle: chatter");
+    /* f) outside RUN a FLT edge is the full shutdown at once */
+    world_reset(192000000ULL);
+    { uint64_t tw = sim_t; while (!is_running() && sim_t < tw + 20000000ULL) run_for(1000); }
+    CHECK(is_running() && g_ctrl.state != CTRL_RUN, "starting (state %d)", g_ctrl.state);
+    W.flt = 1; cbc_edge(); run_for(2000); W.flt = 0;
+    CHECK(!cbc_armed && g_ctrl.state != CTRL_RUN && (g_ctrl.state == CTRL_RESHUNT || g_ctrl.state == CTRL_FAULT), "a FLT edge during the start: the full shutdown, no limit (state %d)", g_ctrl.state);
+    run_for(FLT_UNWIND_US);
+    CHECK(g_ctrl.fault == CF_FLT, "F02 (fault %d)", g_ctrl.fault);
+    check_invariants("cycle-by-cycle: outside RUN");
+    printf("  cycle-by-cycle limit: a pulse turns the PWM off for one period, 200 pulses in 1 s ridden through, FLT held 1 ms or chattering = F02, outside RUN = F02 at once\n");
+}
+#endif
+
 /* the regulator word the link sends in diag2 (bit 12 = 1, bit 11 boost, bit 10 at the cap, bits 9..0 = effective ticks / 4) */
 static int      rw_valid(uint16_t w) { return (w & 0xF000U) == 0x1000U; }
 static unsigned rw_eff(uint16_t w)   { return (unsigned)(w & 0x03FFU) * 4U; }
@@ -2709,6 +2774,9 @@ int main(void)
     run_isolated(t_zc_stale_code,             "main-loop backup -> own fault code");
     run_isolated(t_guard_noise_immunity,      "polarity guard: ignores one bad sample, trips on a sustained one");
     run_isolated(t_fault_context,             "fault context byte (state, mode, FLT/BKIN levels)");
+#if (SLAVE_FLT_CBC != 0) && defined(TEST_LEGACY_REG)
+    run_isolated(t_flt_cbc,                   "flt cbc: the cycle-by-cycle limit (v0.9.66)");
+#endif
 #if (SLAVE_FLT_FILTER_US > 0U)
     run_isolated(t_flt_filter_poll,           "flt filter: the main-loop FLT check (v0.9.62)");
 #endif

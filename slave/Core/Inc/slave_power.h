@@ -104,6 +104,15 @@ void SlavePower_AllOffNow(void);
  * SlavePower_InverterEnable() restores the PWM mode at the next start. SLAVE_FLT_KEEP_LOWS 0: SlavePower_AllOffNow(). */
 void SlavePower_FltOffNow(void);
 
+/* v0.9.66, the cycle-by-cycle limit (SLAVE_FLT_CBC, slave_flt_cbc.h). ISR-SAFE.
+ * InverterForceOffNow: both inverter channels forced inactive (high sides off, low sides on); the converter is NOT touched. The first statement of the CBC FLT handler.
+ * InverterResume:      PWM mode 1 again (the duty registers were never changed).
+ * CbcArm / CbcDisarm:  the TIM1 update interrupt (every PWM period start) on / off: it calls SlaveCtrl_OnPwmPeriodIrq() while armed. */
+void SlavePower_InverterForceOffNow(void);
+void SlavePower_InverterResume(void);
+void SlavePower_CbcArm(void);
+void SlavePower_CbcDisarm(void);
+
 /* ISR-SAFE. Both converter diagonals off (all four converter pins low). */
 void SlavePower_ConverterOffNow(void);
 
