@@ -175,7 +175,7 @@ void EXTI2_3_IRQHandler(void)
 #if (SLAVE_FLT_FILTER_US > 0U) && (SLAVE_POWER_STAGE >= 1) && (BRINGUP_FLT_TEST == 0)
     SlaveZC_FltIrqFiltered();     /* v0.9.62: the glitch filter (slave_flt_filter.h): the shutdown comes SLAVE_FLT_FILTER_US later, only if FLT is still asserted */
 #else
-    SlavePower_AllOffNow();
+    SlavePower_FltOffNow();
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_2);
 #endif
 }

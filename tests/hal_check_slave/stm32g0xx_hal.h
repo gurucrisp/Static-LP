@@ -90,7 +90,7 @@ typedef struct { void *Instance; uint32_t dummy[16]; } ADC_HandleTypeDef;
 #define UART_RXFIFO_THRESHOLD_1_8 0U
 #define RCC_CSR_WWDGRSTF 0x40000000U
 #define RCC_CSR_PWRRSTF 0x08000000U
-typedef enum { EXTI0_1_IRQn = 5, USART1_IRQn = 27, TIM1_BRK_UP_TRG_COM_IRQn = 13, DMA1_Channel1_IRQn = 9 } IRQn_Type;
+typedef enum { EXTI0_1_IRQn = 5, EXTI2_3_IRQn = 6, USART1_IRQn = 27, TIM1_BRK_UP_TRG_COM_IRQn = 13, DMA1_Channel1_IRQn = 9, TIM15_IRQn = 20 } IRQn_Type;
 #define __HAL_RCC_TIM2_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_TIM1_CLK_ENABLE() ((void)0)
 extern UART_HandleTypeDef huart1;
@@ -107,4 +107,53 @@ HAL_StatusTypeDef HAL_TIM_Base_Init(TIM_HandleTypeDef *htim);
 HAL_StatusTypeDef HAL_TIM_Base_Start(TIM_HandleTypeDef *htim);
 #define __HAL_GPIO_EXTI_CLEAR_RISING_IT(pin) ((void)(pin))
 #define __HAL_GPIO_EXTI_CLEAR_FALLING_IT(pin) ((void)(pin))
+/* v0.9.65: what slave_power.c uses (the inverter timers TIM1 / TIM15), so it is compile-checked too. The CCMR1 / CCER / BDTR / SR bit values are the STM32G0's. */
+#define TIM15 ((TIM_TypeDef *)0x40014000UL)
+#define GPIO_MODE_AF_PP 2U
+#define GPIO_MODE_IT_FALLING 0x10210000U
+#define GPIO_SPEED_FREQ_VERY_HIGH 3U
+#define GPIO_AF2_TIM1 2U
+#define GPIO_AF5_TIM15 5U
+#define TIM_CCMR1_OC1M   0x00010070U
+#define TIM_CCMR1_OC1M_0 0x00000010U
+#define TIM_CCMR1_OC1M_1 0x00000020U
+#define TIM_CCMR1_OC1M_2 0x00000040U
+#define TIM_CCMR1_OC1M_3 0x00010000U
+#define TIM_CCER_CC1E  0x0001U
+#define TIM_CCER_CC1NE 0x0004U
+#define TIM_BDTR_MOE   0x8000U
+#define TIM_CR1_CEN    0x0001U
+#define TIM_DIER_BIE   0x0080U
+#define TIM_EGR_UG     0x0001U
+#define TIM_SR_UIF     0x0001U
+#define TIM_SR_BIF     0x0080U
+#define TIM_CHANNEL_1 0U
+#define TIM_CLOCKSOURCE_INTERNAL 0x1000U
+#define TIM_TRGO_RESET 0U
+#define TIM_MASTERSLAVEMODE_DISABLE 0U
+#define TIM_OCMODE_PWM1 0x60U
+#define TIM_OCPOLARITY_HIGH 0U
+#define TIM_OCNPOLARITY_HIGH 0U
+#define TIM_OCFAST_DISABLE 0U
+#define TIM_OCIDLESTATE_RESET 0U
+#define TIM_OCNIDLESTATE_RESET 0U
+#define TIM_OSSR_ENABLE 0x0800U
+#define TIM_OSSI_ENABLE 0x0400U
+#define TIM_LOCKLEVEL_OFF 0U
+#define TIM_BREAK_ENABLE 0x1000U
+#define TIM_BREAKPOLARITY_LOW 0U
+#define TIM_BREAK2_DISABLE 0U
+#define TIM_BREAK2POLARITY_LOW 0U
+#define TIM_AUTOMATICOUTPUT_DISABLE 0U
+typedef struct { uint32_t ClockSource, ClockPolarity, ClockPrescaler, ClockFilter; } TIM_ClockConfigTypeDef;
+typedef struct { uint32_t MasterOutputTrigger, MasterOutputTrigger2, MasterSlaveMode; } TIM_MasterConfigTypeDef;
+typedef struct { uint32_t OCMode, Pulse, OCPolarity, OCNPolarity, OCFastMode, OCIdleState, OCNIdleState; } TIM_OC_InitTypeDef;
+typedef struct { uint32_t OffStateRunMode, OffStateIDLEMode, LockLevel, DeadTime, BreakState, BreakPolarity, BreakFilter, BreakAFMode, Break2State, Break2Polarity, Break2Filter, Break2AFMode, AutomaticOutput; } TIM_BreakDeadTimeConfigTypeDef;
+#define __HAL_RCC_TIM15_CLK_ENABLE() ((void)0)
+void __enable_irq(void);
+HAL_StatusTypeDef HAL_TIM_PWM_Init(TIM_HandleTypeDef *htim);
+HAL_StatusTypeDef HAL_TIM_ConfigClockSource(TIM_HandleTypeDef *htim, TIM_ClockConfigTypeDef *cfg);
+HAL_StatusTypeDef HAL_TIMEx_MasterConfigSynchronization(TIM_HandleTypeDef *htim, TIM_MasterConfigTypeDef *cfg);
+HAL_StatusTypeDef HAL_TIM_PWM_ConfigChannel(TIM_HandleTypeDef *htim, TIM_OC_InitTypeDef *cfg, uint32_t ch);
+HAL_StatusTypeDef HAL_TIMEx_ConfigBreakDeadTime(TIM_HandleTypeDef *htim, TIM_BreakDeadTimeConfigTypeDef *cfg);
 #endif

@@ -1,3 +1,5 @@
+> **v0.9.65.** The FLT (CT comparator) response no longer switches the low sides off: high sides off, low sides on, shunts closed, then the inverter disabled (`SLAVE_FLT_KEEP_LOWS`). The open-primary window after a fault below now applies to the break input (BKIN) only.
+
 > **CORRECTION 2 (v0.6.7).** Rule R3 below (never leave the primary open and uncontrolled) is CONFIRMED by the old firmware, but not the way I implemented it: the old firmware keeps the inverter LOW sides ON
 > (zero duty) from boot until the converter's second diagonal, shorting the primary, and it runs its relay sequence (SH pulse, then W on = nets open) underneath that. v0.2.0 removed that state (I treated 1L / 2L
 > glowing as a defect) and every converter start with W on then tripped. The measured relay contacts: W-RLY normally closed, SH-RLY normally open (continuity with both off, none with W on / SH off).

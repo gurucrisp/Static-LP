@@ -436,7 +436,7 @@ void SlaveCtrl_OnBreakIrq(uint32_t flags)
 
 void SlaveCtrl_OnFltIrq(void)
 {
-    SlavePower_AllOffNow();       /* FIRST (decision D25). On the target EXTI2_3_IRQHandler has already done it: the second call is harmless and costs nothing that matters. */
+    SlavePower_FltOffNow();       /* FIRST (decision D25). On the target EXTI2_3_IRQHandler has already done it: the second call is harmless and costs nothing that matters. v0.9.65: high sides off, low sides on */
     if ((g_ctrl.run_allowed != 0U) || (g_ctrl.isr_fault != 0U)) { if (g_ctrl.flt_run  < 31U) g_ctrl.flt_run++;  }
     else                                                        { if (g_ctrl.flt_idle < 31U) g_ctrl.flt_idle++; }
     if (g_ctrl.run_allowed != 0U) CaptureTrip();                /* reads only a timer count and two controller fields: independent of the output stage */
@@ -748,7 +748,7 @@ static uint16_t s_resh_fault;            /* fault to report once the shunts have
 /* Overcurrent-class faults: everything is switched off AT ONCE (the hardware has already done so for break / FLT). */
 static uint8_t IsHardFault(uint16_t code)
 {
-    return (uint8_t)((code == CF_BREAK) || (code == CF_FLT) || (code == CF_RELAY));
+    return (uint8_t)((code == CF_BREAK) || ((code == CF_FLT) && (SLAVE_FLT_KEEP_LOWS == 0)) || (code == CF_RELAY));      /* v0.9.65: FLT unwinds with the low sides on */
 }
 
 /* Duty to zero NOW (low sides on, primary shorted by the IGBTs) and no further duty until the shunts are open again. */
@@ -846,6 +846,11 @@ static void EnterFault(uint16_t code, uint32_t now_ms)
         return;
     }
 
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    /* v0.9.65: FLT has forced the high sides off with the low sides ON (or the main loop saw it): the low sides hold the primary shorted while the shunts close.
+     * The FLT interrupt has cleared inv_active, so the legacy condition below would not unwind it. */
+    if ((code == CF_FLT) && (SlavePower_InverterIsEnabled() != 0U)) { BeginReshunt(code, now_ms); return; }
+#endif
     /* Keep the primary controlled while the shunts close, unless this is an overcurrent-class fault or the
      * shunts are already closed / the inverter is not enabled (nothing to unwind). */
 #if (SLAVE_RELAYS_MODE == 2)
@@ -1101,7 +1106,7 @@ uint8_t SlaveCtrl_LinkState(void)
         case CTRL_RECT:
         case CTRL_INV_START:
         case CTRL_UNSHUNT:
-        case CTRL_RESHUNT:   return 1U;
+        case CTRL_RESHUNT:   return (s_resh_fault != 0U) ? 3U : 1U;     /* v0.9.65: unwinding BECAUSE of a fault (FLT now unwinds with the low sides on): report it at once */
         case CTRL_RUN:       return 2U;
         default:             return 3U;     /* FAULT, LATCHED */
     }
@@ -1119,6 +1124,7 @@ uint8_t SlaveCtrl_FaultContext(void)
 
 uint16_t SlaveCtrl_FaultCode(void)
 {
+    if ((g_ctrl.state == CTRL_RESHUNT) && (s_resh_fault != 0U)) return s_resh_fault;      /* v0.9.65: the fault being unwound */
     return ((g_ctrl.state == CTRL_FAULT) || (g_ctrl.state == CTRL_LATCHED)) ? g_ctrl.fault : 0U;
 }
 

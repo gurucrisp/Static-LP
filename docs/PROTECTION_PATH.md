@@ -68,3 +68,7 @@ With `SLAVE_INJ_GUARD 0` the same test fails all eight reversals. The master's v
 `EXTI2_3_IRQHandler` -> `SlaveZC_FltIrqFiltered()`: wait the window on SysTick (iteration cap), clear the EXTI flags, read FLT twice; asserted -> `SlavePower_AllOffNow()` then `SlaveCtrl_OnFltIrq()`; released -> ignored (more than 4 in one millisecond -> trip). 0 = the plain path. Above 2 us refused. It adds the window to the shutdown time of a real short circuit: measure the total with the SCOPE config above. Reason: F02 from noise (a nearby load switched) with 1k / 1 nF on FLT.
 
 v0.9.63: the main loop's FLT LEVEL check (`RunningChecks`) is filtered too when the filter is on: FLT asserted on consecutive passes for `CTRL_FLT_POLL_CONFIRM_US` (100 us; readings more than 10 ms apart do not add up). v0.9.62 had missed it: one noisy reading there was still F02.
+
+
+## v0.9.65: the FLT response keeps the low sides on (`SLAVE_FLT_KEEP_LOWS`, 1 by default)
+The first statement of the FLT interrupt is `SlavePower_FltOffNow()`: TIM1 and TIM15 CCMR1 OC1M = 0100 (forced inactive): the high sides off at once, the low sides on after the dead time, so the primary stays shorted; then the converter off. The controller unwinds (shunts closed, then the inverter disabled), reporting F02 at once; `SlavePower_InverterEnable()` restores PWM mode 1. Before, everything went off at once and the primary was open under load for the relays' travel time. BKIN is unchanged (silicon all-off).

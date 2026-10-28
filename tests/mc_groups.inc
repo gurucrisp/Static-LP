@@ -94,7 +94,13 @@ static void t_mc_fault_latches(void)
     energised = n_energise;
     SlaveCtrl_OnFltIrq();
     run_for(50000);
-    CHECK(g_ctrl.state == CTRL_LATCHED, "a fault latches AT ONCE (state %d): no retry timer, no escalation count", g_ctrl.state);
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    CHECK(g_ctrl.state == CTRL_RESHUNT && inv_enabled && inv_forced && leg1 == 0 && leg2 == 0, "v0.9.65: FLT unwinds first: the low sides keep the primary shorted while the shunts close (state %d, inverter %d, forced %d)", g_ctrl.state, inv_enabled, inv_forced);
+    CHECK(SlaveCtrl_LinkState() == 3U && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT, "and the master is told at once: link state 3, fault %u", (unsigned)SlaveCtrl_FaultCode());
+    mc_for(1000U, 1U, 2300U, 5U, 300U);
+    CHECK(!inv_enabled, "the inverter is disabled once the shunts have closed");
+#endif
+    CHECK(g_ctrl.state == CTRL_LATCHED, "a fault latches without a retry timer or an escalation count (state %d)", g_ctrl.state);
     CHECK(g_ctrl.fault == CF_FLT && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT && SlaveCtrl_LinkState() == 3U, "the fault code is reported (fault %d, link state %u)", g_ctrl.fault, (unsigned)SlaveCtrl_LinkState());
     CHECK((SlaveCtrl_Flags2() & LINKV2_FLAG_FAULT_LATCHED) != 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_IN_BAND) == 0U, "FAULT_LATCHED is set, IN_BAND is not (flags2 0x%04X)", (unsigned)SlaveCtrl_Flags2());
     for (k = 0; k < 3; k++)
@@ -110,7 +116,7 @@ static void t_mc_clear_counter(void)
 {
     uint32_t t; int energised;
     mc_to_run_settled(224000000ULL, 225.0f, 2300U, 5U);
-    SlaveCtrl_OnFltIrq(); run_for(50000);
+    SlaveCtrl_OnFltIrq(); mc_for(1000U, 1U, 2300U, 5U, 300U);      /* v0.9.65: the unwinding comes first */
     CHECK(g_ctrl.state == CTRL_LATCHED, "latched");
     mc_for(2000U, 1U, 2300U, 5U, 300U);
     CHECK(g_ctrl.state == CTRL_LATCHED, "the SAME counter again is not a clear");
@@ -121,7 +127,7 @@ static void t_mc_clear_counter(void)
     CHECK(g_ctrl.state == CTRL_RUN, "with run = 1 it starts again after the clear (state %d after %u ms)", g_ctrl.state, (unsigned)t);
     /* a second fault: repeating the new counter does not clear it, the next change does, and run = 0 keeps it off */
     mc_for(8000U, 1U, 2300U, 6U, 300U);
-    SlaveCtrl_OnFltIrq(); run_for(50000);
+    SlaveCtrl_OnFltIrq(); mc_for(1000U, 1U, 2300U, 6U, 300U);
     CHECK(g_ctrl.state == CTRL_LATCHED, "latched again");
     mc_for(3000U, 1U, 2300U, 6U, 300U);
     CHECK(g_ctrl.state == CTRL_LATCHED, "the counter the slave has already seen does not clear a NEW fault");
@@ -389,7 +395,7 @@ static void t_mc_master_logic(void)
     CHECK(SlaveCtrl_SetvDv() == 2400U && (double)W.vout > 238.5, "a change while running is not adopted (the slave keeps regulating to 240 V)");
     /* a trip: Auto clears it by itself */
     mm_s.set_v = 240U;
-    SlaveCtrl_OnFltIrq(); run_for(100000);
+    SlaveCtrl_OnFltIrq(); for (k = 0U; k < 10U; k++) (void)mm_tick(0U, 0U, 0U);      /* v0.9.65: latched once the shunts have closed */
     CHECK(g_ctrl.state == CTRL_LATCHED, "a hardware trip latches the slave");
     { int c0 = mm_clr_changes; t = mm_until_run(90000U, 0U);
       CHECK(g_ctrl.state == CTRL_RUN && mm_clr_changes > c0, "Auto: the master changes the clear counter and the slave runs again by itself (RUN after %u ms, %d clear changes)", (unsigned)t, mm_clr_changes - c0); }

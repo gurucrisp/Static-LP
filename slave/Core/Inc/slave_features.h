@@ -118,6 +118,13 @@
 #ifndef SLAVE_GLITCH_SKIP
 #define SLAVE_GLITCH_SKIP      0
 #endif
+/* v0.9.65: on FLT (the CT over-current comparators) force the inverter's HIGH sides off and keep its LOW sides on (the transformer primary stays shorted, rule R3),
+ * the converter off; the shunts close and only THEN is the inverter disabled (the soft-fault unwinding). 0 = the old response: everything off at once, which leaves the
+ * primary OPEN under load current for the relays' travel time (the load current is then forced into the DC link through the IGBT diodes). The break input (BKIN) is
+ * unchanged: the silicon switches everything off. */
+#ifndef SLAVE_FLT_KEEP_LOWS
+#define SLAVE_FLT_KEEP_LOWS    1
+#endif
 #ifndef SLAVE_INJ_GUARD
 #define SLAVE_INJ_GUARD        1
 #endif
@@ -130,7 +137,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       964UL
+#define SLAVE_FW_VERSION       965UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

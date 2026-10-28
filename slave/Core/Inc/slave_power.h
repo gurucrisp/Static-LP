@@ -99,6 +99,11 @@ void SlavePower_FltInit(void);
  * (MOE off -> all four inverter gate inputs low). Idempotent. */
 void SlavePower_AllOffNow(void);
 
+/* ISR-SAFE. v0.9.65, the FLT response (the FIRST statement of the FLT interrupt). SLAVE_FLT_KEEP_LOWS 1: both inverter channels FORCED INACTIVE (high sides off at
+ * once, low sides on after the dead time: the primary stays shorted), then the converter off; the inverter stays enabled until the shunts have closed and
+ * SlavePower_InverterEnable() restores the PWM mode at the next start. SLAVE_FLT_KEEP_LOWS 0: SlavePower_AllOffNow(). */
+void SlavePower_FltOffNow(void);
+
 /* ISR-SAFE. Both converter diagonals off (all four converter pins low). */
 void SlavePower_ConverterOffNow(void);
 

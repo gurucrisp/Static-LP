@@ -172,7 +172,7 @@ void SlaveZC_FltIrqFiltered(void)
     __HAL_GPIO_EXTI_CLEAR_RISING_IT(GPIO_PIN_2);
     asserted = (uint8_t)(SlavePower_FltAsserted() | SlavePower_FltAsserted());
     if (FltFilter_Judge(&s_fltf, asserted, HAL_GetTick()) == 0U) return;
-    SlavePower_AllOffNow();
+    SlavePower_FltOffNow();
     SlaveCtrl_OnFltIrq();
 }
 #else

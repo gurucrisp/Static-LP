@@ -11,6 +11,11 @@
   */
 #include "slave_power.h"
 #include "slave_irq_prio.h"
+#include "slave_config.h"
+#include "slave_features.h"          /* SLAVE_FLT_KEEP_LOWS (v0.9.65) */
+#ifndef SLAVE_FLT_KEEP_LOWS
+#error "SLAVE_FLT_KEEP_LOWS undefined: slave_features.h was not included"
+#endif
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim15;
@@ -325,6 +330,8 @@ uint8_t SlavePower_InverterEnable(void)
 
     TIM1->CCR1  = 0U;
     TIM15->CCR1 = 0U;
+    TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);     /* PWM mode 1 again (v0.9.65: SlavePower_FltOffNow forces it inactive) */
+    TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);
     TIM1->EGR   = TIM_EGR_UG;                     /* load shadow registers, counter -> 0 */
     TIM15->EGR  = TIM_EGR_UG;
     TIM1->SR    = ~(TIM_SR_BIF | TIM_SR_UIF);
@@ -386,6 +393,17 @@ void SlavePower_AllOffNow(void)
 {
     SlavePower_ConverterOffNow();
     SlavePower_InverterDisable();
+}
+
+void SlavePower_FltOffNow(void)
+{
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;     /* OC1M = 0100, forced inactive: OC1 (high side) low NOW, OC1N (low side) high after the dead time */
+    TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | TIM_CCMR1_OC1M_2;
+    SlavePower_ConverterOffNow();
+#else
+    SlavePower_AllOffNow();
+#endif
 }
 
 uint32_t SlavePower_TakeBreakFlags(void)

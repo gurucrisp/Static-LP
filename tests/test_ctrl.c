@@ -201,15 +201,33 @@ void SlavePower_ConverterOffNow(void)
 {
     if (diag != 0) { diag = 0; t_diag_off = sim_t; have_off_time = 1; }
 }
-void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; leg1 = leg2 = 0; }
-void SlavePower_AllOffNow(void)
+static int inv_forced;
+void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; inv_forced = 0; leg1 = leg2 = 0; }
+static void probe_shutdown(void)
 {
     if (probe_armed && !probe_taken)
     {
         probe_taken = 1; probe_flt_run = g_ctrl.flt_run; probe_flt_idle = g_ctrl.flt_idle;
         probe_run_allowed = g_ctrl.run_allowed; probe_isr_fault = g_ctrl.isr_fault; probe_trip_cap = g_ctrl.trip_cap;
     }
+}
+void SlavePower_AllOffNow(void)
+{
+    probe_shutdown();
     SlavePower_ConverterOffNow(); SlavePower_InverterDisable(); n_alloff++;
+}
+/* v0.9.65: the FLT shutdown. SLAVE_FLT_KEEP_LOWS: the PWM channels are FORCED inactive (high sides off, low sides on) until the next InverterEnable; the inverter stays enabled */
+static int n_fltoff; static long v_duty_forced;
+void SlavePower_FltOffNow(void)
+{
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    probe_shutdown();
+    if (inv_enabled) inv_forced = 1;
+    leg1 = leg2 = 0;
+    SlavePower_ConverterOffNow(); n_fltoff++;
+#else
+    SlavePower_AllOffNow();
+#endif
 }
 
 static uint64_t t_duty_nz_last;                         /* time of the last NONZERO duty command */
@@ -293,13 +311,14 @@ uint8_t SlavePower_InverterEnable(void)
 #endif
     if (t_inv_enable_first == 0) t_inv_enable_first = sim_t;
     seq_started = 1;
-    inv_enabled = 1; leg1 = leg2 = 0;
+    inv_enabled = 1; inv_forced = 0; leg1 = leg2 = 0;     /* v0.9.65: the PWM mode is restored */
     return 1U;
 }
 
 void SlavePower_SetLegDuty(uint16_t l1, uint16_t l2)
 {
     n_setduty++;
+    if (inv_forced && (l1 || l2)) v_duty_forced++;            /* v0.9.65: a duty command while the FLT shutdown holds the PWM forced inactive */
     leg1 = l1; leg2 = l2;
     if (!(l1 || l2)) t_duty_zero_last = sim_t;
     if (l1 || l2)
@@ -471,7 +490,7 @@ static void world_reset(uint64_t start_t)
     unctl_us = max_unctl_run_us = cur_unctl_run_us = 0; unctl_limit_us = 0;
     t_conv_first = t_inv_enable_first = t_free_cmd_first = t_first_duty = t_shorted_cmd_last = t_inv_disable_last = t_duty_zero_last = 0;
     diag = 0; have_off_time = 0; min_gap_us = 1000000; inv_enabled = 0; leg1 = leg2 = 0;
-    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0;
+    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0;
     v_both = v_dead = v_polarity = v_duty_disabled = v_duty_no_conv = v_two_legs = v_over_cap = v_leg_table = v_energised_not_running = 0;
     wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
     resync_crossings();
@@ -483,6 +502,10 @@ static void world_reset(uint64_t start_t)
 }
 
 static int is_running(void) { return g_ctrl.state >= CTRL_RECT && g_ctrl.state <= CTRL_RESHUNT; }
+/* v0.9.65: what the FLT shutdown must leave at once: the converter off, no duty, and the inverter either disabled or FORCED inactive (high sides off, low sides
+ * on: SLAVE_FLT_KEEP_LOWS) until the shunts have closed; FLT_UNWIND_US covers that unwinding before the controller is in FAULT */
+static int flt_outputs_safe(void) { return (diag == 0) && (leg1 == 0) && (leg2 == 0) && (!inv_enabled || ((SLAVE_FLT_KEEP_LOWS != 0) && inv_forced)); }
+#define FLT_UNWIND_US ((uint64_t)(CTRL_RESHUNT_TIMEOUT_MS + 50U) * 1000ULL)
 
 static void check_invariants(const char *what)
 {
@@ -495,6 +518,7 @@ static void check_invariants(const char *what)
     CHECK(v_over_cap == 0,          "%s: duty above the cap %ld", what, v_over_cap);
     CHECK(v_leg_table == 0,         "%s: wrong inverter leg for polarity/boost %ld", what, v_leg_table);
     CHECK(v_energised_not_running == 0, "%s: converter energised while FAULT/LATCHED/SYNC %ld", what, v_energised_not_running);
+    CHECK(v_duty_forced == 0,       "%s: duty commanded while the FLT shutdown held the PWM forced inactive %ld", what, v_duty_forced);
 #if RELAY_MODEL
     CHECK(v_shoot == 0,             "%s: R1 violated - inverter driven / contact closed under drive %ld times", what, v_shoot);
     CHECK(v_shoot_samples == 0,     "%s: R1 violated - duty while a shunt was closed, %ld samples", what, v_shoot_samples);
@@ -711,15 +735,15 @@ static void t_flt(void)
     CHECK(is_running(), "should start once FLT is clear (state %d)", g_ctrl.state);
     SlaveCtrl_OnFltIrq();
     run_for(1000);
-    CHECK(diag == 0 && !inv_enabled, "FLT interrupt must switch everything off");
-    run_for(2000);
+    CHECK(flt_outputs_safe(), "FLT interrupt must switch the converter and the high sides off at once (inverter %d, forced %d)", inv_enabled, inv_forced);
+    run_for(FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "expected FLT fault, got %d/%d", g_ctrl.state, g_ctrl.fault);
     /* polled detection, no interrupt */
     world_reset(9000000);
     run_for(800000 + WARM);
     CHECK(is_running(), "running before the polled FLT test");
     W.flt = 1;
-    run_for(5000);
+    run_for(5000 + FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT && diag == 0, "polled FLT must trip, got %d/%d", g_ctrl.state, g_ctrl.fault);
     check_invariants("FLT");
     printf("  FLT: blocks start, interrupt and polled trip both switch off\n");
@@ -740,11 +764,11 @@ static void t_flt_shutdown_first(void)
     CHECK(probe_run_allowed == 1U && probe_isr_fault == 0U, "the shutdown must come FIRST: at that moment run_allowed is still 1 and no fault is recorded yet (run_allowed %u, isr_fault %u)", (unsigned)probe_run_allowed, (unsigned)probe_isr_fault);
     CHECK(probe_flt_run == run0 && probe_flt_idle == idle0, "no counter has been touched before the shutdown (run %u -> %u, idle %u -> %u)", (unsigned)run0, (unsigned)probe_flt_run, (unsigned)idle0, (unsigned)probe_flt_idle);
     CHECK(probe_trip_cap == 0U, "the trip record is made AFTER the shutdown (trip_cap was 0x%04X at the shutdown)", (unsigned)probe_trip_cap);
-    CHECK(!inv_enabled, "the outputs are off straight away");
+    CHECK(flt_outputs_safe(), "the outputs are safe straight away: converter off, high sides off (inverter %d, forced %d)", inv_enabled, inv_forced);
     CHECK(g_ctrl.flt_run == (uint8_t)(run0 + 1U), "the running-FLT counter is still counted afterwards (%u -> %u)", (unsigned)run0, (unsigned)g_ctrl.flt_run);
     CHECK((g_ctrl.trip_cap & 0x8000U) != 0U, "the trip is still recorded afterwards (trip_cap 0x%04X)", (unsigned)g_ctrl.trip_cap);
     CHECK(g_ctrl.isr_fault == CF_FLT, "the fault is still raised afterwards (isr_fault %u)", (unsigned)g_ctrl.isr_fault);
-    run_for(5000);
+    run_for(5000 + FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "and the controller still ends in FAULT / FLT (%d/%d)", g_ctrl.state, g_ctrl.fault);
     /* an FLT edge before the controller has done a single service step: genuinely idle in EVERY configuration (some start within 100 ms of a reset, some never do by themselves) */
     world_reset(8200000);
@@ -1059,6 +1083,36 @@ static void t_relay_hard_fault(void)
            (unsigned long long)max_unctl_run_us);
 }
 
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+/* v0.9.65: FLT (the CT comparators) no longer opens the primary: the high sides go off with the low sides ON, the shunts close, and only then is the inverter disabled */
+static void t_relay_flt_keeps_lows(void)
+{
+    uint64_t t_inject;
+    run_to_run(46500000);
+    CHECK(g_ctrl.state == CTRL_RUN, "RUN first");
+    t_inject = sim_t;
+    SlaveCtrl_OnFltIrq();
+    CHECK(diag == 0 && inv_enabled && inv_forced && leg1 == 0 && leg2 == 0, "FLT: converter off, high sides off, the low sides ON at once (inverter %d, forced %d)", inv_enabled, inv_forced);
+    run_for(2000);
+    CHECK(g_ctrl.state == CTRL_RESHUNT && SlaveCtrl_LinkState() == 3U && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT, "unwinding, and F02 reported at once (state %d)", g_ctrl.state);
+    run_for(1500000);
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT && !inv_enabled, "then FAULT / FLT with the inverter disabled (%d/%d)", g_ctrl.state, g_ctrl.fault);
+    if (rly_type(0) != RELAY_NOT_A_SHUNT || rly_type(1) != RELAY_NOT_A_SHUNT)
+        CHECK(t_inv_disable_last >= t_shorted_cmd_last + RELAY_SETTLE_US - 2000ULL && t_shorted_cmd_last >= t_inject, "the inverter was disabled only after the shunts had settled (%.0f ms after their command)", (double)(t_inv_disable_last - t_shorted_cmd_last) / 1000.0);
+    check_invariants("FLT keeps the low sides on");                 /* unctl_limit_us is 0 here: the primary is NEVER open and uncontrolled */
+    /* FLT while a normal stop is unwinding: it keeps unwinding (no all-off), and the fault is reported afterwards */
+    run_to_run(46600000);
+    SlaveCtrl_SetRunRequest(0U); run_for(20000);
+    CHECK(g_ctrl.state == CTRL_RESHUNT, "a normal stop is unwinding (state %d)", g_ctrl.state);
+    SlaveCtrl_OnFltIrq(); run_for(5000);                          /* the main loop has taken it: it must keep unwinding, not switch everything off */
+    CHECK(g_ctrl.state == CTRL_RESHUNT && inv_enabled && inv_forced, "FLT during the unwinding: it keeps unwinding with the low sides on (state %d, inverter %d)", g_ctrl.state, inv_enabled);
+    run_for(1500000);
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "and it is reported once the shunts have closed (%d/%d)", g_ctrl.state, g_ctrl.fault);
+    check_invariants("FLT during the unwinding");
+    printf("  FLT: high sides off and low sides on at once, shunts closed, THEN the inverter disabled; the primary never open (uncontrolled %llu us)\n", (unsigned long long)max_unctl_run_us);
+}
+#endif
+
 static void t_relay_fault_during_reshunt(void)
 {
     run_to_run(47000000);
@@ -1190,7 +1244,7 @@ static void t_fault_context(void)
     world_reset(33000000);
     run_for(1000000 + WARM);
     CHECK(is_running() && SlaveCtrl_FaultContext() == 0, "no context outside a fault");
-    W.flt = 1; run_for(10000);
+    W.flt = 1; run_for(10000 + FLT_UNWIND_US);
     ctx = SlaveCtrl_FaultContext();
     CHECK(g_ctrl.fault == CF_FLT && (ctx & CTRL_CTX_VALID), "FLT fault must carry a context (fault %d ctx 0x%02X)", g_ctrl.fault, ctx);
     CHECK((ctx & CTRL_CTX_FLT_LOW) && !(ctx & CTRL_CTX_BKIN_LOW), "FLT low must be reported (ctx 0x%02X)", ctx);
@@ -1202,7 +1256,7 @@ static void t_fault_context(void)
     world_reset(34000000);
     run_for(1000000 + WARM);
     CHECK(is_running(), "running first");
-    W.flt = 0; SlaveCtrl_OnFltIrq(); run_for(10000);
+    W.flt = 0; SlaveCtrl_OnFltIrq(); run_for(10000 + FLT_UNWIND_US);
     ctx = SlaveCtrl_FaultContext();
     CHECK(g_ctrl.fault == CF_FLT && (ctx & CTRL_CTX_VALID) && !(ctx & CTRL_CTX_FLT_LOW),
           "an FLT edge with the pin back HIGH must show FLT:H (fault %d ctx 0x%02X)", g_ctrl.fault, ctx);
@@ -1218,7 +1272,7 @@ static void t_fault_context(void)
     world_reset(36000000);
     W.pattern = PAT_PULSE;
     run_for(1000000 + WARM);
-    W.flt = 1; run_for(10000);
+    W.flt = 1; run_for(10000 + FLT_UNWIND_US);
     ctx = SlaveCtrl_FaultContext();
     CHECK(((ctx >> CTRL_CTX_MODE_SHIFT) & 3U) == CTRL_ZC_FALL, "mode must be FALL for a pulse train (ctx 0x%02X)", ctx);
 
@@ -1251,11 +1305,13 @@ static void t_flt_filter_poll(void)
         CHECK(is_running() && g_ctrl.fault == CF_NONE, "after a stop and a restart, one low reading is still only one (no F02 from a reading seconds old; fault %d)", g_ctrl.fault);
     }
     W.flt = 1; run_for(1000);
-    CHECK(g_ctrl.fault == CF_FLT, "FLT held asserted for 1 ms: F02 by the main loop's check (fault %d)", g_ctrl.fault);
+    CHECK(g_ctrl.state == CTRL_RESHUNT && SlaveCtrl_FaultCode() == (uint16_t)CF_FLT, "FLT held asserted for 1 ms: F02 by the main loop's check, reported at once while unwinding (state %d, fault %u)", g_ctrl.state, (unsigned)SlaveCtrl_FaultCode());
+    run_for(FLT_UNWIND_US);
+    CHECK(g_ctrl.fault == CF_FLT, "and F02 once the shunts have closed (fault %d)", g_ctrl.fault);
     W.flt = 0;
     world_reset(39500000); run_for(1000000 + WARM);
     SlaveCtrl_OnFltIrq(); run_for(10000);
-    CHECK(g_ctrl.fault == CF_FLT, "the interrupt path (after the filter's verdict) still trips at once (fault %d)", g_ctrl.fault);
+    CHECK(SlaveCtrl_FaultCode() == (uint16_t)CF_FLT && flt_outputs_safe(), "the interrupt path (after the filter's verdict) still trips at once (fault %u)", (unsigned)SlaveCtrl_FaultCode());
     printf("  FLT glitch filter, main-loop side: single noisy readings ignored, a held FLT trips, the interrupt path unchanged\n");
 }
 #endif
@@ -1485,7 +1541,7 @@ static void t_diag_counters(void)
     world_reset(66000000);
     run_for(1000000 + WARM);
     CHECK(is_running(), "running first");
-    SlaveCtrl_OnFltIrq(); run_for(5000);
+    SlaveCtrl_OnFltIrq(); run_for(5000 + FLT_UNWIND_US);
     w = SlaveCtrl_DiagWord();
     CHECK((w & 31U) == 0 && ((w >> 5) & 31U) == 1, "1 running FLT edge (word 0x%04X)", w);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "...and it is a fault (got %d/%d)", g_ctrl.state, g_ctrl.fault);
@@ -1672,6 +1728,7 @@ static void t_legacy_fault_and_restart(void)
     CHECK(diag == 0, "converter off at once");
     run_for(5000);
     CHECK(rl[0].coil == 0 && rl[1].coil == 0, "a fault must release BOTH coils at once (SH %d, W %d)", rl[0].coil, rl[1].coil);
+    run_for(FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_FLT, "FAULT / FLT (got %d/%d)", g_ctrl.state, g_ctrl.fault);
     run_for(14000000);                                           /* escalating retry (10 s) + the whole relay sequence again */
     sh_after = 0; { int i; for (i = 0; i < lg_n; i++) if (lg_idx[i] == 0 && lg_on[i] == 1) sh_after++; }
@@ -1778,9 +1835,11 @@ static void t_legacy_lowsides_restart(void)
     world_reset(96000000);
     run_for(4500000);
     CHECK(is_running(), "running first");
-    SlaveCtrl_OnFltIrq();                                          /* a trip: everything off at once, including the low sides */
+    SlaveCtrl_OnFltIrq();                                          /* a trip: converter and high sides off at once; v0.9.65: the low sides stay on until the shunts have closed */
     run_for(5000);
-    CHECK(!inv_enabled && diag == 0, "a trip must switch the low sides off too");
+    CHECK(flt_outputs_safe(), "a trip switches the converter off at once, the low sides are on (forced) or off (inverter %d, forced %d)", inv_enabled, inv_forced);
+    run_for(FLT_UNWIND_US);
+    CHECK(!inv_enabled && diag == 0, "a trip ends with the low sides off too, once the shunts have closed");
     t_conv_first = 0; t_inv_enable_first = 0; first_energise_pol = 0; inv_at_first_energise = -1;
     run_for(14000000);                                             /* retry (10 s) + relay sequence again */
     CHECK(is_running(), "running again after the retry (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
@@ -1936,7 +1995,7 @@ static void t_diag2_policy(void)
     CHECK((d & 0xE000U) == 0x2000U && d == SlaveCtrl_TfWord(), "running with a verdict: diag2 carries the transformer result (0x%04X, TF word 0x%04X)", (unsigned)d, (unsigned)SlaveCtrl_TfWord());
     /* a trip: the trip capture wins while in FAULT */
     SlaveCtrl_OnFltIrq();
-    run_for(20000);
+    run_for(20000 + FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT, "faulted (state %d)", g_ctrl.state);
     if (SlaveCtrl_TripCapture() != 0U)
         CHECK(SlaveCtrl_Diag2() == SlaveCtrl_TripCapture() && (SlaveCtrl_Diag2() & 0x8000U) != 0U, "in FAULT the trip capture is sent (0x%04X)", (unsigned)SlaveCtrl_Diag2());
@@ -2009,7 +2068,10 @@ static void t_quick_retry(void)
     for (i = 0; i < 9; i++)
     {
         uint64_t t_fault, t0;
-        SlaveCtrl_OnFltIrq(); run_for(5000);
+        SlaveCtrl_OnFltIrq();
+        run_for(2000);                                                                                                    /* the main loop takes the interrupt's fault ... */
+        { uint64_t tw = sim_t; while (g_ctrl.state == CTRL_RESHUNT && sim_t < tw + FLT_UNWIND_US) run_for(1000); }       /* ... v0.9.65: the unwinding (low sides on) comes first */
+        run_for(5000);
         CHECK(g_ctrl.state == CTRL_FAULT, "trip %d: in FAULT (state %d)", i + 1, g_ctrl.state);
         t_fault = sim_t; t0 = sim_t;
         while (g_ctrl.state == CTRL_FAULT && sim_t < t0 + 70000000ULL) run_for(10000);
@@ -2018,7 +2080,7 @@ static void t_quick_retry(void)
         t0 = sim_t; while (!is_running() && sim_t < t0 + 40000000ULL) run_for(10000);
         CHECK(is_running(), "trip %d: running again", i + 1);
     }
-    SlaveCtrl_OnFltIrq(); run_for(50000);
+    SlaveCtrl_OnFltIrq(); run_for(50000 + FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_LATCHED, "the 10th trip latches (state %d)", g_ctrl.state);
     printf("  quick retry: nine lockouts of about 3 s (%llu ... %llu ms), the 10th trip latches\n", (unsigned long long)lock_ms[0], (unsigned long long)lock_ms[8]);
 }
@@ -2142,6 +2204,8 @@ static void t_leg_inv_faults(void)
     wait_run(); run_for((uint64_t)(CTRL_INJ_BASE_MS + CTRL_INJ_RAMP_MS) * 1000ULL + 1500000ULL);
     CHECK(g_ctrl.duty_counts == STAGE2_CCR && t_duty_nz_last != 0ULL, "in the hold at the target duty before the fault (duty %u)", g_ctrl.duty_counts);
     t_fault = sim_t; SlaveCtrl_OnFltIrq(); run_for(5000);
+    CHECK(flt_outputs_safe(), "FLT: converter and high sides off at once (v0.9.65: the low sides on until the shunts close; inverter %d, forced %d)", inv_enabled, inv_forced);
+    run_for(FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && !inv_enabled && leg1 == 0 && leg2 == 0, "FLT: FAULT, inverter disabled, both legs zero (state %d)", g_ctrl.state);
     CHECK(rl[0].coil == 0 && rl[1].coil == 0, "FLT: both relay coils released (SH %d, W %d)", rl[0].coil, rl[1].coil);
     CHECK(t_duty_nz_last <= t_fault + 2000ULL, "FLT: no nonzero duty after the fault (last %llu us after it)", (unsigned long long)(t_duty_nz_last - t_fault));
@@ -2303,8 +2367,22 @@ static void t_l3_faults(void)
     CHECK(g_ctrl.duty_counts > (uint16_t)POWER_DEADTIME_TICKS, "regulating before the fault (CCR %u)", g_ctrl.duty_counts);
     t_fault = sim_t; SlaveCtrl_OnFltIrq(); run_for(5000);
     CHECK(SlaveCtrl_RegWord() == 0U && !rw_valid(SlaveCtrl_Diag2()), "after the fault the regulator word is gone (it must not show stale duty): 0x%04X", (unsigned)SlaveCtrl_Diag2());
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    CHECK(flt_outputs_safe() && inv_enabled && inv_forced && rl[0].coil == 0 && rl[1].coil == 0, "v0.9.65 FLT: converter and high sides off at once, LOW SIDES ON (the primary shorted), both coils released (state %d, inverter %d, forced %d)", g_ctrl.state, inv_enabled, inv_forced);
+    run_for(FLT_UNWIND_US);
+    CHECK(g_ctrl.state == CTRL_FAULT && !inv_enabled && t_inv_disable_last >= t_fault + (uint64_t)SLAVE_RELAY_SETTLE_MS * 1000ULL - 2000ULL, "and the inverter is disabled only once the contacts have settled (%.0f ms after the trip; state %d)", (double)(t_inv_disable_last - t_fault) / 1000.0, g_ctrl.state);
+#else
     CHECK(g_ctrl.state == CTRL_FAULT && !inv_enabled && leg1 == 0 && leg2 == 0 && rl[0].coil == 0 && rl[1].coil == 0, "FLT: everything off at once, both coils released (state %d)", g_ctrl.state);
+#endif
     CHECK(t_duty_nz_last <= t_fault + 2000ULL, "FLT: no nonzero duty after the fault");
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    {   /* the retry: the inverter enable restores the PWM mode, and it regulates again */
+        uint64_t t0 = sim_t;
+        while (g_ctrl.state != CTRL_RUN && sim_t < t0 + 40000000ULL) run_for(10000);
+        (void)l3_run(6.0, 0.0);
+        CHECK(g_ctrl.state == CTRL_RUN && !inv_forced && t_duty_nz_last > t0, "after the retry the PWM mode is restored (forced %d) and duty is applied again (state %d)", inv_forced, g_ctrl.state);
+    }
+#endif
     check_invariants("legacy stage 3, hard fault");
     /* (b) a SOFT fault while regulating: duty zero, relays released, the inverter disabled only after the contact settle time */
     l3_world(186000000ULL, 215.0f); l3_wait_run(); (void)l3_run(12.0, 0.0);
@@ -2584,6 +2662,9 @@ static void w_s2_buck(void)    { t_stage2_leg_selection(250.0f, "inverter, vin 2
 
 int main(void)
 {
+#if (SLAVE_FLT_KEEP_LOWS == 0) && !defined(ALLOW_FLT_KEEP_LOWS_0)
+    CHECK(0, "SLAVE_FLT_KEEP_LOWS is 0: the FLT response would open the primary under load (v0.9.65 default is 1; only the s3_flt_all_off job may build it off)");
+#endif
     printf("Control sequencer test, SLAVE_POWER_STAGE=%d\n\n", SLAVE_POWER_STAGE);
     run_isolated(t_leg_table,                 "inverter leg table vs old firmware");
     run_isolated(w_square,                    "ZCD pattern: square wave");
@@ -2616,6 +2697,9 @@ int main(void)
     run_isolated(t_relay_stop_in_unshunt,     "relays: stop while the shunts are opening");
     run_isolated(t_relay_soft_fault,          "relays: soft fault unwinds with the primary controlled");
     run_isolated(t_relay_hard_fault,          "relays: hard fault (break) closes the shunts at once");
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    run_isolated(t_relay_flt_keeps_lows,      "relays: FLT keeps the low sides on until the shunts have closed (v0.9.65)");
+#endif
     run_isolated(t_relay_fault_during_reshunt,"relays: fault while unwinding");
     run_isolated(t_relay_never_free_without_inverter, "relays: 90-point injection sweep");
 #endif
