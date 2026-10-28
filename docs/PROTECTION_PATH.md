@@ -66,3 +66,5 @@ With `SLAVE_INJ_GUARD 0` the same test fails all eight reversals. The master's v
 
 ## v0.9.62: the FLT glitch filter (`SLAVE_FLT_FILTER_US`, 1 us in the production config)
 `EXTI2_3_IRQHandler` -> `SlaveZC_FltIrqFiltered()`: wait the window on SysTick (iteration cap), clear the EXTI flags, read FLT twice; asserted -> `SlavePower_AllOffNow()` then `SlaveCtrl_OnFltIrq()`; released -> ignored (more than 4 in one millisecond -> trip). 0 = the plain path. Above 2 us refused. It adds the window to the shutdown time of a real short circuit: measure the total with the SCOPE config above. Reason: F02 from noise (a nearby load switched) with 1k / 1 nF on FLT.
+
+v0.9.63: the main loop's FLT LEVEL check (`RunningChecks`) is filtered too when the filter is on: FLT asserted on consecutive passes for `CTRL_FLT_POLL_CONFIRM_US` (100 us; readings more than 10 ms apart do not add up). v0.9.62 had missed it: one noisy reading there was still F02.

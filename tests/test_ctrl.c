@@ -1225,6 +1225,41 @@ static void t_fault_context(void)
     printf("  fault context: state, zero-cross mode and the live FLT / BKIN levels are reported (glitch signature included)\n");
 }
 
+#if (SLAVE_FLT_FILTER_US > 0U)
+/* v0.9.62: with the FLT glitch filter the main loop's level check needs FLT asserted on consecutive passes for CTRL_FLT_POLL_CONFIRM_US: one low reading is not F02 */
+static void flt_one_read(void)
+{   /* FLT asserted around exactly ONE main-loop pass (passes are 200 us apart in this simulation) */
+    if ((next_service - sim_t) < 60U) run_for(100U);
+    run_for((next_service - sim_t) - 50U); W.flt = 1; run_for(100U); W.flt = 0;
+}
+static void t_flt_filter_poll(void)
+{
+    int k;
+    world_reset(39000000); run_for(1000000 + WARM);
+    CHECK(is_running(), "running first");
+    for (k = 0; k < 20; k++) { flt_one_read(); run_for(5000); }
+    CHECK(is_running() && g_ctrl.fault == CF_NONE, "20 noise spikes, each read by one main-loop pass: no F02, still running (state %d, fault %d)", g_ctrl.state, g_ctrl.fault);
+    flt_one_read(); run_for(20000); flt_one_read(); run_for(5000);
+    CHECK(is_running() && g_ctrl.fault == CF_NONE, "two single readings 20 ms apart are not one long assertion: no F02");
+    {   /* a single reading just before a stop, then the restart's FIRST check reads FLT low once: an old reading must not make it count as long */
+        uint32_t j;
+        flt_one_read(); SlaveCtrl_SetRunRequest(0U); run_for(3000000);
+        CHECK(!is_running(), "stopped");
+        SlaveCtrl_SetRunRequest(1U);
+        for (j = 0U; j < 2000000U && !is_running(); j++) run_for(10U);
+        flt_one_read(); run_for(5000);
+        CHECK(is_running() && g_ctrl.fault == CF_NONE, "after a stop and a restart, one low reading is still only one (no F02 from a reading seconds old; fault %d)", g_ctrl.fault);
+    }
+    W.flt = 1; run_for(1000);
+    CHECK(g_ctrl.fault == CF_FLT, "FLT held asserted for 1 ms: F02 by the main loop's check (fault %d)", g_ctrl.fault);
+    W.flt = 0;
+    world_reset(39500000); run_for(1000000 + WARM);
+    SlaveCtrl_OnFltIrq(); run_for(10000);
+    CHECK(g_ctrl.fault == CF_FLT, "the interrupt path (after the filter's verdict) still trips at once (fault %d)", g_ctrl.fault);
+    printf("  FLT glitch filter, main-loop side: single noisy readings ignored, a held FLT trips, the interrupt path unchanged\n");
+}
+#endif
+
 /* "START but nothing happens": the SYNC state reports exactly which conditions are not met. */
 static void t_wait_reasons(void)
 {
@@ -2590,6 +2625,9 @@ int main(void)
     run_isolated(t_zc_stale_code,             "main-loop backup -> own fault code");
     run_isolated(t_guard_noise_immunity,      "polarity guard: ignores one bad sample, trips on a sustained one");
     run_isolated(t_fault_context,             "fault context byte (state, mode, FLT/BKIN levels)");
+#if (SLAVE_FLT_FILTER_US > 0U)
+    run_isolated(t_flt_filter_poll,           "flt filter: the main-loop FLT check (v0.9.62)");
+#endif
     run_isolated(t_wait_reasons,              "START with nothing happening: wait reasons");
     run_isolated(t_zc_fault_split,            "zero-cross faults: time F03 / sequence F15 / last-moment F16");
 #if (SLAVE_TF_RUN_CHECK != 0) && (SLAVE_MASTER_CONTROL == 0)

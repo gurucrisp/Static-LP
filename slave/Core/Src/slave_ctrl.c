@@ -10,6 +10,7 @@
   */
 #include <stddef.h>
 #include "slave_ctrl.h"
+#include "slave_flt_filter.h"         /* SLAVE_FLT_FILTER_US (v0.9.62) */
 #include "link_v2.h"          /* LINKV2_FLAG_* for the $E frame */
 #include "slave_ctrl_hw.h"
 #include "slave_power.h"
@@ -891,13 +892,36 @@ static uint8_t SelectedGood(void)
     return 0U;
 }
 
+#if (SLAVE_FLT_FILTER_US > 0U)
+/* v0.9.62: with the FLT glitch filter, the main loop's LEVEL check of FLT (a backup for an edge the interrupt did not see) must not take a single low reading
+ * as F02 either: a noise burst read once bypassed the filter. FLT must read asserted on every pass for CTRL_FLT_POLL_CONFIRM_US. A real short circuit is the
+ * interrupt's job (microseconds); this backup only waits a little longer. */
+#ifndef CTRL_FLT_POLL_CONFIRM_US
+#define CTRL_FLT_POLL_CONFIRM_US 100U
+#endif
+#define CTRL_FLT_POLL_STALE_US   10000U     /* readings further apart than this are not "consecutive passes": the count starts again */
+static uint8_t  s_flt_seen;
+static uint32_t s_flt_since_us, s_flt_last_us;
+static uint8_t FltLevelConfirmed(uint32_t now_us)
+{
+    if (SlavePower_FltAsserted() == 0U) { s_flt_seen = 0U; return 0U; }
+    if ((s_flt_seen == 0U) || ((uint32_t)(now_us - s_flt_last_us) > CTRL_FLT_POLL_STALE_US)) { s_flt_seen = 1U; s_flt_since_us = now_us; }
+    s_flt_last_us = now_us;
+    return (uint8_t)((uint32_t)(now_us - s_flt_since_us) >= CTRL_FLT_POLL_CONFIRM_US);
+}
+#endif
+
 /* Checks common to every state in which something is energised. Returns the
  * fault code, or 0 if all is well. */
 static uint16_t RunningChecks(uint32_t now_ms, uint32_t now_us, uint8_t relay_expect)
 {
     if ((relay_expect == 1U) && (SlaveRelay_IsShorted() == 0U))           return CF_RELAY;
     if ((relay_expect == 2U) && (SlaveRelay_IsFree() == 0U))              return CF_RELAY;
+#if (SLAVE_FLT_FILTER_US > 0U)
+    if (FltLevelConfirmed(now_us) != 0U)                                  return CF_FLT;
+#else
     if (SlavePower_FltAsserted() != 0U)                                   return CF_FLT;
+#endif
     if (s_vin_bad  >= CTRL_RANGE_DEBOUNCE)                                return CF_VIN_RANGE;
     if (s_vout_bad >= CTRL_RANGE_DEBOUNCE)                                return CF_VOUT_HIGH;
     if ((uint32_t)(now_ms - s_last_meas_ms) > CTRL_MEAS_STALE_MS)         return CF_MEAS_STALE;
@@ -922,6 +946,9 @@ void SlaveCtrl_Init(void)
     g_ctrl.mode        = CTRL_ZC_UNKNOWN;
     g_ctrl.run_request = (uint8_t)(SLAVE_BENCH_AUTORUN != 0);       /* with master control SLAVE_BENCH_AUTORUN is 0: the master decides */
     s_mc_last_m_ms = CtrlHw_NowMs();                                 /* the link timeout runs from the start */
+#if (SLAVE_FLT_FILTER_US > 0U)
+    s_flt_seen = 0U;
+#endif
     s_mc_link_lost = 0U; s_mc_clr_valid = 0U; s_mc_clr = 0U; s_mc_setv_dv = 0U; s_mc_maxc_dv = 0U; s_hold_lvl = 0U; s_hold_since_ms = 0U;
 #if (TUNE_ENABLED != 0)
     s_tune_on = 0U; s_tune_req = 0.0f; s_tune_cur = 0.0f; s_tune_last_ms = 0U;
