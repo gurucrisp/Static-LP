@@ -76,3 +76,7 @@ The first statement of the FLT interrupt is `SlavePower_FltOffNow()`: TIM1 and T
 
 ## v0.9.66: the cycle-by-cycle limit (`SLAVE_FLT_CBC`, 0 by default)
 EXTI2_3 -> `SlaveZC_FltIrqCbc()`: first `SlavePower_InverterForceOffNow()` (TIM1/TIM15 forced inactive, the converter untouched), then `SlaveCtrl_OnFltCbcIrq()`: in RUN a limit (TIM1 update armed), else the full FLT shutdown. TIM1 update -> `SlaveZC_Tim1UpdateIrq()` -> `SlaveCtrl_OnPwmPeriodIrq()`: FLT released = PWM mode 1 again; asserted 20 period starts (1 ms) or more than 40 edges in 10 ms = the full shutdown (F02, low sides on). The main loop's level check waits 2 ms. Not with the glitch filter.
+
+
+## v0.9.67: BKIN (the same comparator pulse) keeps the low sides on and is limited too
+Both timers: OCNIdleState SET with `SLAVE_FLT_KEEP_LOWS` (with OSSI: in a break the low side comes on after the dead time). `SlaveCtrl_OnBreakIrq` forces the PWM inactive and the converter off; the controller unwinds (F01). With `SLAVE_FLT_CBC`: `SlaveZC_BreakIrq()` -> `SlaveCtrl_OnBreakCbcIrq()` limits a break in RUN (one count per pulse with FLT), `SlavePower_InverterResume()` sets MOE again when no break is asserted. No AOE.

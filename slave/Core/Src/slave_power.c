@@ -46,6 +46,7 @@ extern void Error_Handler(void);
 /* The BKIN pins (PB12, PA9) stay alternate-function inputs at all times.    */
 /* ------------------------------------------------------------------------- */
 static uint8_t s_control_mode;     /* 1 = SlavePower_Init() was used: pin policy above applies */
+static volatile uint8_t s_pins_af; /* v0.9.67: 1 = the four inverter pins are driven by the timers (a break then holds them at their idle levels: low sides on) */
 
 #define INV_A_LOW_MASK   ((uint32_t)(GPIO_PIN_7 | GPIO_PIN_8))      /* GPIOA: PA7 (2L), PA8 (2H)   */
 #define INV_B_LOW_MASK   ((uint32_t)(GPIO_PIN_13 | GPIO_PIN_14))    /* GPIOB: PB13 (1L), PB14 (1H) */
@@ -53,6 +54,7 @@ static uint8_t s_control_mode;     /* 1 = SlavePower_Init() was used: pin policy
 /* ISR-SAFE. Pins low FIRST, then plain output mode. */
 static inline void Power_OutputsToGpio(void)
 {
+    s_pins_af = 0U;
     GPIOA->BSRR  = INV_A_LOW_MASK << 16U;
     GPIOB->BSRR  = INV_B_LOW_MASK << 16U;
     GPIOA->MODER = (GPIOA->MODER & ~((3UL << 14) | (3UL << 16))) | ((1UL << 14) | (1UL << 16));
@@ -62,6 +64,7 @@ static inline void Power_OutputsToGpio(void)
 /* Hands the four pins to the timers. Main loop, interrupts disabled by the caller. */
 static inline void Power_OutputsToAf(void)
 {
+    s_pins_af = 1U;
     GPIOA->MODER = (GPIOA->MODER & ~((3UL << 14) | (3UL << 16))) | ((2UL << 14) | (2UL << 16));
     GPIOB->MODER = (GPIOB->MODER & ~((3UL << 26) | (3UL << 28))) | ((2UL << 26) | (2UL << 28));
 }
@@ -182,7 +185,7 @@ static void Power_Tim1Init(void)
     sConfigOC.OCNPolarity  = TIM_OCNPOLARITY_HIGH;
     sConfigOC.OCFastMode   = TIM_OCFAST_DISABLE;
     sConfigOC.OCIdleState  = TIM_OCIDLESTATE_RESET;
-    sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+    sConfigOC.OCNIdleState = (SLAVE_FLT_KEEP_LOWS != 0) ? TIM_OCNIDLESTATE_SET : TIM_OCNIDLESTATE_RESET;     /* v0.9.67: in a BREAK (MOE off, OSSI) the LOW side goes ON after the dead time: the silicon keeps the primary shorted */
     if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
     /* Hardware break (PB12), ACTIVE LOW - verified on the board. BreakState
@@ -225,7 +228,7 @@ static void Power_Tim15Init(void)
     sConfigOC.OCNPolarity  = TIM_OCNPOLARITY_HIGH;
     sConfigOC.OCFastMode   = TIM_OCFAST_DISABLE;
     sConfigOC.OCIdleState  = TIM_OCIDLESTATE_RESET;
-    sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+    sConfigOC.OCNIdleState = (SLAVE_FLT_KEEP_LOWS != 0) ? TIM_OCNIDLESTATE_SET : TIM_OCNIDLESTATE_RESET;     /* v0.9.67: in a BREAK (MOE off, OSSI) the LOW side goes ON after the dead time: the silicon keeps the primary shorted */
     if (HAL_TIM_PWM_ConfigChannel(&htim15, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
     sBreakDeadTimeConfig.OffStateRunMode  = TIM_OSSR_ENABLE;
@@ -417,6 +420,16 @@ void SlavePower_InverterResume(void)
 {
     TIM1->CCMR1  = (TIM1->CCMR1  & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);     /* PWM mode 1 */
     TIM15->CCMR1 = (TIM15->CCMR1 & ~TIM_CCMR1_OC1M) | (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1);
+    if ((s_pins_af != 0U) && (SlavePower_BreakInputActive() == 0U))
+    {   /* v0.9.67: a limited BREAK pulse cleared MOE in silicon: set it again (refused by the hardware while a break input is still asserted) */
+        TIM1->BDTR  |= TIM_BDTR_MOE;
+        TIM15->BDTR |= TIM_BDTR_MOE;
+    }
+}
+
+uint8_t SlavePower_InverterDriven(void)
+{
+    return (uint8_t)((s_control_mode == 0U) || (s_pins_af != 0U));
 }
 
 void SlavePower_CbcArm(void)

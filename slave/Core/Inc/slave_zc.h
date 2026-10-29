@@ -77,6 +77,7 @@ uint32_t SlaveZC_NowUs(void);
 void     SlaveZC_FltIrqFiltered(void);  /* v0.9.62: the FLT interrupt with the glitch filter (SLAVE_FLT_FILTER_US > 0), see slave_flt_filter.h */
 uint32_t SlaveZC_FltIgnored(void);      /* FLT spikes ignored by the filter since power-up */
 void     SlaveZC_FltIrqCbc(void);       /* v0.9.66: the FLT interrupt with the cycle-by-cycle limit (SLAVE_FLT_CBC), see slave_flt_cbc.h */
+void     SlaveZC_BreakIrq(void);        /* v0.9.67: TIM1 / TIM15 break (stm32g0xx_it.c), see slave_flt_cbc.h */
 void     SlaveZC_Tim1UpdateIrq(void);   /* v0.9.66: TIM1 update (PWM period start) for the limit; nothing without SLAVE_FLT_CBC */
 
 /* Microseconds since the latest edge of any kind; 0xFFFFFFFF if none yet. */

@@ -203,8 +203,8 @@ void SlavePower_ConverterOffNow(void)
     if (diag != 0) { diag = 0; t_diag_off = sim_t; have_off_time = 1; }
 }
 static int inv_forced;
-static int cbc_armed;
-void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; inv_forced = 0; cbc_armed = 0; leg1 = leg2 = 0; }
+static int cbc_armed, inv_moe_off;
+void SlavePower_InverterDisable(void) { if (inv_enabled) t_inv_disable_last = sim_t; inv_enabled = 0; inv_forced = 0; cbc_armed = 0; inv_moe_off = 0; leg1 = leg2 = 0; }
 static void probe_shutdown(void)
 {
     if (probe_armed && !probe_taken)
@@ -223,7 +223,7 @@ static int n_fltoff; static long v_duty_forced;
 /* v0.9.66: the cycle-by-cycle limit's hardware */
 static int n_force_off, n_resume; static uint64_t next_pwm; static unsigned fs_tot, fs_forced;
 void SlavePower_InverterForceOffNow(void) { probe_shutdown(); if (inv_enabled) inv_forced = 1; n_force_off++; }
-void SlavePower_InverterResume(void)      { inv_forced = 0; n_resume++; }
+void SlavePower_InverterResume(void)      { inv_forced = 0; if (!W.brk) inv_moe_off = 0; n_resume++; }
 void SlavePower_CbcArm(void)              { cbc_armed = 1; next_pwm = sim_t + 50U - (sim_t % 50U); }      /* the next period start */
 void SlavePower_CbcDisarm(void)           { cbc_armed = 0; }
 void SlavePower_FltOffNow(void)
@@ -307,7 +307,9 @@ void SlavePower_RelayW (uint8_t on) { relay_cmd(1, on); }
 void SlavePower_ConverterPositive(void) { if (t_conv_first == 0) t_conv_first = sim_t; Energise(SLAVE_CONV_SWAP ? -1 : +1); }
 void SlavePower_ConverterNegative(void) { if (t_conv_first == 0) t_conv_first = sim_t; Energise(SLAVE_CONV_SWAP ? +1 : -1); }
 
-uint8_t SlavePower_InverterIsEnabled(void) { return (uint8_t)inv_enabled; }
+/* inv_moe_off: v0.9.67: a break cleared MOE in silicon (the outputs at their idle levels: low sides on) */
+uint8_t SlavePower_InverterIsEnabled(void) { return (uint8_t)(inv_enabled && !inv_moe_off); }
+uint8_t SlavePower_InverterDriven(void)    { return (uint8_t)inv_enabled; }      /* v0.9.67: the pins driven (a break holds them at the idle levels: low sides on) */
 
 uint8_t SlavePower_InverterEnable(void)
 {
@@ -319,7 +321,7 @@ uint8_t SlavePower_InverterEnable(void)
 #endif
     if (t_inv_enable_first == 0) t_inv_enable_first = sim_t;
     seq_started = 1;
-    inv_enabled = 1; inv_forced = 0; leg1 = leg2 = 0;     /* v0.9.65: the PWM mode is restored */
+    inv_enabled = 1; inv_forced = 0; inv_moe_off = 0; leg1 = leg2 = 0;     /* v0.9.65: the PWM mode is restored */
     return 1U;
 }
 
@@ -502,7 +504,7 @@ static void world_reset(uint64_t start_t)
     unctl_us = max_unctl_run_us = cur_unctl_run_us = 0; unctl_limit_us = 0;
     t_conv_first = t_inv_enable_first = t_free_cmd_first = t_first_duty = t_shorted_cmd_last = t_inv_disable_last = t_duty_zero_last = 0;
     diag = 0; have_off_time = 0; min_gap_us = 1000000; inv_enabled = 0; leg1 = leg2 = 0;
-    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0; cbc_armed = 0; n_force_off = n_resume = 0; fs_tot = fs_forced = 0U;
+    n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0; cbc_armed = 0; n_force_off = n_resume = 0; fs_tot = fs_forced = 0U; inv_moe_off = 0;
     v_both = v_dead = v_polarity = v_duty_disabled = v_duty_no_conv = v_two_legs = v_over_cap = v_leg_table = v_energised_not_running = 0;
     wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
     resync_crossings();
@@ -1080,16 +1082,22 @@ static void t_relay_hard_fault(void)
     uint64_t t_inject;
     run_to_run(46000000);
     CHECK(g_ctrl.state == CTRL_RUN, "RUN first");
+#if (SLAVE_FLT_KEEP_LOWS == 0)
     unctl_limit_us = 20000ULL;                          /* the primary is unavoidably open until the contacts have moved */
+#endif
     t_inject = sim_t;
-    SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM1);             /* overcurrent-class: everything off AT ONCE */
+    SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM1);             /* overcurrent-class */
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    CHECK(flt_outputs_safe() && inv_enabled && inv_forced, "v0.9.67: a break: the converter and the high sides off at once, the LOW SIDES ON (the silicon's idle levels): the primary stays shorted");
+#else
     CHECK(!inv_enabled && diag == 0, "a break must switch everything off at once");
+#endif
     run_for(2000);
     if (rly_type(0) != RELAY_NOT_A_SHUNT || rly_type(1) != RELAY_NOT_A_SHUNT)
         CHECK(t_shorted_cmd_last >= t_inject && t_shorted_cmd_last - t_inject <= 1000ULL, "the shunts must be commanded closed within 1 ms (%llu us)",
               (unsigned long long)(t_shorted_cmd_last - t_inject));
-    run_for(500000);
-    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_BREAK, "expected FAULT/BREAK, got %d/%d", g_ctrl.state, g_ctrl.fault);
+    run_for(500000 + FLT_UNWIND_US);
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_BREAK && !inv_enabled, "expected FAULT/BREAK with the inverter disabled, got %d/%d", g_ctrl.state, g_ctrl.fault);
     check_invariants("hard fault");
     printf("  hard fault (break) in RUN: all off at once, shunts commanded within 1 ms; uncontrolled window %llu us (<= contact travel)\n",
            (unsigned long long)max_unctl_run_us);
@@ -1141,13 +1149,18 @@ static void t_relay_fault_during_reshunt(void)
     run_to_run(48000000);
     SlaveCtrl_SetRunRequest(0U);
     run_for(20000);
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM15); run_for(5000);     /* v0.9.67: a break while unwinding keeps unwinding with the low sides on */
+    CHECK(g_ctrl.state == CTRL_RESHUNT && inv_enabled, "a break during the unwinding: it keeps unwinding with the low sides on (state %d)", g_ctrl.state);
+#else
     unctl_limit_us = 20000ULL;
     SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM15);            /* a HARD fault while unwinding: off at once */
     CHECK(!inv_enabled, "a hard fault during the unwinding must disable the inverter at once");
-    run_for(500000);
+#endif
+    run_for(500000 + FLT_UNWIND_US);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_BREAK, "expected BREAK (got %d/%d)", g_ctrl.state, g_ctrl.fault);
     check_invariants("hard fault during reshunt");
-    printf("  fault while unwinding: soft one is reported afterwards, hard one switches everything off at once\n");
+    printf("  fault while unwinding: a soft one is reported afterwards; a break keeps unwinding with the low sides on (v0.9.67; everything off at once with SLAVE_FLT_KEEP_LOWS 0)\n");
 }
 
 static void t_relay_never_free_without_inverter(void)
@@ -1276,7 +1289,7 @@ static void t_fault_context(void)
     /* c) break input held low */
     world_reset(35000000);
     run_for(1000000 + WARM);
-    W.brk = 1; SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM1); run_for(10000);
+    W.brk = 1; SlaveCtrl_OnBreakIrq(POWER_BREAK_TIM1); run_for(10000 + FLT_UNWIND_US);
     ctx = SlaveCtrl_FaultContext();
     CHECK(g_ctrl.fault == CF_BREAK && (ctx & CTRL_CTX_BKIN_LOW), "BKIN low must be reported (fault %d ctx 0x%02X)", g_ctrl.fault, ctx);
 
@@ -2308,6 +2321,7 @@ static L3Res_t l3_run(double secs, double settle)
 #if (SLAVE_FLT_CBC != 0) && defined(TEST_LEGACY_REG)
 /* v0.9.66: the cycle-by-cycle limit. cbc_edge() is what SlaveZC_FltIrqCbc does: the PWM forced off FIRST, then the decision */
 static void cbc_edge(void) { SlavePower_InverterForceOffNow(); SlaveCtrl_OnFltCbcIrq(); }
+static void brk_assert(void) { W.brk = 1; if (inv_enabled) inv_moe_off = 1; }              /* v0.9.67: BKIN asserted: the silicon clears MOE */
 static void cbc_pulse(uint64_t width_us) { W.flt = 1; cbc_edge(); run_for(width_us); W.flt = 0; }
 static void t_flt_cbc(void)
 {
@@ -2353,7 +2367,33 @@ static void t_flt_cbc(void)
     run_for(FLT_UNWIND_US);
     CHECK(g_ctrl.fault == CF_FLT, "F02 (fault %d)", g_ctrl.fault);
     check_invariants("cycle-by-cycle: outside RUN");
-    printf("  cycle-by-cycle limit: a pulse turns the PWM off for one period, 200 pulses in 1 s ridden through, FLT held 1 ms or chattering = F02, outside RUN = F02 at once\n");
+    /* v0.9.67: BKIN (the same comparator pulse on this board): limited like FLT, one count per pulse, the converter keeps running */
+    l3_world(193000000ULL, 215.0f); l3_wait_run(); (void)l3_run(6.0, 0.0);
+    { uint32_t n0 = SlaveCtrl_CbcCount();
+      W.flt = 1; brk_assert(); cbc_edge(); SlaveCtrl_OnBreakCbcIrq(POWER_BREAK_TIM1);        /* the real order: the FLT interrupt first, then the break */
+      CHECK(SlaveCtrl_CbcCount() == n0 + 1U && diag != 0 && inv_forced && cbc_armed && g_ctrl.state == CTRL_RUN, "a pulse seen by FLT and BKIN: limited ONCE (count %u -> %u), the converter still running", (unsigned)n0, (unsigned)SlaveCtrl_CbcCount());
+      run_for(10); W.flt = 0; W.brk = 0; run_for(200);
+      CHECK(!inv_forced && !inv_moe_off && !cbc_armed && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "both released: the PWM resumes and MOE is set again, still RUN, no F01 / F02");
+      brk_assert(); SlaveCtrl_OnBreakCbcIrq(POWER_BREAK_TIM15);
+      CHECK(SlaveCtrl_CbcCount() == n0 + 2U && diag != 0 && inv_forced && cbc_armed, "a break alone: limited, the converter still running");
+      run_for(10); W.brk = 0; run_for(200);
+      CHECK(!inv_forced && g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE, "released: resumed, no F01"); }
+    check_invariants("cycle-by-cycle: break pulses");
+    t0 = sim_t; t_trip = 0; brk_assert(); SlaveCtrl_OnBreakCbcIrq(POWER_BREAK_TIM1);
+    while (sim_t < t0 + 5000ULL) { run_for(10); if (t_trip == 0 && (g_ctrl.isr_fault != 0U || g_ctrl.state != CTRL_RUN)) t_trip = sim_t - t0; }
+    CHECK(t_trip >= 900ULL && t_trip <= 1300ULL && flt_outputs_safe(), "BKIN held: the full shutdown after %llu us, the outputs safe", (unsigned long long)t_trip);
+    run_for(2000);
+    CHECK(g_ctrl.state == CTRL_RESHUNT && inv_enabled && inv_forced, "and it UNWINDS with the low sides on, not all off (state %d, inverter %d)", g_ctrl.state, inv_enabled);
+    run_for(FLT_UNWIND_US); W.brk = 0;
+    CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_BREAK, "reported as F01, the break (%d/%d)", g_ctrl.state, g_ctrl.fault);
+    world_reset(194000000ULL);
+    { uint64_t tw = sim_t; while (!is_running() && sim_t < tw + 20000000ULL) run_for(1000); }
+    brk_assert(); SlaveCtrl_OnBreakCbcIrq(POWER_BREAK_TIM1); run_for(2000);
+    CHECK(!cbc_armed && diag == 0 && g_ctrl.state != CTRL_RUN, "a break during the start: the full shutdown at once, the converter off (state %d)", g_ctrl.state);
+    run_for(FLT_UNWIND_US); W.brk = 0;
+    CHECK(g_ctrl.fault == CF_BREAK, "F01 (fault %d)", g_ctrl.fault);
+    check_invariants("cycle-by-cycle: break held / outside RUN");
+    printf("  cycle-by-cycle limit: a pulse turns the PWM off for one period, 200 pulses in 1 s ridden through, FLT held 1 ms or chattering = F02, outside RUN = F02 at once; BKIN limited the same way (one count per pulse), held = F01\n");
 }
 #endif
 

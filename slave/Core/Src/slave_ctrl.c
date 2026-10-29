@@ -423,7 +423,11 @@ void SlaveCtrl_OnBreakIrq(uint32_t flags)
     if ((g_ctrl.run_allowed != 0U) || (g_ctrl.isr_fault != 0U)) { if (g_ctrl.brk_run  < 7U)  g_ctrl.brk_run++;  }
     else                                                        { if (g_ctrl.brk_idle < 7U)  g_ctrl.brk_idle++; }
     if (g_ctrl.run_allowed != 0U) CaptureTrip();
+#if (SLAVE_FLT_KEEP_LOWS != 0)
+    SlavePower_FltOffNow();                 /* v0.9.67: the silicon holds the inverter at its idle levels (high sides off, LOW SIDES ON); force it inactive too (so nothing resumes it) and the converter off */
+#else
     SlavePower_AllOffNow();                 /* converter pins have no hardware break */
+#endif
     CtrlHw_DisarmDeadtime();
     CtrlHw_DisarmPredictOff();
     CtrlHw_DisarmWatchdog();
@@ -453,6 +457,25 @@ void SlaveCtrl_OnFltCbcIrq(void)
     FltCbc_Reset(&s_cbc); SlavePower_CbcDisarm();
     SlaveCtrl_OnFltIrq();                                         /* a real fault: F02, the low-sides-on unwinding */
 }
+/* v0.9.67: a BREAK (TIM1 / TIM15 BKIN: the same comparator pulse as FLT on this board). The silicon has ALREADY taken the inverter to its idle levels (high sides off, low sides
+ * on). In RUN it is limited like a FLT edge (one shared count: when the FLT interrupt has already started the limit for this pulse it is not counted twice); otherwise the
+ * full shutdown (F01). The converter is NOT switched off for a limited pulse. */
+void SlaveCtrl_OnBreakCbcIrq(uint32_t flags)
+{
+    if ((g_ctrl.state == CTRL_RUN) && (g_ctrl.run_allowed != 0U) && (g_ctrl.isr_fault == 0U))
+    {
+        if (s_cbc.active != 0U) return;                              /* the FLT interrupt is already limiting this pulse */
+        if (FltCbc_OnEdge(&s_cbc, CtrlHw_NowMs()) == FLT_CBC_LIMIT)
+        {
+            SlavePower_InverterForceOffNow();                        /* MOE comes back only through SlavePower_InverterResume(), with the PWM still forced until then */
+            SlavePower_CbcArm();
+            return;
+        }
+    }
+    FltCbc_Reset(&s_cbc); SlavePower_CbcDisarm();
+    SlavePower_ConverterOffNow();
+    SlaveCtrl_OnBreakIrq(flags);
+}
 /* TIM1 update (a PWM period start) while armed */
 void SlaveCtrl_OnPwmPeriodIrq(void)
 {
@@ -461,15 +484,17 @@ void SlaveCtrl_OnPwmPeriodIrq(void)
     {   /* a stop or another fault meanwhile: that path owns the outputs (the low sides stay on until the inverter is disabled; the next enable restores the PWM) */
         FltCbc_Reset(&s_cbc); SlavePower_CbcDisarm(); return;
     }
-    r = FltCbc_OnPeriod(&s_cbc, SlavePower_FltAsserted());
+    r = FltCbc_OnPeriod(&s_cbc, (uint8_t)((SlavePower_FltAsserted() != 0U) || (SlavePower_BreakInputActive() != 0U)));      /* v0.9.67: either line still asserted */
     if (r == FLT_CBC_HOLD) return;
     SlavePower_CbcDisarm();
-    if (r == FLT_CBC_RESUME) SlavePower_InverterResume();
-    else                     SlaveCtrl_OnFltIrq();                /* held for FLT_CBC_MAX_HOLD periods: a real fault */
+    if (r == FLT_CBC_RESUME)                      SlavePower_InverterResume();
+    else if (SlavePower_BreakInputActive() != 0U) { SlavePower_ConverterOffNow(); SlaveCtrl_OnBreakIrq(0U); }     /* held: a real fault, reported as the break (F01) when BKIN is the line still asserted */
+    else                                          SlaveCtrl_OnFltIrq();                                          /* held: a real fault (F02) */
 }
 #else
 uint32_t SlaveCtrl_CbcCount(void) { return 0U; }
 void     SlaveCtrl_OnFltCbcIrq(void)    { SlaveCtrl_OnFltIrq(); }      /* no limit: every FLT edge is the full shutdown */
+void     SlaveCtrl_OnBreakCbcIrq(uint32_t flags) { SlavePower_ConverterOffNow(); SlaveCtrl_OnBreakIrq(flags); }
 void     SlaveCtrl_OnPwmPeriodIrq(void) { }
 #endif
 
@@ -787,7 +812,7 @@ static uint16_t s_resh_fault;            /* fault to report once the shunts have
 /* Overcurrent-class faults: everything is switched off AT ONCE (the hardware has already done so for break / FLT). */
 static uint8_t IsHardFault(uint16_t code)
 {
-    return (uint8_t)((code == CF_BREAK) || ((code == CF_FLT) && (SLAVE_FLT_KEEP_LOWS == 0)) || (code == CF_RELAY));      /* v0.9.65: FLT unwinds with the low sides on */
+    return (uint8_t)((((code == CF_BREAK) || (code == CF_FLT)) && (SLAVE_FLT_KEEP_LOWS == 0)) || (code == CF_RELAY));      /* v0.9.65: FLT, v0.9.67: BREAK too, unwind with the low sides on */
 }
 
 /* Duty to zero NOW (low sides on, primary shorted by the IGBTs) and no further duty until the shunts are open again. */
@@ -886,9 +911,9 @@ static void EnterFault(uint16_t code, uint32_t now_ms)
     }
 
 #if (SLAVE_FLT_KEEP_LOWS != 0)
-    /* v0.9.65: FLT has forced the high sides off with the low sides ON (or the main loop saw it): the low sides hold the primary shorted while the shunts close.
+    /* v0.9.65: FLT has forced the high sides off with the low sides ON (or the main loop saw it); v0.9.67: a BREAK leaves them at the idle levels, low sides ON: the low sides hold the primary shorted while the shunts close.
      * The FLT interrupt has cleared inv_active, so the legacy condition below would not unwind it. */
-    if ((code == CF_FLT) && (SlavePower_InverterIsEnabled() != 0U)) { BeginReshunt(code, now_ms); return; }
+    if (((code == CF_FLT) || (code == CF_BREAK)) && (SlavePower_InverterDriven() != 0U)) { BeginReshunt(code, now_ms); return; }      /* v0.9.67: a break too; a break clears MOE, so the test is "the pins are still driven" */
 #endif
     /* Keep the primary controlled while the shunts close, unless this is an overcurrent-class fault or the
      * shunts are already closed / the inverter is not enabled (nothing to unwind). */

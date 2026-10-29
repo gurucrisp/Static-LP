@@ -141,8 +141,7 @@ void TIM1_BRK_UP_TRG_COM_IRQHandler(void)
 {
     if ((TIM1->SR & TIM_SR_BIF) != 0U)
     {
-        SlavePower_ConverterOffNow();
-        SlaveCtrl_OnBreakIrq(SlavePower_TakeBreakFlags());
+        SlaveZC_BreakIrq();       /* v0.9.67: limited in RUN with the cycle-by-cycle limit, else the converter off and the fault (the silicon has already held the low sides on) */
     }
     SlaveZC_Tim1UpdateIrq();      /* v0.9.66: the cycle-by-cycle limit's period start (acts only while it is armed) */
 }
@@ -152,8 +151,7 @@ void TIM15_IRQHandler(void)
 {
     if ((TIM15->SR & TIM_SR_BIF) != 0U)
     {
-        SlavePower_ConverterOffNow();
-        SlaveCtrl_OnBreakIrq(SlavePower_TakeBreakFlags());
+        SlaveZC_BreakIrq();
     }
 }
 

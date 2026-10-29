@@ -112,6 +112,9 @@ void SlavePower_InverterForceOffNow(void);
 void SlavePower_InverterResume(void);
 void SlavePower_CbcArm(void);
 void SlavePower_CbcDisarm(void);
+/* v0.9.67: 1 = the inverter pins are driven by the timers (enabled, possibly with MOE cleared by a break: the outputs then sit at their idle levels, low sides ON).
+ * A break clears MOE, so SlavePower_InverterIsEnabled() is 0 then although the low sides still short the primary: the unwinding asks this instead. */
+uint8_t SlavePower_InverterDriven(void);
 
 /* ISR-SAFE. Both converter diagonals off (all four converter pins low). */
 void SlavePower_ConverterOffNow(void);

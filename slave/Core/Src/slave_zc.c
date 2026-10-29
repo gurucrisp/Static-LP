@@ -16,7 +16,7 @@
 #endif
 #include "slave_flt_filter.h"
 #include "slave_flt_cbc.h"
-#if ((SLAVE_FLT_FILTER_US > 0U) || (SLAVE_FLT_CBC != 0)) && (SLAVE_POWER_STAGE >= 1)
+#if (SLAVE_POWER_STAGE >= 1)
 #include "slave_power.h"
 #endif
 #if (SLAVE_SEQ_SYNC != 0)
@@ -201,6 +201,14 @@ void SlaveZC_Tim1UpdateIrq(void)
 }
 #else
 void SlaveZC_Tim1UpdateIrq(void) { }
+#endif
+#if (SLAVE_POWER_STAGE >= 1)
+/* v0.9.67: a TIM1 / TIM15 break. The silicon has already taken the inverter outputs to their idle levels (high sides off, low sides on). With the cycle-by-cycle limit a
+ * pulse in RUN is limited (the converter keeps running); otherwise the converter off and the fault, as before. */
+void SlaveZC_BreakIrq(void)
+{
+    SlaveCtrl_OnBreakCbcIrq(SlavePower_TakeBreakFlags());
+}
 #endif
 
 /* EXTI callbacks (called from HAL_GPIO_EXTI_IRQHandler, which

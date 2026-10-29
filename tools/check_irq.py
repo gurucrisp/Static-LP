@@ -7,6 +7,7 @@
     #if (SLAVE_FLT_FILTER_US > 0U) ... with the plain SlavePower_AllOffNow(); first in its #else, and in slave_zc.c that function does nothing but wait, clear the edge
     flags and read the pin before its judge, and SlavePower_AllOffNow(); is the statement right after the judge;
  4. the FIRST statement of SlaveCtrl_OnFltIrq (slave_ctrl.c) is the FLT shutdown;
+ 6. (v0.9.67) both timers' OCNIdleState follow SLAVE_FLT_KEEP_LOWS (low sides ON in a break); the TIM1 and TIM15 break handlers call SlaveZC_BreakIrq().
  3b. (v0.9.66) with the cycle-by-cycle limit the handler is '#if CBC SlaveZC_FltIrqCbc(); #elif FILTER SlaveZC_FltIrqFiltered(); #else the shutdown', the CBC handler's first
     statement is SlavePower_InverterForceOffNow(); and that function is exactly the two forced-inactive writes (TIM1, TIM15);
  5. (v0.9.65) the FLT shutdown is SlavePower_FltOffNow(): in slave_power.c, with SLAVE_FLT_KEEP_LOWS its first two statements force BOTH inverter channels inactive
@@ -136,6 +137,17 @@ en = m.group(1) if m else ""
 for t in ("TIM1", "TIM15"):
     if not re.search(re.escape(t) + r"->CCMR1\s*=\s*\(" + re.escape(t) + r"->CCMR1\s*&\s*~TIM_CCMR1_OC1M\)\s*\|\s*\(TIM_CCMR1_OC1M_2\s*\|\s*TIM_CCMR1_OC1M_1\)", en):
         problems.append("slave_power.c SlavePower_InverterEnable does not restore PWM mode 1 on %s (after SlavePower_FltOffNow forced it inactive)" % t)
+# 6 (v0.9.67): in a BREAK the silicon holds the low sides ON: both timers' OCNIdleState follow SLAVE_FLT_KEEP_LOWS; both break handlers go through SlaveZC_BreakIrq()
+if strip_comments(pw).count("sConfigOC.OCNIdleState = (SLAVE_FLT_KEEP_LOWS != 0) ? TIM_OCNIDLESTATE_SET : TIM_OCNIDLESTATE_RESET;") != 2:
+    problems.append("slave_power.c: both TIM1 and TIM15 must set OCNIdleState = (SLAVE_FLT_KEEP_LOWS != 0) ? TIM_OCNIDLESTATE_SET : TIM_OCNIDLESTATE_RESET (low sides on in a break)")
+mm = re.search(r"void\s+SlavePower_InverterResume\s*\(\s*void\s*\)\s*\{(.*?)\n\}", strip_comments(pw), flags=re.S)
+rb = re.sub(r"\s+", " ", mm.group(1)) if mm else ""
+if "if ((s_pins_af != 0U) && (SlavePower_BreakInputActive() == 0U)) { TIM1->BDTR |= TIM_BDTR_MOE; TIM15->BDTR |= TIM_BDTR_MOE; }" not in rb:
+    problems.append("slave_power.c SlavePower_InverterResume: must set MOE again on TIM1 and TIM15 when the pins are driven and no break input is asserted (a limited break cleared it)")
+for h in ("TIM1_BRK_UP_TRG_COM_IRQHandler", "TIM15_IRQHandler"):
+    mm = re.search(r"void\s+" + h + r"\s*\(\s*void\s*\)\s*\{(.*?)\n\}", it, flags=re.S)
+    if (mm is None) or ("SlaveZC_BreakIrq();" not in mm.group(1)) or ("SlavePower_ConverterOffNow" in mm.group(1)):
+        problems.append("stm32g0xx_it.c %s: the break must go through SlaveZC_BreakIrq() (which decides limit or fault), nothing else first" % h)
 if "#include \"slave_features.h\"" not in pw:
     problems.append("slave_power.c does not include slave_features.h: SLAVE_FLT_KEEP_LOWS would be undefined there")
 
