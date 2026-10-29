@@ -53,6 +53,9 @@ int8_t   CtrlHw_Sign(uint8_t out_channel, int32_t *dev_sum);
  * larger dead band than CtrlHw_Sign (used by the 20 kHz polarity guard). */
 int8_t   CtrlHw_SignLatest(uint8_t strong);     /* strong = 1: wide dead band (~30 V) instead of ~10 V */
 
+/* ISR-SAFE, integer only. v0.9.69: the same newest two AC_IN frames with a dead band of min_counts per sample (the voltage gate, CTRL_VGATE_COUNTS). */
+int8_t   CtrlHw_SignAbove(int32_t min_counts);
+
 /* Snapshot of the latest RMS results. */
 void     CtrlHw_GetMeas(CtrlMeas_t *m);
 

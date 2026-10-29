@@ -107,10 +107,12 @@ extern "C" {
 #define CTRL_WATCHDOG_US         14500U     /* nominal watchdog before the first interval is known */
 #endif
 #ifndef CTRL_PREDICT_LEAD_US
-#define CTRL_PREDICT_LEAD_US     300U       /* the converter is switched OFF this long BEFORE the next
+#define CTRL_PREDICT_LEAD_US     800U       /* the converter is switched OFF this long BEFORE the next
                                                expected zero-cross, by timer, whether or not the event
                                                arrives. A missing event therefore leaves it OFF, never
-                                               conducting against the line. */
+                                               conducting against the line. v0.9.69: 800 (was 300): about
+                                               80 V at 230 V, the diagonal is well off before the zero even
+                                               when the zero comes early (a disturbed line) */
 #endif
 /* SLAVE_GLITCH_SKIP: at most CTRL_GLITCH_MAX skipped half-cycles in CTRL_GLITCH_WINDOW_US; the next one is the fault */
 /* SLAVE_TF_RUN_CHECK: the flip check (see slave_features.h) */
@@ -153,6 +155,42 @@ uint32_t SlaveCtrl_GlitchSkips(void);       /* how many half-cycles have been sk
 #define CTRL_GUARD_CONFIRM_TICKS 2U         /* the polarity guard needs this many CONSECUTIVE 50 us ticks showing the
                                                wrong sign (so one noisy ADC sample cannot trip it) */
 #endif
+/* v0.9.69 VOLTAGE-GATED DEAD BAND (the Y stage lost 1L, 3L, 1H, 4H with nearby load switching: a diagonal against the line puts the DC link across the
+ * mains through the leg 1 diodes, a current the CT never sees, so FLT / BKIN cannot protect). A zero-cross event alone no longer energises a diagonal:
+ *   ON : from the dead time on, every CTRL_VGATE_STEP_US the newest AC_IN samples are read; the diagonal goes on only after CTRL_VGATE_CONFIRM reads IN A ROW
+ *        show the line beyond CTRL_VGATE_V with the polarity of that diagonal. Not confirmed by CTRL_VGATE_MAX_US (or too close to the predicted turn-off):
+ *        NOTHING this half-cycle (counted, not a fault: the safe state).
+ *   OFF: the 20 kHz tick switches the diagonal off (not a fault) once CTRL_VGATE_OFF_TICKS ticks in a row no longer show the line beyond CTRL_VGATE_V with
+ *        its polarity (a notch, a collapsing or reversing line); it stays off until the next zero-cross event. CTRL_PREDICT_LEAD_US is the timed backup.
+ * CTRL_VGATE_V 0 = the old behaviour (on CTRL_DEADTIME_US after the event). */
+#ifndef CTRL_VGATE_V
+#define CTRL_VGATE_V             25U        /* volts of mains (instantaneous) */
+#endif
+#define CTRL_VGATE_COUNTS        ((int32_t)((CTRL_VGATE_V * 396U) / 100U))   /* AC_IN ADC counts per sample: 3.96 counts per volt (0.2525 V/count, slave_meas.h) */
+#ifndef CTRL_VGATE_CONFIRM
+#define CTRL_VGATE_CONFIRM       2U         /* reads in a row beyond the threshold with the right polarity */
+#endif
+#ifndef CTRL_VGATE_STEP_US
+#define CTRL_VGATE_STEP_US       50U        /* one ADC frame (20 kHz): each read sees new samples */
+#endif
+#ifndef CTRL_VGATE_MAX_US
+#define CTRL_VGATE_MAX_US        3000U      /* give up on this half-cycle if not confirmed this long after the dead time */
+#endif
+#ifndef CTRL_VGATE_MIN_ON_US
+#define CTRL_VGATE_MIN_ON_US     1000U      /* ...or if fewer than this would remain before the predicted turn-off */
+#endif
+#ifndef CTRL_VGATE_OFF_TICKS
+#define CTRL_VGATE_OFF_TICKS     2U         /* 20 kHz ticks in a row below the threshold (or the wrong sign) that switch the diagonal off */
+#endif
+#if (CTRL_VGATE_V != 0U) && ((CTRL_VGATE_V < 10U) || (CTRL_VGATE_V > 60U))
+#error "CTRL_VGATE_V: 10 to 60 V (0 = off)"
+#endif
+#if (CTRL_VGATE_V != 0U) && ((CTRL_VGATE_CONFIRM < 1U) || (CTRL_VGATE_OFF_TICKS < 1U))
+#error "CTRL_VGATE_CONFIRM and CTRL_VGATE_OFF_TICKS: at least 1"
+#endif
+uint32_t SlaveCtrl_VgateSkips(void);        /* half-cycles left without a diagonal because the line never confirmed its polarity (diagnostics) */
+uint32_t SlaveCtrl_VgateOffs(void);         /* diagonals switched off early because the line fell below the threshold (diagnostics) */
+
 #ifndef CTRL_RESHUNT_TIMEOUT_MS
 #define CTRL_RESHUNT_TIMEOUT_MS  (SLAVE_RELAY_SETTLE_MS + 400U)   /* gives up waiting for the shunts to close */
 #endif

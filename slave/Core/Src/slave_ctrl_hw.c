@@ -79,6 +79,11 @@ int8_t CtrlHw_SignLatest(uint8_t strong)
     return SlaveMeas_SignLatest(MEAS_CH_IN, (strong != 0U) ? MEAS_GUARD_STRONG_COUNTS : MEAS_GUARD_MIN_COUNTS);
 }
 
+int8_t CtrlHw_SignAbove(int32_t min_counts)
+{
+    return SlaveMeas_SignLatest(MEAS_CH_IN, min_counts);
+}
+
 int8_t CtrlHw_Sign(uint8_t out_channel, int32_t *dev_sum)
 {
     return SlaveMeas_SignBeforeNow((out_channel != 0U) ? MEAS_CH_OUT : MEAS_CH_IN, dev_sum);

@@ -75,6 +75,7 @@ static struct
     int     guard_glitch;               /* the next N polarity-guard samples show the WRONG sign (noise injection) */
     int     sign_glitch;                /* the next N AC_IN signs read at a zero-cross event are WRONG (opposite)  */
     int     preen_glitch;               /* the next N last-moment (strong) polarity checks show the OPPOSITE sign  */
+    int     early_n; int64_t early_from_k; double early_us;   /* v0.9.69: the next early_n zero-cross edges from crossing early_from_k come early_us early */
 } W;
 
 static uint64_t sim_t;                  /* microseconds, 64-bit; the code under test sees the low 32 bits */
@@ -114,6 +115,7 @@ static uint16_t probe_isr_fault, probe_trip_cap;
 static uint64_t t_last_edge, t_first_energise;
 static long     v_both, v_dead, v_polarity, v_duty_disabled, v_duty_no_conv, v_two_legs, v_over_cap, v_leg_table, v_energised_not_running;
 static uint64_t wrong_us, max_wrong_run_us, cur_wrong_run_us;
+static long     v_near_zero, v_against_any;     /* v0.9.69: a diagonal on while the line is within 5 % of its peak of zero / against it at ANY voltage above 2 % */
 
 /* ---- PHYSICAL MODEL of the two BYPASS relays (SH-RLY, W-RLY): each contact joins PRI-PHASE and PRI-NTRL, i.e. it SHORTS the
  *      transformer primary when closed. The contact follows its coil after a mechanical delay of 6..12 ms. Which coil state
@@ -173,6 +175,17 @@ int8_t CtrlHw_SignLatest(uint8_t strong)
     int32_t sum = (int32_t)lround(W.amp * mains((double)sim_t - 75.0) * 2.0);
     int32_t thr = strong ? 240 : 80;                     /* 2 samples x (120 or 40 counts) */
     return (int8_t)((sum > thr) ? 1 : ((sum < -thr) ? -1 : 0));
+}
+
+/* v0.9.69 the voltage gate: the same newest two frames, dead band min_counts per sample; vg_notch_until: the line reads ~0 (a notch / a dip) until then */
+static uint64_t vg_notch_until, vg_alt_until; static int vg_fake_pol, vg_fake_n, vg_alt;
+int8_t CtrlHw_SignAbove(int32_t min_counts)
+{
+    if (vg_fake_n > 0) { vg_fake_n--; return (int8_t)vg_fake_pol; }                 /* a false read (noise) */
+    if (sim_t < vg_alt_until) { vg_alt ^= 1; return vg_alt ? g_ctrl.pending_pol : 0; }   /* noise: every other read shows the pending polarity, never two in a row */
+    if (sim_t < vg_notch_until) return 0;
+    int32_t sum = (int32_t)lround(W.amp * mains((double)sim_t - 75.0) * 2.0);
+    return (int8_t)((sum > 2 * min_counts) ? 1 : ((sum < -2 * min_counts) ? -1 : 0));
 }
 
 int8_t CtrlHw_Sign(uint8_t out_channel, int32_t *dev_sum)
@@ -378,6 +391,7 @@ static void gen_crossing(int64_t k)
 {
     double  tz = W.phase0_us + (double)k * half_period_us();
     if (W.skip_crossings > 0) { W.skip_crossings--; return; }
+    if (W.early_n > 0 && k >= W.early_from_k) { W.early_n--; tz -= W.early_us; }      /* v0.9.69: this zero-cross EDGE comes early (noise), the mains does not */
     int     pos_going = (((k % 2) + 2) % 2) == 0;
     double  j = (W.jitter_us > 0.0) ? frand() * W.jitter_us : 0.0;
     int64_t base = (int64_t)llround(tz + W.edge_delay_us + j);
@@ -408,6 +422,8 @@ static void sample_invariants(void)
     {
         v_polarity++; wrong = 1; wrong_us += 100;
     }
+    if (diag != 0 && fabs(m) < 0.05) v_near_zero++;
+    if (diag != 0 && fabs(m) > 0.02 && ((m > 0.0) != (diag > 0))) v_against_any++;
     if (wrong) { cur_wrong_run_us += 100; if (cur_wrong_run_us > max_wrong_run_us) max_wrong_run_us = cur_wrong_run_us; }
     else       cur_wrong_run_us = 0;
 
@@ -507,6 +523,7 @@ static void world_reset(uint64_t start_t)
     n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0; cbc_armed = 0; n_force_off = n_resume = 0; fs_tot = fs_forced = 0U; inv_moe_off = 0;
     v_both = v_dead = v_polarity = v_duty_disabled = v_duty_no_conv = v_two_legs = v_over_cap = v_leg_table = v_energised_not_running = 0;
     wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
+    vg_notch_until = 0; vg_alt_until = 0; vg_alt = 0; vg_fake_pol = 0; vg_fake_n = 0; v_near_zero = v_against_any = 0;
     resync_crossings();
 
     SlaveCtrl_Init();
@@ -515,6 +532,15 @@ static void world_reset(uint64_t start_t)
 #endif
 }
 
+/* v0.9.69: when a NORMAL diagonal goes on after its zero-cross event: CTRL_DEADTIME_US, or with the voltage gate once the line (read 75 us late) has passed
+ * CTRL_VGATE_V on CTRL_VGATE_CONFIRM reads, one per 50 us */
+static uint64_t vgate_cross_us(void)
+{
+    double x = (double)CTRL_VGATE_COUNTS / W.amp; if (x > 1.0) x = 1.0;
+    return (uint64_t)(asin(x) / (2.0 * PI * W.f_hz) * 1e6 + 75.0 - W.edge_delay_us);
+}
+static uint64_t vgate_on_min_us(void) { return (CTRL_VGATE_V == 0U) ? (uint64_t)CTRL_DEADTIME_US : vgate_cross_us(); }
+static uint64_t vgate_on_max_us(void) { return (CTRL_VGATE_V == 0U) ? (uint64_t)CTRL_DEADTIME_US + 30ULL : vgate_cross_us() + (uint64_t)CTRL_VGATE_CONFIRM * CTRL_VGATE_STEP_US + 30ULL; }
 static int is_running(void) { return g_ctrl.state >= CTRL_RECT && g_ctrl.state <= CTRL_RESHUNT; }
 /* v0.9.65: what the FLT shutdown must leave at once: the converter off, no duty, and the inverter either disabled or FORCED inactive (high sides off, low sides
  * on: SLAVE_FLT_KEEP_LOWS) until the shunts have closed; FLT_UNWIND_US covers that unwinding before the controller is in FAULT */
@@ -2070,7 +2096,7 @@ static void t_first_at_peak(void)
         { uint64_t t0 = sim_t; while (n_energise < 3 && sim_t < t0 + 15000000ULL) run_for(1000); }
         CHECK(n_energise >= 3, "start %d: converter running (energised %ld times)", k, (long)n_energise);
         CHECK(dt_en1 >= 4600ULL && dt_en1 <= 5400ULL, "start %d: the FIRST diagonal at the peak: %llu us after its event (expected about 5000)", k, (unsigned long long)dt_en1);
-        CHECK(dt_en2 >= (uint64_t)CTRL_DEADTIME_US && dt_en2 <= (uint64_t)CTRL_DEADTIME_US + 30ULL, "start %d: the SECOND diagonal as before: %llu us after its event (expected %u)", k, (unsigned long long)dt_en2, (unsigned)CTRL_DEADTIME_US);
+        CHECK(dt_en2 >= vgate_on_min_us() && dt_en2 <= vgate_on_max_us(), "start %d: the SECOND diagonal as before: %llu us after its event (expected %llu to %llu)", k, (unsigned long long)dt_en2, (unsigned long long)vgate_on_min_us(), (unsigned long long)vgate_on_max_us());
         CHECK(first_energise_pol == SLAVE_CONV_FIRST_POL || SLAVE_CONV_FIRST_POL == 0, "start %d: first polarity %d", k, first_energise_pol);
         CHECK(g_ctrl.fault == CF_NONE && is_running(), "start %d: no fault (state %d fault %d)", k, g_ctrl.state, g_ctrl.fault);
     }
@@ -2765,6 +2791,166 @@ static void w_s2_boost(void)   { t_stage2_leg_selection(200.0f, "inverter, vin 2
 static void w_s2_buck(void)    { t_stage2_leg_selection(250.0f, "inverter, vin 250 V (buck)",  21000000); }
 #endif
 
+
+/* ======================================================================= */
+/* v0.9.69 the voltage-gated dead band                                      */
+/* ======================================================================= */
+static uint64_t next_zero_after(uint64_t t)       /* the first true zero of the mains after t */
+{
+    double k = ceil(((double)t - W.phase0_us) / half_period_us());
+    return (uint64_t)(W.phase0_us + k * half_period_us());
+}
+
+static void t_vgate_normal(void)
+{
+    double amps[3] = { 784.0, 1288.0, 1680.0 };       /* 140, 230, 300 V */
+    int j;
+    for (j = 0; j < 3; j++)
+    {
+        world_reset(600000000ULL + (uint64_t)j * 50000000ULL);
+        W.amp = amps[j];
+        run_for(800000 + WARM);
+        CHECK(is_running(), "%.0f counts: running (state %d fault %d)", amps[j], g_ctrl.state, g_ctrl.fault);
+        { long e0 = n_energise; uint32_t s0 = SlaveCtrl_VgateSkips(), o0 = SlaveCtrl_VgateOffs();
+          v_near_zero = v_against_any = 0;
+          run_for(1000000);
+          CHECK(n_energise - e0 >= 95, "%.0f counts: a diagonal every half-cycle (%ld in 1 s)", amps[j], (long)(n_energise - e0));
+          CHECK(SlaveCtrl_VgateSkips() == s0 && SlaveCtrl_VgateOffs() == o0, "%.0f counts: a clean line: no half-cycle skipped (%u), none cut short (%u)", amps[j],
+                (unsigned)(SlaveCtrl_VgateSkips() - s0), (unsigned)(SlaveCtrl_VgateOffs() - o0)); }
+        CHECK(v_near_zero == 0, "%.0f counts: no diagonal within 5 %% of a zero (%ld samples)", amps[j], v_near_zero);
+        CHECK(v_against_any == 0, "%.0f counts: no diagonal against the line at any voltage (%ld samples)", amps[j], v_against_any);
+        check_invariants("voltage gate, clean line");
+    }
+    printf("  clean line at 140 / 230 / 300 V: a diagonal every half-cycle, none near a zero, none skipped or cut short\n");
+}
+
+/* a zero-cross EDGE that comes early (noise from a nearby load) while the mains is still in the old half-cycle, at three points of the wave (the same disturbance
+ * lands on R, Y and B at 0, 120 and 240 degrees) */
+static void t_vgate_early_edge(void)
+{
+    double early[6] = { 60.0, 150.0, 300.0, 600.0, 1200.0, 2400.0 };
+    double ph[3] = { 0.0, 6666.7, 13333.3 };
+    int i, p; long worst = 0, near = 0;
+    for (p = 0; p < 3; p++)
+        for (i = 0; i < 6; i++)
+        {
+            world_reset(700000000ULL + (uint64_t)(p * 6 + i) * 40000000ULL);
+            W.amp = 1288.0; W.phase0_us += ph[p]; resync_crossings();
+            run_for(800000 + WARM);
+            CHECK(is_running(), "phase %d early %.0f: running before", p, early[i]);
+            v_near_zero = v_against_any = 0; v_polarity = 0;
+            W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = early[i];
+            run_for(200000);
+            CHECK(v_polarity == 0 && v_against_any == 0, "phase %d, edge %.0f us early: a diagonal against the line (%ld / %ld samples)", p, early[i], v_polarity, v_against_any);
+            if (v_against_any > worst) worst = v_against_any;
+            near += v_near_zero;
+            check_invariants("voltage gate, early edge");
+        }
+    CHECK(near == 0, "early edges: no diagonal within 5 %% of a zero (%ld samples)", near);
+    printf("  zero-cross edge 60 us to 2.4 ms early, at 3 points of the wave: never a diagonal against the line (worst %ld samples)\n", worst);
+}
+
+/* a notch: the line collapses for 1.5 ms in the middle of a half-cycle (a heavy load switched nearby): the diagonal is switched off and stays off until the next
+ * zero-cross; no fault. Then a long dropout of the gate's reading (40 ms): no diagonal at all, counted, no fault. */
+static void t_vgate_notch(void)
+{
+    uint64_t z;
+    world_reset(800000000ULL);
+    W.amp = 1288.0;
+    run_for(800000 + WARM);
+    CHECK(is_running(), "running before the notch");
+    z = next_zero_after(sim_t + 1000);
+    run_for(z + 4000 - sim_t);                              /* 4 ms into a half-cycle: the diagonal is on */
+    CHECK(diag != 0, "a diagonal on before the notch");
+    { uint32_t o0 = SlaveCtrl_VgateOffs(); long e0 = n_energise;
+      vg_notch_until = sim_t + 1500;
+      run_for(400);
+      CHECK(diag == 0, "the notch switched the diagonal off within 0.4 ms");
+      CHECK(SlaveCtrl_VgateOffs() == o0 + 1U, "counted as one early turn-off (%u)", (unsigned)(SlaveCtrl_VgateOffs() - o0));
+      run_for(2000);
+      CHECK(diag == 0 && n_energise == e0, "it stays off after the notch until the next zero-cross (energised %ld)", (long)(n_energise - e0));
+      run_for(z + 10000 + 3000 - sim_t);
+      CHECK(diag != 0 && n_energise == e0 + 1, "the next half-cycle runs normally (energised %ld)", (long)(n_energise - e0)); }
+    CHECK(is_running() && g_ctrl.fault == CF_NONE, "a notch is not a fault (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    { uint32_t s0 = SlaveCtrl_VgateSkips(); long e0;
+      vg_notch_until = sim_t + 40000;
+      run_for(1000); e0 = n_energise;
+      run_for(39000);
+      CHECK(n_energise == e0, "the line never confirmed: no diagonal for 40 ms (%ld)", (long)(n_energise - e0));
+      CHECK(SlaveCtrl_VgateSkips() >= s0 + 3U, "the half-cycles are counted as skipped (%u)", (unsigned)(SlaveCtrl_VgateSkips() - s0));
+      run_for(100000);
+      CHECK(is_running() && g_ctrl.fault == CF_NONE, "no fault, running again (state %d fault %d)", g_ctrl.state, g_ctrl.fault); }
+    check_invariants("voltage gate, notch");
+    printf("  1.5 ms notch: off within 0.4 ms, back at the next zero-cross, no fault; 40 ms without confirmation: nothing energised, no fault\n");
+}
+
+/* the gate's reading is noise that never confirms twice IN A ROW: nothing is energised. The line reads ~0 until 9.3 ms into a half-cycle (past the predicted
+ * turn-off): too late, nothing is energised in that half-cycle (it would run into the next zero). */
+static void t_vgate_late(void)
+{
+    uint64_t z; long e0;
+    world_reset(805000000ULL);
+    W.amp = 1288.0;
+    run_for(800000 + WARM);
+    CHECK(is_running(), "running");
+    z = next_zero_after(sim_t + 1000);
+    vg_alt_until = z + 30000;
+    run_for(z - sim_t + 1000); e0 = n_energise;
+    run_for(28000);
+    CHECK(n_energise == e0, "single reads in between non-confirming ones: never energised (%ld)", (long)(n_energise - e0));
+    run_for(100000);
+    z = next_zero_after(sim_t + 1000);
+    vg_notch_until = z + 9300;
+    v_near_zero = v_against_any = 0;
+    run_for(z - sim_t + 1000); e0 = n_energise;
+    run_for(9500);                                          /* to 0.5 ms into the next half-cycle */
+    CHECK(n_energise - e0 <= 1, "late confirmation: at most the next half-cycle's diagonal (%ld)", (long)(n_energise - e0));
+    CHECK(v_near_zero == 0 && v_against_any == 0, "late confirmation: no diagonal near the zero (%ld) or against the line (%ld)", v_near_zero, v_against_any);
+    run_for(100000);
+    CHECK(is_running() && g_ctrl.fault == CF_NONE, "no fault (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    check_invariants("voltage gate, late");
+    printf("  noise that never confirms twice in a row: nothing energised; a confirmation past the predicted turn-off: nothing energised\n");
+}
+
+/* the line collapses to a few volts (15 V peak) for 30 ms and comes back: never energised against or near zero */
+static void t_vgate_collapse(void)
+{
+    world_reset(810000000ULL);
+    W.amp = 1288.0;
+    run_for(800000 + WARM);
+    v_near_zero = v_against_any = 0; v_polarity = 0;
+    W.amp = 60.0;
+    run_for(30000);
+    CHECK(diag == 0, "the diagonal is off while the line is 15 V");
+    W.amp = 1288.0;
+    run_for(500000);
+    CHECK(v_against_any == 0 && v_polarity == 0, "a collapsed line: never a diagonal against it (%ld / %ld)", v_against_any, v_polarity);
+    check_invariants("voltage gate, collapse");
+    printf("  line collapsed to 15 V for 30 ms: off, never against the line (state %d fault %d afterwards)\n", g_ctrl.state, g_ctrl.fault);
+}
+
+/* the same phase jumps as the polarity-guard test, at 3 points of the wave and 230 V: the time against the line stays within the guard's 0.4 ms, and the voltage
+ * gate cuts a diagonal whose line FALLS through zero (an early zero) before it reverses */
+static void t_vgate_phase_jump(void)
+{
+    double shifts[4] = { 2000.0, 5000.0, 8000.0, 10000.0 };
+    double ph[3] = { 0.0, 6666.7, 13333.3 };
+    int i, p; uint64_t worst = 0;
+    for (p = 0; p < 3; p++)
+        for (i = 0; i < 4; i++)
+        {
+            world_reset(900000000ULL + (uint64_t)(p * 4 + i) * 60000000ULL);
+            W.amp = 1288.0; W.phase0_us += ph[p]; resync_crossings();
+            run_for(800000 + WARM + (uint64_t)(p * 1700 + i * 2300));
+            wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
+            W.phase0_us += shifts[i]; resync_crossings();
+            run_for(300000);
+            if (max_wrong_run_us > worst) worst = max_wrong_run_us;
+            CHECK(max_wrong_run_us <= 400, "phase %d jump %.0f us: %llu us against the line", p, shifts[i], (unsigned long long)max_wrong_run_us);
+        }
+    printf("  phase jumps 2 to 10 ms at 3 points of the wave: at most %llu us against the line (sampled every 100 us)\n", (unsigned long long)worst);
+}
+
 int main(void)
 {
 #if (SLAVE_FLT_KEEP_LOWS == 0) && !defined(ALLOW_FLT_KEEP_LOWS_0)
@@ -2792,6 +2978,14 @@ int main(void)
     run_isolated(t_lost_pulse_midrun,         "one zero-cross pulse lost mid-run");
     run_isolated(t_guard_margin,              "polarity guard: no false trips at the extremes");
     run_isolated(t_resync_clears_state,       "restart discards the old synchronisation");
+#if (CTRL_VGATE_V != 0U) || defined(TEST_VGATE_FORCE)       /* TEST_VGATE_FORCE: the same tests on the old behaviour (they must fail there) */
+    run_isolated(t_vgate_normal,              "voltage gate: clean line, 140 / 230 / 300 V (v0.9.69)");
+    run_isolated(t_vgate_early_edge,          "voltage gate: early zero-cross edges at 3 points of the wave");
+    run_isolated(t_vgate_notch,               "voltage gate: notch and dropout");
+    run_isolated(t_vgate_late,                "voltage gate: unconfirmed noise, late confirmation");
+    run_isolated(t_vgate_collapse,            "voltage gate: collapsed line");
+    run_isolated(t_vgate_phase_jump,          "voltage gate: phase jumps at 3 points of the wave");
+#endif
 #if RELAY_MODEL
     run_isolated(t_relay_module_unit,         "relays: module unit test (patterns, settle, reversal, ShortNow)");
     run_isolated(t_relay_stage1_untouched,    "relays: stay SHORTED while only the converter runs");

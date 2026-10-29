@@ -146,6 +146,10 @@ echo "s1_legacy_first_neg -DSLAVE_POWER_STAGE=1 -DSLAVE_RELAYS_MODE=2 -DSLAVE_CO
 echo "s3_legacy_softstart -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DTEST_SOFTSTART" >> "$JOBS"
 echo "s3_flip_standalone -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_TF_RUN_CHECK=1" >> "$JOBS"
 echo "s3_glitch_skip -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_GLITCH_SKIP=1" >> "$JOBS"
+# v0.9.69 the voltage gate with the glitch skip (production), a wait far past the predicted turn-off (the clamp must hold), and the gate OFF (the old timing still builds and passes)
+echo "s3_vgate_glitch -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_GLITCH_SKIP=1" >> "$JOBS"
+echo "s3_vgate_long_wait -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_GLITCH_SKIP=1 -DCTRL_VGATE_MAX_US=20000U" >> "$JOBS"
+echo "s3_vgate_off -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DCTRL_VGATE_V=0U -DCTRL_PREDICT_LEAD_US=300U" >> "$JOBS"
 echo "s3_flt_filter -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_FLT_FILTER_US=1" >> "$JOBS"
 echo "s3_flt_all_off -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_FLT_KEEP_LOWS=0 -DALLOW_FLT_KEEP_LOWS_0" >> "$JOBS"
 echo "s3_flt_cbc -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_FLT_CBC=1" >> "$JOBS"
@@ -187,7 +191,7 @@ run_one() {
   PIN=$(pin_off "$@")
   if gcc -O1 -w $INC -DBRINGUP_REPORT_MODE=2 "$@" $PIN test_ctrl.c $SRC -o "$OUT/$name" -lm 2>/dev/null; then
     # the low-voltage job changes the input window, so only its own test applies (older tests assume the 140 V default)
-    only=""; [ "$name" = "s1_quick_retry" ] && only="quick retry"; [ "$name" = "s3_master_control" ] && only="master control"; [ "$name" = "s3_tune_mode" ] && only="tune mode"; [ "$name" = "s3_tune_apply" ] && only="tune apply"; [ "$name" = "s3_fast_correction" ] && only="master control"; [ "$name" = "s3_fast_correction_100" ] && only="master control"; [ "$name" = "s3_no_voltage_cuts" ] && only="no voltage cuts"; [ "$name" = "s3_input_steps" ] && only="input steps"; [ "$name" = "s3_glitch_skip" ] && only="glitch skip"; [ "$name" = "s3_flt_filter" ] && only="flt filter"; [ "$name" = "s3_flip_standalone" ] && only="flip standalone"; { [ "$name" = "s3_legacy_softstart" ] || [ "$name" = "s3_legacy_fast_start" ]; } && only="soft start"; [ "$name" = "s1_low_voltage" ] && only="low input voltage"; [ "$name" = "s1_settle5" ] && only="longer W-RLY settle"
+    only=""; [ "$name" = "s1_quick_retry" ] && only="quick retry"; [ "$name" = "s3_master_control" ] && only="master control"; [ "$name" = "s3_tune_mode" ] && only="tune mode"; [ "$name" = "s3_tune_apply" ] && only="tune apply"; [ "$name" = "s3_fast_correction" ] && only="master control"; [ "$name" = "s3_fast_correction_100" ] && only="master control"; [ "$name" = "s3_no_voltage_cuts" ] && only="no voltage cuts"; [ "$name" = "s3_input_steps" ] && only="input steps"; [ "$name" = "s3_glitch_skip" ] && only="glitch skip"; { [ "$name" = "s3_vgate_glitch" ] || [ "$name" = "s3_vgate_long_wait" ]; } && only="voltage gate"; [ "$name" = "s3_flt_filter" ] && only="flt filter"; [ "$name" = "s3_flip_standalone" ] && only="flip standalone"; { [ "$name" = "s3_legacy_softstart" ] || [ "$name" = "s3_legacy_fast_start" ]; } && only="soft start"; [ "$name" = "s1_low_voltage" ] && only="low input voltage"; [ "$name" = "s1_settle5" ] && only="longer W-RLY settle"
     if [ "$MODE" = "full" ]; then r=$(ONLY="$only" timeout 900 "$OUT/$name" 2>&1); else r=$(ONLY="$only" SKIP_SLOW=1 timeout 900 "$OUT/$name" 2>&1); fi
     r=$(echo "$r" | grep -E "checks,|RESULT" | tr -s ' ' | tr '\n' ' ')
   else

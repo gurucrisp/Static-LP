@@ -58,6 +58,11 @@
 #ifndef SLAVE_GLITCH_SKIP
 #define SLAVE_GLITCH_SKIP      1
 #endif
+/* v0.9.69 the VOLTAGE-GATED DEAD BAND (slave_ctrl.h): a converter diagonal goes on only once AC_IN has shown its polarity beyond this many volts on 2 reads in a row
+ * (never on a zero-cross edge alone), and goes off when the line falls back below it (a notch, an early zero). 0 = the old timing (on 40 us after the edge). 10 to 60. */
+#ifndef CTRL_VGATE_V
+#define CTRL_VGATE_V           25U
+#endif
 /* The TRANSFORMER-CONNECTION (FLIP) check at every start: if the output moves AGAINST the commanded direction the slave stops with fault 17, latched (the master shows Transformer Flip, buzzer in every mode). See slave_features.h. */
 #ifndef SLAVE_TF_RUN_CHECK
 #define SLAVE_TF_RUN_CHECK     1

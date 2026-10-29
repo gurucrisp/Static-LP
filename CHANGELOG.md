@@ -2,7 +2,51 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.68 — Domestic: no false "Re-tune Required" when the load arrives; the cycle-by-cycle count on the monitor page (current)
+## v0.9.69 — voltage-gated dead band: a converter diagonal only goes on when the line itself confirms its polarity (current)
+* **Reported:** Domestic, running with load, a heavy load switched nearby: Y lost 1L, 3L, 1H and 4H; at the same moment the log shows R F15, B F16, Y Phase Missing, B F16, R F11 (one mains disturbance seen by all three slaves).
+* **Reading of the damage:** 3L + 4H is Y's NEGATIVE diagonal; with it on while the line is positive, the DC link is driven backwards and the line shorts through leg 1's diodes and IGBTs (1H / 1L). That current never passes the CT2500, so FLT and BKIN cannot see it; nothing in the firmware limits it except switching the diagonal off. Until now a diagonal went on 40 us after a zero-cross EDGE, with one last check (the newest samples not clearly beyond 30 V the other way). An edge that comes early (noise) while the line is still a few volts on the old side, or a line that is disturbed near its zero, therefore energised a diagonal against the line, or right at the zero.
+* **Change (`CTRL_VGATE_V` 25 in the production config; 0 = the old timing):**
+  1. **On:** from the dead time on, the newest AC_IN samples are read every 50 us (one ADC frame); the diagonal goes on only after **2 reads in a row** show the line beyond 25 V with THAT diagonal's polarity. Not confirmed within 3 ms (and never later than 1 ms before the predicted turn-off): no diagonal in that half-cycle. That is counted (`SlaveCtrl_VgateSkips`), not a fault. The F16 check stays as it was, ahead of the gate.
+  2. **Off:** the 20 kHz tick switches the diagonal off when 2 ticks in a row no longer show the line beyond 25 V with its polarity (a notch, a collapsing line, an early zero). It stays off until the next zero-cross event. This is counted (`SlaveCtrl_VgateOffs`), not a fault. The F11 polarity guard runs first, unchanged.
+  3. **The predicted turn-off is now 800 us before the expected zero (was 300 us):** about 80 V at 230 V, as a timed backup well before the zero.
+* **Cost:** at 230 V the converter is now off for about 0.4 ms after each zero (25 V plus the confirmation) and from 0.8 ms before it. The regulator's loop absorbs this: the duty for a given correction rises a little. Expect the correction at the very top of the range (the cap) to be slightly smaller.
+* Settings (slave_ctrl.h, all overridable in slave_config.h):
+  * `CTRL_VGATE_V` 25 (10 to 60, 0 = off);
+  * `CTRL_VGATE_CONFIRM` 2;
+  * `CTRL_VGATE_STEP_US` 50;
+  * `CTRL_VGATE_MAX_US` 3000;
+  * `CTRL_VGATE_MIN_ON_US` 1000;
+  * `CTRL_VGATE_OFF_TICKS` 2;
+  * `CTRL_PREDICT_LEAD_US` 800.
+* **New hardware call:** `CtrlHw_SignAbove()` in slave_ctrl_hw.c, a one-liner over `SlaveMeas_SignLatest`. No new files.
+* **Tests** (simulator, the real slave_ctrl.c):
+  * a clean line at 140, 230 and 300 V: a diagonal every half-cycle; none within 5 % of a zero; none against the line at any voltage above 2 %; nothing skipped or cut short;
+  * a zero-cross edge 60 us to 2.4 ms early, at 3 points of the wave (the same disturbance landing at R, Y and B's 0, 120 and 240 degrees): never against the line;
+  * a 1.5 ms notch: off within 0.4 ms, back at the next zero-cross, no fault;
+  * 40 ms without confirmation: nothing energised, no fault;
+  * reads that confirm only every other time: never energised;
+  * a confirmation after the predicted turn-off: nothing energised;
+  * a line collapsed to 15 V for 30 ms: never against the line;
+  * phase jumps at 3 points of the wave: at most one 100 us sample against the line.
+* **The same tests on the old code fail:** a diagonal within 5 % of the zero every half-cycle, and an edge 150 us early put a diagonal against the line. With the gate but the old 300 us lead, one early-edge case put a diagonal at the zero.
+* **Mutations:** 12 code mutations, plus the gate off and the old lead, all caught. Three only after new tests:
+  * confirmations that need not be in a row;
+  * a deadline that runs past the predicted turn-off;
+  * no clamp to the predicted turn-off. This one needed a job with a long gate wait (`s3_vgate_long_wait`).
+* **New runner jobs:**
+  * `s3_vgate_glitch`: the gate tests with the glitch skip, as in production;
+  * `s3_vgate_long_wait`;
+  * `s3_vgate_off`: gate 0, the old 300 us lead, the whole suite still passes.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.**
+* **Seen while testing (not new, not changed):** the whole harness with `SLAVE_GLITCH_SKIP=1` fails the legacy saturation test (3 checks) at v0.9.68 too. The runner's glitch job only ever ran the glitch tests.
+* **NOT proven on hardware, and what it cannot do:**
+  * The ADC reading is about 75 us old, so the gate reacts 100 to 175 us after the line leaves the band.
+  * A line that REVERSES in a step (a real phase jump) is still seen only by the F11 guard, about 0.1 to 0.4 ms of conduction against the line. Fast fuses in the converter / DC-link path and drivers with desaturation are the protection for that, not firmware.
+  * The 25 V threshold assumes the nominal AC_IN scaling (3.96 counts per volt).
+  * Scope AC_IN against a converter gate (3H or 3L) at 230 V. The gate must rise about 0.4 ms after each zero and fall about 0.8 ms before the next one.
+  * Keep `MASTER_INRUSH_RETRIES 0` and a current-limited source while testing.
+
+## v0.9.68 — Domestic: no false "Re-tune Required" when the load arrives; the cycle-by-cycle count on the monitor page
 * **Reported:** in Domestic, a few seconds after the contactor closed, B showed "Re-tune Required"; Industrial and Single worked with the same boards.
 * **Cause (F19, the same-transformer check):** after a start the slave compares the measured injection with what its stored profile predicts for that duty, for up to 25 s, and the profile describes the transformer at NO load. In Domestic each phase's contactor closes 1 s after THAT phase is in band (Industrial waits for all three), so B's check could still be running when its load arrived; the load-connect hold (v0.9.61) then froze the duty while the load pulled the output down, and the check saw steady duty with less injection than predicted, twice: MISMATCH. A false alarm, possible in any mode whenever the check had no verdict yet when the load connected.
 * **Fix:** the check ends at the load-connect hold (`TuneChk_Stop`): a verdict it already reached stands; without one, it ends silently for that start (it checks again at the next start). Not covered: a load connected with **contactor first** (v0.9.64) sends no hold, so with that switch on the check can still judge under load.

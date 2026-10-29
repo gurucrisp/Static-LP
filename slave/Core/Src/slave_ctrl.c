@@ -156,6 +156,16 @@ static void IsrFail(uint16_t code)
     if (g_ctrl.isr_fault == 0U) g_ctrl.isr_fault = code;
 }
 
+/* v0.9.69 the voltage gate (slave_ctrl.h) */
+#if (CTRL_VGATE_V != 0U)
+static uint8_t  s_vg_n;                 /* reads in a row that confirmed the pending diagonal's polarity */
+static uint32_t s_vg_deadline;          /* the last moment a confirming read may be scheduled this half-cycle */
+static uint8_t  s_vg_low;               /* 20 kHz ticks in a row without the energised diagonal's polarity beyond the threshold */
+#endif
+static uint32_t s_vg_skips, s_vg_offs;
+uint32_t SlaveCtrl_VgateSkips(void) { return s_vg_skips; }
+uint32_t SlaveCtrl_VgateOffs(void)  { return s_vg_offs; }
+
 void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
 {
     int8_t   sign_in, sign_out;
@@ -237,6 +247,16 @@ void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
         /* EXPERIMENT: the FIRST diagonal after a start is turned on at the line peak (a quarter cycle after the event), not 40 us after it */
         if ((g_ctrl.first_pending != 0U) && ((SLAVE_CONV_FIRST_POL == 0) || (g_ctrl.pending_pol == (int8_t)SLAVE_CONV_FIRST_POL))) dly = interval / 2U;
 #endif
+#if (CTRL_VGATE_V != 0U)
+        {   /* the voltage gate (slave_ctrl.h): confirmations start afresh; the last read is due by the deadline, and never too close to the predicted turn-off */
+            const uint32_t last = (uint32_t)(interval - CTRL_PREDICT_LEAD_US - CTRL_VGATE_MIN_ON_US);
+            uint32_t span = dly + CTRL_VGATE_MAX_US;
+            if (interval <= (uint32_t)(CTRL_PREDICT_LEAD_US + CTRL_VGATE_MIN_ON_US)) span = 0U;
+            else if (span > last) span = last;
+            s_vg_n = 0U;
+            s_vg_deadline = (uint32_t)(now_us + span);
+        }
+#endif
         CtrlHw_ArmDeadtime((uint32_t)(now_us + dly));                               /* new diagonal on   */
     }
     CtrlHw_ArmPredictOff((uint32_t)(now_us + interval - CTRL_PREDICT_LEAD_US));     /* ...and off again, */
@@ -276,6 +296,23 @@ void SlaveCtrl_OnDeadtimeIrq(void)
             return;
         }
     }
+
+#if (CTRL_VGATE_V != 0U)
+    /* THE VOLTAGE GATE: the line must show this diagonal's polarity beyond CTRL_VGATE_V on CTRL_VGATE_CONFIRM reads in a row (one per ADC frame); until
+     * then nothing is energised and the read is repeated; not confirmed by the deadline = no diagonal this half-cycle (the safe state, not a fault). */
+    if (pol == 0) return;
+    {
+        const uint32_t t = CtrlHw_NowUs();
+        if (CtrlHw_SignAbove(CTRL_VGATE_COUNTS) == pol) { if (s_vg_n < 255U) s_vg_n++; }
+        else                                            s_vg_n = 0U;
+        if (s_vg_n < CTRL_VGATE_CONFIRM)
+        {
+            if ((int32_t)(s_vg_deadline - (uint32_t)(t + CTRL_VGATE_STEP_US)) >= 0) CtrlHw_ArmDeadtime((uint32_t)(t + CTRL_VGATE_STEP_US));
+            else                                                                       s_vg_skips++;
+            return;
+        }
+    }
+#endif
 
 #if (SLAVE_CONV_SWAP != 0)       /* DANGEROUS if set without a scope check: see slave_config.h */
     if      (pol > 0) SlavePower_ConverterNegative();
@@ -330,7 +367,11 @@ void SlaveCtrl_OnSampleTick(void)
 {
     int8_t s;
 
-    if (g_ctrl.conv_pol == 0) { s_guard_bad = 0U; return; }
+    if (g_ctrl.conv_pol == 0) { s_guard_bad = 0U;
+#if (CTRL_VGATE_V != 0U)
+                                s_vg_low = 0U;
+#endif
+                                return; }
     /* signed: s_commut_us is written by a higher-priority interrupt that may have run after the clock read */
     if ((int32_t)(CtrlHw_NowUs() - s_commut_us) < (int32_t)CTRL_GUARD_BLANK_US) { s_guard_bad = 0U; return; }
 
@@ -343,6 +384,33 @@ void SlaveCtrl_OnSampleTick(void)
     {
         s_guard_bad = 0U;                /* a single odd sample is noise, not a reversal */
     }
+
+#if (CTRL_VGATE_V != 0U)
+    /* the voltage gate's turn-off: the line no longer beyond the threshold with this diagonal's polarity (a notch, a collapse, the zero coming early):
+     * off until the next zero-cross event. Not a fault. The lock: a zero-cross / dead-time interrupt (higher priority) must not change the diagonal between
+     * the read and the switch-off. */
+    if (CtrlHw_SignAbove(CTRL_VGATE_COUNTS) != g_ctrl.conv_pol)
+    {
+        if (++s_vg_low >= CTRL_VGATE_OFF_TICKS)
+        {
+            const int8_t   pol = g_ctrl.conv_pol;
+            const uint32_t k   = CtrlHw_Lock();
+            s_vg_low = 0U;
+            if ((pol != 0) && (g_ctrl.conv_pol == pol))
+            {
+                SlavePower_ConverterOffNow();
+                g_ctrl.conv_pol = 0;
+                if (g_ctrl.inv_active != 0U) SlavePower_SetLegDuty(0U, 0U);
+                s_vg_offs++;
+            }
+            CtrlHw_Unlock(k);
+        }
+    }
+    else
+    {
+        s_vg_low = 0U;
+    }
+#endif
 }
 
 void SlaveCtrl_OnWatchdogIrq(void)
