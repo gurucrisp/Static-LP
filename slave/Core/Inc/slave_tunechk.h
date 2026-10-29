@@ -44,6 +44,9 @@ typedef struct
 
 void    TuneChk_Init(TuneChk_t *c, const TuneProfile_t *p, uint32_t now_ms);                    /* p = NULL: no profile, the check stays silent */
 uint8_t TuneChk_Update(TuneChk_t *c, uint32_t now_ms, float d, uint8_t boost, float vin, float vout);   /* one FRESH measurement */
+/* v0.9.68: end the check WITHOUT a verdict (the load is being connected: the profile describes the transformer at no load, and under load the injection is lower for the
+ * same duty, so a judgement now would be a false MISMATCH). Nothing happens if a verdict was already reached. */
+void    TuneChk_Stop(TuneChk_t *c);
 
 #ifdef __cplusplus
 }

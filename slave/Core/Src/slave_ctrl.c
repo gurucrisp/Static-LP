@@ -1517,6 +1517,7 @@ void SlaveCtrl_Service(void)
             if (TfRunCheck(&m, d, g_ctrl.boost, now_ms) != 0U) { EnterFault(CF_TRANSFORMER_FLIP, now_ms); break; }     /* connected backwards: stop, latch */
 #endif
 #if (APPLY_ENABLED != 0)
+            if (SlaveCtrl_LoadHoldActive(now_ms) != 0U) TuneChk_Stop(&s_chk);         /* v0.9.68: the contactor is connecting the load: the no-load check ends here, without a verdict if it had none (Domestic: B tripped F19) */
             if ((m.valid != 0U) && (m.update_count != s_chk_seq))
             {   /* the same-transformer check, on every FRESH measurement: the injection really measured against the profile's prediction (boost only) */
                 uint8_t cv; s_chk_seq = m.update_count;

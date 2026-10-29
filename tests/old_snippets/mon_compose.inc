@@ -91,6 +91,10 @@ void Mon_Compose(const MasterMon_t *m, uint32_t now_ms,
             (void)snprintf(tmp, sizeof tmp, " M%u/%u L%u", (unsigned)(s->diag2 & 127U), (unsigned)((s->diag2 >> 7) & 127U),
                            (unsigned)cap99(m->lost));
         }
+        else if ((m->e_valid != 0U) && (m->e_cbc != 0U))
+        {   /* v0.9.68: the cycle-by-cycle limit has ridden through C pulses since the slave's power-up (the bad-frame and frame-rate counters make room) */
+            (void)snprintf(tmp, sizeof tmp, " C%u L%u", (unsigned)m->e_cbc, (unsigned)cap99(m->lost));
+        }
         else
         {
             (void)snprintf(tmp, sizeof tmp, " L%u B%u f%u",

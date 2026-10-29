@@ -2,7 +2,15 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.67 — the break input (BKIN) keeps the low sides on and is limited cycle by cycle too (current)
+## v0.9.68 — Domestic: no false "Re-tune Required" when the load arrives; the cycle-by-cycle count on the monitor page (current)
+* **Reported:** in Domestic, a few seconds after the contactor closed, B showed "Re-tune Required"; Industrial and Single worked with the same boards.
+* **Cause (F19, the same-transformer check):** after a start the slave compares the measured injection with what its stored profile predicts for that duty, for up to 25 s, and the profile describes the transformer at NO load. In Domestic each phase's contactor closes 1 s after THAT phase is in band (Industrial waits for all three), so B's check could still be running when its load arrived; the load-connect hold (v0.9.61) then froze the duty while the load pulled the output down, and the check saw steady duty with less injection than predicted, twice: MISMATCH. A false alarm, possible in any mode whenever the check had no verdict yet when the load connected.
+* **Fix:** the check ends at the load-connect hold (`TuneChk_Stop`): a verdict it already reached stands; without one, it ends silently for that start (it checks again at the next start). Not covered: a load connected with **contactor first** (v0.9.64) sends no hold, so with that switch on the check can still judge under load.
+* **Your request:** the cycle-by-cycle count on the monitor page. The slave sends it as an optional 12th `$E` field (`cbc`, only when not 0: an older master ignores it, an older slave's frame parses with 0); the monitor page (MENU once, and the Y / B pages in three-phase) shows it on row 3 in place of the bad-frame and frame-rate counters: `50.00Hz C123 L0` = 123 FLT / BKIN pulses ridden through since that slave's power-up.
+* Tests: the tuned unit started at 228 V (too little correction for the check to judge before the contactor) and then loaded (5 V drop): no F19 (and the old code gives F19 here); the link field (6 fields without a count, 12 with, 11 from an older slave = 0); the count from a real `$E` through the link decoder onto the monitor page's row 3, and row 3 unchanged without it. 7 mutations, all caught. Full runner: ALL TESTS PASSED, 0 warnings. **Flash the master and the slaves.**
+* Not proven on hardware. The slave's filling of the field (slave_link.c) is compile-checked only.
+
+## v0.9.67 — the break input (BKIN) keeps the low sides on and is limited cycle by cycle too
 * **Reported:** with `SLAVE_FLT_CBC 1` the trips continued as **F01** (the timer break, BKIN). On this board BKIN (PB12 for TIM1, PA9 for TIM15) carries the SAME comparator pulse as FLT. The limit absorbed the FLT edge, but the silicon break still acted on the pulse and the firmware recorded F01.
 * **The bigger finding:** in a break the silicon takes the outputs to their IDLE levels, which were all four gates OFF. So every comparator pulse opened the primary under load in hardware, before any firmware, which undid both v0.9.65 (low sides on) and v0.9.66 (the limit), with or without the limit.
 * **Changes:**

@@ -17,6 +17,8 @@ void TuneChk_Init(TuneChk_t *c, const TuneProfile_t *p, uint32_t now_ms)
     c->base_sum = 0.0f; c->base = 0.0f; c->d_f = 0.0f; c->vin_prev = 0.0f; c->base_n = 0U; window_reset(c);
 }
 
+void TuneChk_Stop(TuneChk_t *c) { c->state = ST_DONE; }
+
 uint8_t TuneChk_Update(TuneChk_t *c, uint32_t now_ms, float d, uint8_t boost, float vin, float vout)
 {
     float dt = (float)(uint32_t)(now_ms - c->last_ms), k;

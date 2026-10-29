@@ -1001,7 +1001,14 @@ static void t_mc_tune_apply(void)
     { int was_held = (SlaveCtrl_Flags2() & LINKV2_FLAG_LOAD_HOLD) != 0U; W.out_offset = -5.0; tn_run(8000U);
       CHECK(got && was_held && g_ctrl.fault == 0U && ma_c_contactor() && fabs((double)W.vout - 230.0) < 3.0, "tuned: the contactor closes with the slave holding (%d), the load arrives (5 V dip): no fault, the output back at %.1f V", was_held, (double)W.vout); }
     W.out_offset = 0.0;
-    printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it, a load at the contactor\n");
+    /* ---- v0.9.68: the load arrives while the same-transformer check has no verdict yet (Domestic: a phase's contactor closes 1 s after IT is in band): the check ends at the
+     *      load-connect hold, no false "Re-tune Required" (F19). 228 V in needs 2 V: too little for the check to judge before the contactor; the load then needs 7 V ---- */
+    tn_stop_unit(); tn_do_retune(1.0, 230.0f, 30U);
+    memset(&tn, 0, sizeof tn); tn_prev_eff = 0.0; W.plant_gain = (double)Tune_RefG(228.0f) * 1.0; tn_start_at(228.0f); got = tn_wait_contactor(90000U);
+    W.out_offset = -5.0; tn_run(12000U);
+    CHECK(got && g_ctrl.fault == 0U && ma_c_contactor() && fabs((double)W.vout - 230.0) < 3.0, "228 V in, then the load (5 V drop) before the check could judge: no false 'Re-tune Required' (fault %d), the output %.1f V", g_ctrl.fault, (double)W.vout);
+    W.out_offset = 0.0;
+    printf("  the profile in use on the real controller: refusing to run untuned, Re-tune out of the latch, the cap and gain scale, no false alarm at four inputs, a different transformer stopped, Re-tune accepts it, a load at the contactor, a load before the check's verdict\n");
 }
 #endif
 #endif

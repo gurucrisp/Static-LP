@@ -14,4 +14,6 @@ typedef struct
     uint32_t     uart_errors;        /* overrun / framing / noise flags cleared       */
     uint32_t     fps;                /* valid frames in the last whole second         */
     uint32_t     max_poll_gap_us;    /* longest time the loop went without polling    */
+    uint8_t      e_valid;            /* v0.9.68: the fields the live Mon_Compose reads for the cycle-by-cycle count */
+    uint16_t     e_cbc;
 } MasterMon_t;

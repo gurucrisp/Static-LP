@@ -18,10 +18,10 @@ static int s_frame(char *b, char ph, uint8_t seq, uint16_t vin, uint16_t vout, u
     return (int)Link_BuildStatus(b, 96U, &st);
 }
 static uint16_t g_e_sq_id, g_e_sq_delay, g_e_sq_period;      /* the phase sequence result the next $E frame carries (0 = none: a 6 field frame as before) */
-static uint16_t g_e_iout_pk; static uint8_t g_e_iout_clip;                                 /* v0.9.55: the converter-current peak the next $E carries (0 = none) */
+static uint16_t g_e_iout_pk; static uint8_t g_e_iout_clip; static uint16_t g_e_cbc;     /* v0.9.68: the cycle-by-cycle count the next $E carries */                                 /* v0.9.55: the converter-current peak the next $E carries (0 = none) */
 static int e_frame(char *b, uint8_t seq, uint16_t flags2, uint8_t clr)
 {
-    LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period;
+    LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period; e.cbc = g_e_cbc;
     if (g_e_iout_pk != 0U) { e.iout_pk_ca = g_e_iout_pk; e.iout_rms_ca = (uint16_t)(g_e_iout_pk / 2U); e.flags2 = (uint16_t)(e.flags2 | LINKV2_FLAG_IOUT_VALID | ((g_e_iout_clip != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U)); }
     return (int)LinkV2_BuildE(b, 96U, &e);
 }
@@ -65,6 +65,15 @@ static void t_module(void)
           MLinks_DisplayMon(p, &v); CHECK(v.last.phase == (p ? 'B' : 'Y'), "the monitor page names the PORT's phase ('%c' on the %c port shows %c)", L[k], p ? 'B' : 'Y', v.last.phase);
       }
       reset(); MLinks_DisplayMon(0U, &v); CHECK(v.have_frame == 0U, "a silent port: the monitor page shows nothing heard"); }
+    {   /* v0.9.68: the cycle-by-cycle count on the monitor page (row 3), from the slave's $E */
+        MasterMon_t v; char rows[MON_LCD_ROWS][MON_LCD_COLS + 1U];
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n); g_e_cbc = 123U; n = e_frame(b, 1U, 0U, 0U); push(0, b, n); g_e_cbc = 0U; feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(v.e_cbc == 123U && strstr(rows[3], " C123 L") != NULL, "the count reaches the monitor page: row 3 '%s'", rows[3]);
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 0U); push(0, b, n); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(v.e_cbc == 0U && strstr(rows[3], " C") == NULL && strstr(rows[3], " B") != NULL, "no count: row 3 as before '%s'", rows[3]);
+    }
     /* the $H of a board on the Y port reaches the application */
     reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);
     feed(0, 1000U); MLinks_Fill(0, &s0, 1020U); CHECK(s0.h_valid == 1U && MLinks_HelloDue(0, 1020U) == 0U, "its hello is used and not asked again");

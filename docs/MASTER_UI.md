@@ -286,3 +286,7 @@ Load Source: `Master CT` / `Slave` / `Slave, No CT` (default). See SLAVE_LOAD_CA
 * **`MASTER_CT_FITTED` (master_monitor.h) is 0 by default: no master CT is fitted.** The CT channel is never read (no CT load, no CT inrush backup), the **Load Source** item and the **Load Calibration** page are not shown, and the load of every phase is its slave's (with its Slave Load Cal), whatever an older saved Load Source says. Set it to 1 on a unit that has the CT on ADC channel 0.
 * **Inrush with its code:** the status page (`R : INRUSH F02`), the fault log (`R Inrush  F02`) and the Single Run screen (`Inrush F02  Rst 4:32`) show the slave's code: **F01** = its TIM break input, **F02** = its FLT line: the slave's hardware over-current comparators (about 41 A peak of converter current with the 180 ohm burden). No code = the master CT backup (impossible without a CT).
 * **Converter Current page** (LOG, MENU x7): in Industrial and Domestic it shows R, Y and B in turn (`Converter Current Y`), 3 s each, each with its own heat sink.
+
+
+## v0.9.68: the cycle-by-cycle count on the monitor page
+Row 3 of the monitor page (MENU once; the Y and B pages in three-phase) shows `C<n>` when the slave's cycle-by-cycle limit has ridden through n FLT / BKIN pulses since its power-up: `50.00Hz C123 L0` (the bad-frame and frame-rate counters make room). No count: the row is as before.

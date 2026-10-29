@@ -52,7 +52,7 @@ typedef enum
     LINKV2_K
 } LinkV2Type_t;
 
-/* ---- $E extended status: seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca] ---------- the last two are OPTIONAL: an older sender gives 6 fields, an older receiver ignores the extra ones */
+/* ---- $E extended status: seq,setv,flags2,clr,reach_lo,reach_hi[,iout_rms_ca,iout_pk_ca[,sq_id,sq_delay,sq_period[,cbc]]] ---------- the last two are OPTIONAL: an older sender gives 6 fields, an older receiver ignores the extra ones */
 #define LINKV2_FLAG_RUN_ACK        0x0001U   /* the slave has accepted run = 1                                   */
 #define LINKV2_FLAG_IN_BAND        0x0002U   /* running and |Vout - set voltage| within the band                 */
 #define LINKV2_FLAG_AT_CAP         0x0004U   /* the correction sits at its cap                                   */
@@ -82,6 +82,8 @@ typedef struct
     uint16_t sq_id;
     uint16_t sq_delay_us;
     uint16_t sq_period_us;
+    /* v0.9.68: OPTIONAL 12th field: FLT / BKIN pulses the cycle-by-cycle limit has ridden through since the slave's power-up (saturates at 65535); sent only when not 0 */
+    uint16_t cbc;
 } LinkE_t;
 #define LINKV2_SYNC_BYTE   0x16U    /* ASCII SYN: never inside a frame (frames are printable text): the master sends it on every link at the same instant after $K SEQ */
 #define LINKV2_SQ_NONE     65535U
