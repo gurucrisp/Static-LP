@@ -2,7 +2,23 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.70 — diagnostic build: what holds up the slave's main loop (the F10 hunt) (current)
+## v0.9.71 — F10 every 71.6 minutes fixed (a timer wrap in the measurement), found with the v0.9.70 diagnostics (current)
+* **Bench (v0.9.70, single phase ageing from 12:13):** F10 at 13:34, 14:45 and 15:57, 71 to 72 minutes apart. Meanwhile the slave's longest main-loop pass stayed at 4 ms (`P4/0/0`), so the loop never stalled.
+* **Cause, a firmware bug present since the measurement was written:** `SlaveMeas_Service` checked its 100 ms power-up warm-up on EVERY call as `(now - start) < 100 ms` on TIM2. TIM2 is the free-running 32-bit microsecond timer and wraps every 2^32 us = 71.6 minutes, so the check matched again once per wrap. For 100 ms no measurement was computed, the controller saw none for more than 100 ms (`CTRL_MEAS_STALE_MS`), and it tripped F10 while running. Last night's 10 x F10 in 17 h has the same cause: 14 wraps, and F10 is only checked while running, at a gap just over 100 ms.
+* **Fix:** slave_meas_due.h (new header, header only: **no CubeIDE project change**). The update period and the warm-up are now wrap-safe, and the warm-up is checked only until it has passed once. slave_meas.c uses it.
+* **Tests (test_meas_due.c, new runner line):** a main loop calling every 0.7 to 1.7 ms for 4 hours (3 TIM2 wraps), from 4 start values including just before a wrap:
+  * no gap between measurements above 100 ms (longest about one period plus one loop pass);
+  * the first measurement right after the warm-up;
+  * about one measurement per 10.6 ms;
+  * **the old rule, in the same test, leaves a gap of over 100 ms at every wrap.**
+* **Mutations:** 5. Four were caught (the old re-check, the warm flag never set, the period clock never updated, no warm-up). One survives because it is equivalent: a signed period compare behaves the same.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.** The v0.9.70 diagnostics stay in.
+* **Not changed (noted):**
+  * The glitch-skip window (`GlitchTolerated`) also uses TIM2. A skip that comes within 2 s of an exact multiple of 71.6 minutes after the previous one is counted in the old window. That errs towards the fault, never towards more skipping, and it is very rare.
+  * The F03 / F04 / F15 trips in the same log are mains-side events, a separate question.
+* **Not proven on hardware:** slave_meas.c itself is not compiled on the PC (its HAL part has no stand-in); only the helper is tested. On the bench: no F10 over a run of several hours.
+
+## v0.9.70 — diagnostic build: what holds up the slave's main loop (the F10 hunt)
 * **Reported (v0.9.68, single phase, 17 h with load, CBC 1, no load switching nearby):** F10 ten times, F15, F03 and F11 once each, monitor `C` 19 to 24.
 * **F10:** "measurement stale". The slave's voltage measurement runs in its main loop every 10 ms, and F10 trips when none arrives for 100 ms. The main loop was held up for 0.1 to 0.5 s; a longer stall would have reset the slave through its watchdog. Nothing in the loop is known to block that long, so the suspicion is an interrupt flood (the FLT comparator chattering, or the zero-cross input ringing). This build measures it.
 * **What the slave measures** (`SlaveCtrl_GetDiag`, slave_ctrl.c, since power-up, each saturating at 9999):

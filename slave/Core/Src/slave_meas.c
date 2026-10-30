@@ -8,6 +8,7 @@
 #include <math.h>
 #include "main.h"
 #include "slave_meas.h"
+#include "slave_meas_due.h"
 #if (SLAVE_IOUT != 0)
 #include "slave_iout.h"
 #endif
@@ -34,8 +35,7 @@ static volatile uint16_t s_buf[MEAS_BUF_FRAMES * MEAS_CHANNELS];
  * refreshed each RMS window; read by the zero-cross interrupt (integer math only). */
 static volatile int32_t s_sign_mean_sum[2];
 
-static uint32_t s_t_start_us;
-static uint32_t s_t_last_us;
+static MeasClock_t s_clk;          /* v0.9.71: the update period and the warm-up, wrap-safe (slave_meas_due.h) */
 static float    s_period_filt_us;        /* low-pass filtered mains period */
 
 /* ------------------------------------------------------------------------- */
@@ -205,8 +205,7 @@ void SlaveMeas_Init(void)
 
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK) Error_Handler();
 
-    s_t_start_us = SlaveZC_NowUs();
-    s_t_last_us  = s_t_start_us;
+    MeasDue_Init(&s_clk, SlaveZC_NowUs());
 
     if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)s_buf, MEAS_BUF_FRAMES * MEAS_CHANNELS) != HAL_OK)
     {
@@ -223,9 +222,7 @@ void SlaveMeas_Service(void)
     float    rms_i, mean_i, rms_o, mean_o;
     uint16_t min_i, max_i, min_o, max_o;
 
-    if ((uint32_t)(now - s_t_last_us) < MEAS_UPDATE_US) return;
-    s_t_last_us = now;
-    if ((uint32_t)(now - s_t_start_us) < MEAS_WARMUP_US) return;
+    if (MeasDue(&s_clk, now, MEAS_UPDATE_US, MEAS_WARMUP_US) == 0U) return;     /* v0.9.71: the warm-up is no longer re-checked at every TIM2 wrap (F10 every 71.6 min) */
 
     /* Mains period from the zero-cross rate - only if the ZC edges are fresh
      * (seen within the last 100 ms) and the period is plausible. Otherwise
