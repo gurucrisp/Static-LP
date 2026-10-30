@@ -2951,6 +2951,89 @@ static void t_vgate_phase_jump(void)
     printf("  phase jumps 2 to 10 ms at 3 points of the wave: at most %llu us against the line (sampled every 100 us)\n", (unsigned long long)worst);
 }
 
+
+/* ======================================================================= */
+/* v0.9.70 diagnostics (the F10 hunt)                                       */
+/* ======================================================================= */
+static void flt_irq(void)        /* what the EXTI handler of this build does */
+{
+#if (SLAVE_FLT_CBC != 0)
+    SlavePower_InverterForceOffNow(); SlaveCtrl_OnFltCbcIrq();
+#else
+    SlavePower_FltOffNow(); SlaveCtrl_OnFltIrq();
+#endif
+}
+static void t_diag(void)
+{
+    CtrlDiag_t d; int k; uint64_t t0;
+    world_reset(950000000ULL);
+    W.amp = 1288.0;
+    run_for(800000 + WARM);
+    CHECK(is_running(), "running");
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.lp_ms <= 1U && d.flt_raw == 0U && d.zc_noise == 0U, "a normal run: the longest pass %u ms (the simulated loop runs every 0.2 ms), no FLT, no noise edges (%u, %u)", d.lp_ms, d.flt_raw, d.zc_noise);
+    /* a main loop that stalls 150 ms: the zero-cross interrupts go on meanwhile */
+    next_service = sim_t + 150000ULL; t0 = sim_t;
+    run_for(151000);
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.lp_ms >= 150U && d.lp_ms <= 151U, "a 150 ms stall is the longest pass: %u ms", d.lp_ms);
+    CHECK(d.lp_zc >= 14U && d.lp_zc <= 16U && d.lp_flt == 0U, "during it: %u zero-cross interrupts (about 15), no FLT (%u)", d.lp_zc, d.lp_flt);
+    run_for(100000);
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.lp_ms >= 150U && d.lp_ms <= 151U && d.lp_zc >= 14U, "a shorter pass later does not replace it (%u ms, %u)", d.lp_ms, d.lp_zc);
+    /* a stray zero-cross edge 0.4 ms after a real one */
+    { uint64_t te = t_last_edge; uint8_t r;
+      while (t_last_edge == te) run_for(50);
+      run_for(400);
+      r = (uint8_t)(eq[0].rising ? 0U : 1U);
+      SlaveCtrl_OnZcEdge((uint32_t)sim_t, r); }
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.zc_noise == 1U, "an edge 0.4 ms after the one before: one noise edge (%u)", d.zc_noise);
+    /* two FLT interrupts in normal passes, then a longer stall with 7 in it */
+    for (k = 0; k < 2; k++) { W.flt = 1; flt_irq(); run_for(30); W.flt = 0; run_for(5000); }
+    next_service = sim_t + 300000ULL;
+    for (k = 0; k < 7; k++) { W.flt = 1; flt_irq(); run_for(30); W.flt = 0; run_for(1000); }
+    run_for(300000);
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.lp_ms >= 300U && d.lp_ms <= 302U && d.lp_flt == 7U, "a 300 ms stall with 7 FLT interrupts (2 more before it): %u ms, %u FLT in it", d.lp_ms, d.lp_flt);
+    CHECK(d.flt_raw == 9U, "every FLT interrupt counted once: 2 + 7 (%u)", d.flt_raw);
+    for (k = 0; k < 10100; k++) flt_irq();
+    SlaveCtrl_GetDiag(&d);
+    CHECK(d.flt_raw == CTRL_DIAG_MAX, "the count saturates at %u (%u)", (unsigned)CTRL_DIAG_MAX, d.flt_raw);
+    (void)t0;
+    printf("  diagnostics: a 150 ms stall measured with its 15 zero-cross interrupts, a 300 ms one with its 7 FLT interrupts, a stray edge, saturation\n");
+}
+
+/* the zero-cross noise count stays 0 for every normal ZCD pattern (a pulse end is 1.5 ms after its start) */
+static void t_diag_patterns(void)
+{
+    int pat[3] = { PAT_SQUARE, PAT_SQUARE_INV, PAT_PULSE }; int i; CtrlDiag_t d;
+    for (i = 0; i < 3; i++)
+    {
+        world_reset(960000000ULL + (uint64_t)i * 20000000ULL);
+        W.pattern = pat[i]; W.jitter_us = 150.0;
+        run_for(3000000);
+        SlaveCtrl_GetDiag(&d);
+        CHECK(d.zc_noise == 0U, "pattern %d with 150 us jitter: no noise edges (%u)", pat[i], d.zc_noise);
+    }
+}
+
+#if (SLAVE_FLT_CBC != 0)
+/* with the limit, an escalation (the 41st edge in 10 ms) is still ONE interrupt */
+static void t_diag_cbc_once(void)
+{
+    CtrlDiag_t d; int k;
+    world_reset(990000000ULL);
+    run_for(1500000 + WARM);
+    CHECK(is_running(), "running");
+    for (k = 0; k < (int)FLT_CBC_MAX_EVENTS + 1; k++) { W.flt = 1; flt_irq(); run_for(10); W.flt = 0; run_for(163); }
+    run_for(2000);
+    SlaveCtrl_GetDiag(&d);
+    CHECK(g_ctrl.state != CTRL_RUN, "41 edges in 7 ms escalated (state %d)", g_ctrl.state);
+    CHECK(d.flt_raw == FLT_CBC_MAX_EVENTS + 1U, "each of the %u interrupts counted once, the escalation not twice (%u)", (unsigned)(FLT_CBC_MAX_EVENTS + 1U), d.flt_raw);
+}
+#endif
+
 int main(void)
 {
 #if (SLAVE_FLT_KEEP_LOWS == 0) && !defined(ALLOW_FLT_KEEP_LOWS_0)
@@ -2978,6 +3061,11 @@ int main(void)
     run_isolated(t_lost_pulse_midrun,         "one zero-cross pulse lost mid-run");
     run_isolated(t_guard_margin,              "polarity guard: no false trips at the extremes");
     run_isolated(t_resync_clears_state,       "restart discards the old synchronisation");
+    run_isolated(t_diag,                      "diagnostics: loop stall, FLT and zero-cross counts (v0.9.70)");
+    run_isolated(t_diag_patterns,             "diagnostics: no noise edges for normal ZCD patterns");
+#if (SLAVE_FLT_CBC != 0)
+    run_isolated(t_diag_cbc_once,             "diagnostics: an escalated limit counts each interrupt once");
+#endif
 #if (CTRL_VGATE_V != 0U) || defined(TEST_VGATE_FORCE)       /* TEST_VGATE_FORCE: the same tests on the old behaviour (they must fail there) */
     run_isolated(t_vgate_normal,              "voltage gate: clean line, 140 / 230 / 300 V (v0.9.69)");
     run_isolated(t_vgate_early_edge,          "voltage gate: early zero-cross edges at 3 points of the wave");

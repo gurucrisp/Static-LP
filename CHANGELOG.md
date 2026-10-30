@@ -2,7 +2,42 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.69 — voltage-gated dead band: a converter diagonal only goes on when the line itself confirms its polarity (current)
+## v0.9.70 — diagnostic build: what holds up the slave's main loop (the F10 hunt) (current)
+* **Reported (v0.9.68, single phase, 17 h with load, CBC 1, no load switching nearby):** F10 ten times, F15, F03 and F11 once each, monitor `C` 19 to 24.
+* **F10:** "measurement stale". The slave's voltage measurement runs in its main loop every 10 ms, and F10 trips when none arrives for 100 ms. The main loop was held up for 0.1 to 0.5 s; a longer stall would have reset the slave through its watchdog. Nothing in the loop is known to block that long, so the suspicion is an interrupt flood (the FLT comparator chattering, or the zero-cross input ringing). This build measures it.
+* **What the slave measures** (`SlaveCtrl_GetDiag`, slave_ctrl.c, since power-up, each saturating at 9999):
+  * `lp_ms`: the longest main-loop pass (the time between two `SlaveCtrl_Service` calls), in ms.
+  * `lp_flt` / `lp_zc`: the FLT and zero-cross interrupts DURING that longest pass.
+  * `flt_raw`: every FLT interrupt. With `SLAVE_FLT_CBC` this is every edge, limited or not; an escalation is not counted twice.
+  * `zc_noise`: zero-cross edges less than 1 ms after the edge before (a ZCD pulse end is 1.5 ms after its start).
+* **Link:** five optional `$E` fields (13th to 17th, docs/LINK_V2.md). `LINKV2_MAX_LEN` is now 94 (was 80): the longest `$E` is 93 bytes, inside every receiver's 96-byte line. A v0.9.69 master ignores the extra fields.
+* **Monitor page (MENU once), row 3:** `P150/3/15 F31 Z2 C24` means:
+  * the longest loop pass was 150 ms, with 3 FLT and 15 zero-cross interrupts during it;
+  * 31 FLT interrupts in all;
+  * 2 zero-cross noise edges;
+  * 24 limited pulses (CBC).
+* **How to read it:**
+  * A long `P` with a large middle number (FLT): the comparator chattered.
+  * A long `P` with a large last number (much more than P/10): the zero-cross input rang.
+  * A long `P` with small numbers: the loop itself was slow.
+  * The row replaces the frequency and link counters there (the frequency is still on the Run and service pages). In RUN it alternates every 2 s with the regulator state as before; the fault and wait rows still take over.
+* **Tests:**
+  * a main loop stalled 150 ms is measured with its 15 zero-cross interrupts, and a shorter pass later does not replace it;
+  * a 300 ms stall with 7 FLT interrupts, 2 more before it: 7 in the pass, 9 in all;
+  * a stray edge 0.4 ms after a real one counts once;
+  * no noise edges for the square, inverted and pulse ZCD patterns with 150 us jitter;
+  * saturation at 9999;
+  * with CBC, 41 edges that escalate are counted 41 times, not 42;
+  * the link: 17 fields when any diagnostic is not 0 (each one alone), 6 when none; each field refused above 9999 by the builder and the parser; the longest frame fits 94 and 96 bytes and is refused, never truncated, with one byte less room;
+  * the monitor row from a real `$E`, with any single value, and with every value at its maximum (cut at the display edge).
+* **Mutations:** 20, all caught. Two only after test fixes:
+  * the in-pass FLT count replaced by the total (no FLT had happened before the stall);
+  * the range of a field other than the first.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Flash the master and the slaves.**
+* **Mistake found by the tests:** the link parser's field buffer was 14 long, and the new 17-field `$E` wrote past it on the stack. The link tests failed until it was 17.
+* **Not proven on hardware.** The slave's filling of the fields (slave_link.c) is compile-checked only. The master grew a little: watch for "Flash Full / Settings Not Saved" at boot. Includes everything of v0.9.69 (voltage gate), which has not been benched either.
+
+## v0.9.69 — voltage-gated dead band: a converter diagonal only goes on when the line itself confirms its polarity
 * **Reported:** Domestic, running with load, a heavy load switched nearby: Y lost 1L, 3L, 1H and 4H; at the same moment the log shows R F15, B F16, Y Phase Missing, B F16, R F11 (one mains disturbance seen by all three slaves).
 * **Reading of the damage:** 3L + 4H is Y's NEGATIVE diagonal; with it on while the line is positive, the DC link is driven backwards and the line shorts through leg 1's diodes and IGBTs (1H / 1L). That current never passes the CT2500, so FLT and BKIN cannot see it; nothing in the firmware limits it except switching the diagonal off. Until now a diagonal went on 40 us after a zero-cross EDGE, with one last check (the newest samples not clearly beyond 30 V the other way). An edge that comes early (noise) while the line is still a few volts on the old side, or a line that is disturbed near its zero, therefore energised a diagonal against the line, or right at the zero.
 * **Change (`CTRL_VGATE_V` 25 in the production config; 0 = the old timing):**

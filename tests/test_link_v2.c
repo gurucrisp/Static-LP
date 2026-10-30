@@ -181,7 +181,7 @@ static void t_ranges(void)
     range_test("E", 'E', E, 6, 0); range_test("H", 'H', H, 7, 0); range_test("R", 'R', R, 3, 1);
     range_test("T", 'T', T, 5, 1); range_test("M", 'M', M, 5, 0);
     {   /* the two OPTIONAL trailing fields of E (the converter-side current): an older sender has 6 fields, an older receiver ignores the extra ones */
-        LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkE_t e = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0, 0}; int commas, j;
+        LinkV2Frame_t f; char b[LINKV2_MAX_LEN + 8]; int32_t n; LinkE_t e = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; int commas, j;
         n = LinkV2_BuildE(b, sizeof b, &e); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
         CHECK(n > 0 && commas == 6, "both optional fields 0: the frame is the 6-field frame of the first protocol (%d commas)", commas);
         e.iout_rms_ca = 589U; e.iout_pk_ca = 831U; n = LinkV2_BuildE(b, sizeof b, &e); commas = 0; for (j = 0; j < n; j++) if (b[j] == ',') commas++;
@@ -234,7 +234,7 @@ static void t_ranges(void)
         m.run = 1U; m.maxc_dv = 1991U; CHECK(LinkV2_BuildM(b, sizeof b, &m) == LINK_ERR_RANGE, "M with Max Correction 199.1 V is refused by the builder");
         m.maxc_dv = 1990U; CHECK(LinkV2_BuildM(b, sizeof b, &m) > 0, "Max Correction 199.0 V builds");
         {   /* v0.9.68: the optional 12th $E field, the cycle-by-cycle count */
-            LinkE_t e = {3, 2300, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}; LinkV2Frame_t f; int32_t n; uint32_t c = 0U, i;
+            LinkE_t e = {3, 2300, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; LinkV2Frame_t f; int32_t n; uint32_t c = 0U, i;
             n = LinkV2_BuildE(b, sizeof b, &e); for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
             CHECK(n > 0 && c == 6U, "E with no count: still the 6-field frame (%u fields)", (unsigned)c);
             e.cbc = 4321U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
@@ -242,6 +242,49 @@ static void t_ranges(void)
             CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.cbc == 4321U && f.u.e.sq_id == 0U && f.u.e.setv_dv == 2300U, "and parses back: count %u, no phase sequence result", (unsigned)f.u.e.cbc);
             e.cbc = 0U; e.sq_id = 5U; n = LinkV2_BuildE(b, sizeof b, &e);
             CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.cbc == 0U && f.u.e.sq_id == 5U, "an 11-field frame (an older slave) parses with the count 0");
+        }
+        {   /* v0.9.70: the five optional diagnostics (13th to 17th $E fields) */
+            LinkE_t e; LinkV2Frame_t f; int32_t n; uint32_t c, i;
+            memset(&e, 0, sizeof e); e.seq = 3U; e.setv_dv = 2300U;
+            e.lp_ms = 150U; e.lp_flt = 0U; e.lp_zc = 15U; e.flt_raw = 31U; e.zc_noise = 2U;
+            n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "E with diagnostics: 17 fields (%u)", (unsigned)c);
+            CHECK(LinkV2_Parse(b, (uint32_t)n, &f) == LINK_OK && f.u.e.lp_ms == 150U && f.u.e.lp_flt == 0U && f.u.e.lp_zc == 15U && f.u.e.flt_raw == 31U && f.u.e.zc_noise == 2U && f.u.e.cbc == 0U,
+                  "and parses back (%u/%u/%u F%u Z%u)", (unsigned)f.u.e.lp_ms, (unsigned)f.u.e.lp_flt, (unsigned)f.u.e.lp_zc, (unsigned)f.u.e.flt_raw, (unsigned)f.u.e.zc_noise);
+            memset(&e, 0, sizeof e); e.seq = 3U; e.setv_dv = 2300U; e.zc_noise = 1U;
+            n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "any one diagnostic not 0 (the last): 17 fields (%u)", (unsigned)c);
+            e.zc_noise = 0U; e.lp_ms = 1U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "any one diagnostic not 0 (the first): 17 fields (%u)", (unsigned)c);
+            e.lp_ms = 0U; e.lp_flt = 1U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "lp_flt alone: 17 fields (%u)", (unsigned)c);
+            e.lp_flt = 0U; e.lp_zc = 1U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "lp_zc alone: 17 fields (%u)", (unsigned)c);
+            e.lp_zc = 0U; e.flt_raw = 1U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 17U, "flt_raw alone: 17 fields (%u)", (unsigned)c);
+            e.flt_raw = 0U; n = LinkV2_BuildE(b, sizeof b, &e); c = 0U; for (i = 0U; i < (uint32_t)n; i++) if (b[i] == ',') c++;
+            CHECK(n > 0 && c == 6U, "all diagnostics 0: still the 6-field frame (%u)", (unsigned)c);
+            {   uint16_t *dg[5]; int q; dg[0] = &e.lp_ms; dg[1] = &e.lp_flt; dg[2] = &e.lp_zc; dg[3] = &e.flt_raw; dg[4] = &e.zc_noise;
+                for (q = 0; q < 5; q++)
+                {   char fr[80]; int r; uint8_t cs = 0U; int fi; const char *t;
+                    *dg[q] = 10000U; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "diagnostic %d above 9999 is refused by the builder", q);
+                    *dg[q] = 9999U;  CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "diagnostic %d at 9999 builds", q); *dg[q] = 0U;
+                    /* and the parser refuses 10000 in that field */
+                    r = snprintf(fr, sizeof fr, "E,1,2300,0,0,0,0,0,0,0,0,0,0"); for (fi = 0; fi < 5; fi++) r += snprintf(fr + r, sizeof fr - (size_t)r, ",%d", (fi == q) ? 10000 : 0);
+                    for (t = fr; *t; t++) cs ^= (uint8_t)*t;
+                    { char line[100]; int ln = snprintf(line, sizeof line, "$%s*%02X\r\n", fr, (unsigned)cs); LinkV2Frame_t g;
+                      CHECK(LinkV2_Parse(line, (uint32_t)ln, &g) == LINK_ERR_RANGE, "diagnostic %d = 10000 is refused by the parser", q); }
+                }
+            }
+            {   /* the LONGEST possible $E: every field at its maximum fits LINKV2_MAX_LEN and an old receiver's 96-byte line */
+                char big[128];
+                e.seq = 255U; e.setv_dv = 3000U; e.flags2 = 65535U; e.clr = 255U; e.reach_lo_dv = 6553U; e.reach_hi_dv = 6553U; e.iout_rms_ca = 4000U; e.iout_pk_ca = 4000U;
+                e.sq_id = 255U; e.sq_delay_us = 65535U; e.sq_period_us = 65535U; e.cbc = 65535U; e.lp_ms = 9999U; e.lp_flt = 9999U; e.lp_zc = 9999U; e.flt_raw = 9999U; e.zc_noise = 9999U;
+                n = LinkV2_BuildE(big, sizeof big, &e);
+                CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN && n <= 96, "the longest $E is %d bytes (LINKV2_MAX_LEN %u, a receiver's line 96)", (int)n, (unsigned)LINKV2_MAX_LEN);
+                CHECK(LinkV2_Parse(big, (uint32_t)n, &f) == LINK_OK && f.u.e.zc_noise == 9999U && f.u.e.cbc == 65535U, "and parses back");
+                CHECK(LinkV2_BuildE(big, (uint32_t)n - 1U, &e) < 0, "one byte less room: refused, never truncated");
+            }
         }
         {   /* v0.9.61: the optional hold field */
             LinkV2Frame_t f; int32_t n; uint32_t c = 0U, i;
@@ -256,7 +299,7 @@ static void t_ranges(void)
                 snprintf(t, sizeof t, "%s%02X\r\n", bad, cs); CHECK(LinkV2_Parse(t, (uint32_t)strlen(t), &f) == LINK_ERR_RANGE, "and by the parser"); }
             m.hold = 0U;
         }
-        {   LinkE_t e = {0, 999, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with setv 99.9 V is refused"); e.setv_dv = 0U; CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "E with setv 0 (none yet) builds");
+        {   LinkE_t e = {0, 999, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with setv 99.9 V is refused"); e.setv_dv = 0U; CHECK(LinkV2_BuildE(b, sizeof b, &e) > 0, "E with setv 0 (none yet) builds");
                     e.reach_lo_dv = 499U; CHECK(LinkV2_BuildE(b, sizeof b, &e) == LINK_ERR_RANGE, "E with reach 49.9 V is refused"); }
         {   LinkH_t h = {2, 10000000UL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; CHECK(LinkV2_BuildH(b, sizeof b, &h) == LINK_ERR_RANGE, "H with fw 10000000 is refused"); }
     }
@@ -515,7 +558,7 @@ static void t_property(void)
         if ((fl[nf - 1].lo < -1000) && (v[nf - 1] == -2147483647 - 1)) continue;
         switch (which)
         {
-        case 0: { LinkE_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4], (uint16_t)v[5], (uint16_t)v[6], (uint16_t)v[7], 0, 0, 0, 0 }; n = (all_ok) ? LinkV2_BuildE(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
+        case 0: { LinkE_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3], (uint16_t)v[4], (uint16_t)v[5], (uint16_t)v[6], (uint16_t)v[7], 0, 0, 0, 0, 0, 0, 0, 0, 0 }; n = (all_ok) ? LinkV2_BuildE(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 1: { LinkH_t x = { (uint8_t)v[0], (uint32_t)v[1], (uint16_t)v[2], (uint16_t)v[3], (uint8_t)v[4], (uint8_t)v[5], (uint16_t)v[6], (uint16_t)v[7], (uint16_t)v[8], (uint16_t)v[9], (uint16_t)v[10], (uint16_t)v[11], (uint8_t)v[12], (uint8_t)v[13] }; n = (all_ok) ? LinkV2_BuildH(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 2: { LinkR_t x = { (uint8_t)v[0], (uint8_t)v[1], v[2] }; n = (all_ok) ? LinkV2_BuildR(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
         case 3: { LinkT_t x = { (uint8_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (int16_t)v[3], (uint8_t)v[4] }; n = (all_ok) ? LinkV2_BuildT(b, sizeof b, &x) : LINK_ERR_RANGE; break; }
@@ -597,7 +640,7 @@ static void t_mutation(void)
 static void t_lengths(void)
 {
     char b[LINKV2_MAX_LEN + 8]; int32_t n, maxlen = 0;
-    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000, 255, 65535, 65535, 65535}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535, 4095, 65535, 65535, 65535, 65535, 15, 1}; LinkR_t r = {255, 7, -2147483647};
+    LinkE_t e = {255, 3000, 65535, 255, 6553, 6553, 4000, 4000, 255, 65535, 65535, 65535, 9999, 9999, 9999, 9999, 9999}; LinkH_t h = {255, 9999999UL, 65535, 65535, 2, 1, 65535, 4095, 65535, 65535, 65535, 65535, 15, 1}; LinkR_t r = {255, 7, -2147483647};
     LinkT_t t = {255, 4095, 65535, -999, 6}; LinkM_t m = {255, 1, 3000, 255, 1990, 1}; LinkK_t k;
     n = LinkV2_BuildE(b, sizeof b, &e); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN && b[n - 1] == '\n' && b[n - 2] == '\r', "E at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
     n = LinkV2_BuildH(b, sizeof b, &h); CHECK(n > 0 && n <= (int32_t)LINKV2_MAX_LEN, "H at its maximum fits (%d bytes)", (int)n); if (n > maxlen) maxlen = n;
@@ -611,7 +654,7 @@ static void t_lengths(void)
     /* field counts against the Frames sheet: E 6, H 7, R 3, T 5, M 5 numeric fields (commas = fields) */
     {   struct { const char *name; int32_t n; int want; } c[5];
         char bb[LINKV2_MAX_LEN + 8]; int i, commas, j;
-        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200, 0, 0, 0, 0, 0, 0, 0}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300, 0};
+        LinkE_t e2 = {7, 2300, 3, 3, 2020, 2700, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; LinkH_t h2 = {2, 803, 800, 3100, 0, 1, 3200, 0, 0, 0, 0, 0, 0, 0}; LinkR_t r2 = {5, 0, 10152}; LinkT_t t2 = {4, 320, 2301, 48, 0}; LinkM_t m2 = {41, 1, 2300, 3, 300, 0};
         c[0].name = "E"; c[0].n = LinkV2_BuildE(bb, sizeof bb, &e2); c[0].want = 6; for (i = 0; i < 1; i++) { commas = 0; for (j = 0; j < c[0].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 6, "E has 6 fields (%d)", commas); }
         c[1].name = "H"; c[1].n = LinkV2_BuildH(bb, sizeof bb, &h2); commas = 0; for (j = 0; j < c[1].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 7, "H has 7 fields (%d)", commas);
         c[2].name = "R"; c[2].n = LinkV2_BuildR(bb, sizeof bb, &r2); commas = 0; for (j = 0; j < c[2].n; j++) if (bb[j] == ',') commas++; CHECK(commas == 3, "R has 3 fields (%d)", commas);

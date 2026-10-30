@@ -188,6 +188,17 @@ uint32_t SlaveCtrl_GlitchSkips(void);       /* how many half-cycles have been sk
 #if (CTRL_VGATE_V != 0U) && ((CTRL_VGATE_CONFIRM < 1U) || (CTRL_VGATE_OFF_TICKS < 1U))
 #error "CTRL_VGATE_CONFIRM and CTRL_VGATE_OFF_TICKS: at least 1"
 #endif
+/* v0.9.70 DIAGNOSTICS (F10 hunt: the main loop went more than CTRL_MEAS_STALE_MS without a new measurement). All since power-up, saturating at 9999, sent in $E:
+ *   lp_ms   the longest main-loop pass (the time between two SlaveCtrl_Service calls), ms
+ *   lp_flt  FLT interrupts during that longest pass        lp_zc  zero-cross interrupts during it
+ *   flt_raw every FLT interrupt (with SLAVE_FLT_CBC: every edge, limited or not)
+ *   zc_noise zero-cross edges closer than CTRL_DIAG_ZC_NOISE_US to the edge before (noise; a pulse end is 1.5 ms after its start) */
+#ifndef CTRL_DIAG_ZC_NOISE_US
+#define CTRL_DIAG_ZC_NOISE_US    1000U
+#endif
+#define CTRL_DIAG_MAX            9999U
+typedef struct { uint16_t lp_ms, lp_flt, lp_zc, flt_raw, zc_noise; } CtrlDiag_t;
+void     SlaveCtrl_GetDiag(CtrlDiag_t *d);
 uint32_t SlaveCtrl_VgateSkips(void);        /* half-cycles left without a diagonal because the line never confirmed its polarity (diagnostics) */
 uint32_t SlaveCtrl_VgateOffs(void);         /* diagonals switched off early because the line fell below the threshold (diagnostics) */
 

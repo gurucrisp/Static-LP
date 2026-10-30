@@ -16,4 +16,5 @@ typedef struct
     uint32_t     max_poll_gap_us;    /* longest time the loop went without polling    */
     uint8_t      e_valid;            /* v0.9.68: the fields the live Mon_Compose reads for the cycle-by-cycle count */
     uint16_t     e_cbc;
+    uint16_t     e_lp_ms, e_lp_flt, e_lp_zc, e_flt_raw, e_zc_noise;   /* v0.9.70 */
 } MasterMon_t;

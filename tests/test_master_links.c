@@ -18,10 +18,10 @@ static int s_frame(char *b, char ph, uint8_t seq, uint16_t vin, uint16_t vout, u
     return (int)Link_BuildStatus(b, 96U, &st);
 }
 static uint16_t g_e_sq_id, g_e_sq_delay, g_e_sq_period;      /* the phase sequence result the next $E frame carries (0 = none: a 6 field frame as before) */
-static uint16_t g_e_iout_pk; static uint8_t g_e_iout_clip; static uint16_t g_e_cbc;     /* v0.9.68: the cycle-by-cycle count the next $E carries */                                 /* v0.9.55: the converter-current peak the next $E carries (0 = none) */
+static uint16_t g_e_iout_pk; static uint8_t g_e_iout_clip; static uint16_t g_e_cbc; static uint16_t g_e_dg[5];     /* v0.9.68: the cycle-by-cycle count the next $E carries */                                 /* v0.9.55: the converter-current peak the next $E carries (0 = none) */
 static int e_frame(char *b, uint8_t seq, uint16_t flags2, uint8_t clr)
 {
-    LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period; e.cbc = g_e_cbc;
+    LinkE_t e; memset(&e, 0, sizeof e); e.seq = seq; e.setv_dv = 2300U; e.flags2 = flags2; e.clr = clr; e.sq_id = g_e_sq_id; e.sq_delay_us = g_e_sq_delay; e.sq_period_us = g_e_sq_period; e.cbc = g_e_cbc; e.lp_ms = g_e_dg[0]; e.lp_flt = g_e_dg[1]; e.lp_zc = g_e_dg[2]; e.flt_raw = g_e_dg[3]; e.zc_noise = g_e_dg[4];
     if (g_e_iout_pk != 0U) { e.iout_pk_ca = g_e_iout_pk; e.iout_rms_ca = (uint16_t)(g_e_iout_pk / 2U); e.flags2 = (uint16_t)(e.flags2 | LINKV2_FLAG_IOUT_VALID | ((g_e_iout_clip != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U)); }
     return (int)LinkV2_BuildE(b, 96U, &e);
 }
@@ -73,6 +73,28 @@ static void t_module(void)
         reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 0U); push(0, b, n); feed(0, 1000U);
         MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
         CHECK(v.e_cbc == 0U && strstr(rows[3], " C") == NULL && strstr(rows[3], " B") != NULL, "no count: row 3 as before '%s'", rows[3]);
+    }
+    {   /* v0.9.70: the slave's diagnostics take the whole of row 3 */
+        MasterMon_t v; char rows[MON_LCD_ROWS][MON_LCD_COLS + 1U];
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n);
+        g_e_cbc = 24U; g_e_dg[0] = 150U; g_e_dg[1] = 3U; g_e_dg[2] = 15U; g_e_dg[3] = 31U; g_e_dg[4] = 2U;
+        n = e_frame(b, 1U, 0U, 0U); push(0, b, n); g_e_cbc = 0U; memset(g_e_dg, 0, sizeof g_e_dg); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(v.e_lp_ms == 150U && v.e_lp_flt == 3U && v.e_lp_zc == 15U && v.e_flt_raw == 31U && v.e_zc_noise == 2U, "the five diagnostics reach the monitor data");
+        CHECK(strcmp(rows[3], "P150/3/15 F31 Z2 C24") == 0, "row 3 '%s'", rows[3]);
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n);
+        g_e_dg[4] = 1U; n = e_frame(b, 1U, 0U, 0U); push(0, b, n); memset(g_e_dg, 0, sizeof g_e_dg); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(strncmp(rows[3], "P0/0/0 F0 Z1 C0", 15) == 0, "only a noise edge: the row still shows (%s)", rows[3]);
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n);
+        g_e_dg[3] = 1U; n = e_frame(b, 1U, 0U, 0U); push(0, b, n); memset(g_e_dg, 0, sizeof g_e_dg); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(strncmp(rows[3], "P0/0/0 F1 Z0", 12) == 0, "only a FLT interrupt: the row still shows (%s)", rows[3]);
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n);
+        g_e_dg[0] = 9999U; g_e_dg[1] = 9999U; g_e_dg[2] = 9999U; g_e_dg[3] = 9999U; g_e_dg[4] = 9999U; g_e_cbc = 65535U;
+        n = e_frame(b, 1U, 0U, 0U); push(0, b, n); g_e_cbc = 0U; memset(g_e_dg, 0, sizeof g_e_dg); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(strlen(rows[3]) == MON_LCD_COLS && strncmp(rows[3], "P9999/9999/9999 F999", 20) == 0, "every value at its maximum: cut at the edge of the display (%s)", rows[3]);
     }
     /* the $H of a board on the Y port reaches the application */
     reset(); n = s_frame(b, 'R', 1U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 3U); push(0, b, n); n = h_frame(b); push(0, b, n);

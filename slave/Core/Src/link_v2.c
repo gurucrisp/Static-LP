@@ -16,7 +16,7 @@ typedef struct
     uint8_t zero_ok;     /* the value 0 is valid although it is outside lo..hi ("0 or 1000..3000") */
 } Fld_t;
 
-static const Fld_t F_E[12] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 255, 0}, {500, 6553, 1}, {500, 6553, 1}, {0, 4000, 0}, {0, 4000, 0}, {0, 255, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0} };
+static const Fld_t F_E[17] = { {0, 255, 0}, {1000, 3000, 1}, {0, 65535, 0}, {0, 255, 0}, {500, 6553, 1}, {500, 6553, 1}, {0, 4000, 0}, {0, 4000, 0}, {0, 255, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 9999, 0}, {0, 9999, 0}, {0, 9999, 0}, {0, 9999, 0}, {0, 9999, 0} };
 static const Fld_t F_H[14] = { {0, 255, 0}, {0, 9999999, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 2, 0}, {0, 1, 0}, {0, 65535, 0}, {0, 4095, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 65535, 0}, {0, 15, 0}, {0, 1, 0} };
 static const Fld_t F_R[3] = { {1, 255, 0}, {0, 7, 0}, {-INT32_LIM, INT32_LIM, 0} };
 static const Fld_t F_T[5] = { {0, 255, 0}, {0, 4095, 0}, {0, 65535, 0}, {-999, 999, 0}, {0, 6, 0} };
@@ -157,9 +157,12 @@ static int32_t build_nums(char type, const Fld_t *tab, const int32_t *v, uint32_
 
 int32_t LinkV2_BuildE(char *out, uint32_t cap, const LinkE_t *f)
 {
-    const int32_t v[12] = { f->seq, f->setv_dv, f->flags2, f->clr, f->reach_lo_dv, f->reach_hi_dv, f->iout_rms_ca, f->iout_pk_ca, f->sq_id, f->sq_delay_us, f->sq_period_us, f->cbc };
-    /* CANONICAL: the two optional fields are left out when both are 0, so a slave without the I-OUT channel sends exactly the frame of the first protocol (6 fields); v0.9.68: the cbc count (12th) only when not 0 */
-    return build_nums('E', F_E, v, (f->cbc != 0U) ? 12U : ((f->sq_id != 0U) ? 11U : (((f->iout_rms_ca != 0U) || (f->iout_pk_ca != 0U)) ? 8U : 6U)), out, cap);
+    const int32_t v[17] = { f->seq, f->setv_dv, f->flags2, f->clr, f->reach_lo_dv, f->reach_hi_dv, f->iout_rms_ca, f->iout_pk_ca, f->sq_id, f->sq_delay_us, f->sq_period_us, f->cbc,
+                            f->lp_ms, f->lp_flt, f->lp_zc, f->flt_raw, f->zc_noise };
+    const uint8_t dg = (uint8_t)((f->lp_ms != 0U) || (f->lp_flt != 0U) || (f->lp_zc != 0U) || (f->flt_raw != 0U) || (f->zc_noise != 0U));
+    /* CANONICAL: the two optional fields are left out when both are 0, so a slave without the I-OUT channel sends exactly the frame of the first protocol (6 fields); v0.9.68: the cbc count (12th) only when not 0;
+     * v0.9.70: the five diagnostics (13th to 17th) only when one is not 0 */
+    return build_nums('E', F_E, v, (dg != 0U) ? 17U : ((f->cbc != 0U) ? 12U : ((f->sq_id != 0U) ? 11U : (((f->iout_rms_ca != 0U) || (f->iout_pk_ca != 0U)) ? 8U : 6U))), out, cap);
 }
 
 int32_t LinkV2_BuildH(char *out, uint32_t cap, const LinkH_t *f)
@@ -394,7 +397,7 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
     const char *body, *p, *end;
     uint32_t    blen;
     int32_t     hi, lo, rc;
-    int32_t     v[14];                       /* the longest frame: H with its 7 optional profile fields */
+    int32_t     v[17];                       /* the longest frame: E with its optional fields (v0.9.70: 17; was 14, H with its 7 optional profile fields) */
     LinkV2Frame_t f;
 
     zero_frame(&f);
@@ -426,12 +429,13 @@ int32_t LinkV2_Parse(const char *line, uint32_t len, LinkV2Frame_t *out)
     switch (body[0])
     {
     case 'E':
-        rc = parse_nums_opt(p, end, F_E, 6U, 12U, v);
+        rc = parse_nums_opt(p, end, F_E, 6U, 17U, v);
         if (rc != LINK_OK) return rc;
         f.type = LINKV2_E;
         f.u.e.seq = (uint8_t)v[0]; f.u.e.setv_dv = (uint16_t)v[1]; f.u.e.flags2 = (uint16_t)v[2];
         f.u.e.clr = (uint8_t)v[3]; f.u.e.reach_lo_dv = (uint16_t)v[4]; f.u.e.reach_hi_dv = (uint16_t)v[5]; f.u.e.iout_rms_ca = (uint16_t)v[6]; f.u.e.iout_pk_ca = (uint16_t)v[7];
         f.u.e.sq_id = (uint16_t)v[8]; f.u.e.sq_delay_us = (uint16_t)v[9]; f.u.e.sq_period_us = (uint16_t)v[10]; f.u.e.cbc = (uint16_t)v[11];
+        f.u.e.lp_ms = (uint16_t)v[12]; f.u.e.lp_flt = (uint16_t)v[13]; f.u.e.lp_zc = (uint16_t)v[14]; f.u.e.flt_raw = (uint16_t)v[15]; f.u.e.zc_noise = (uint16_t)v[16];
         break;
     case 'H':
         rc = parse_nums_opt(p, end, F_H, 7U, 14U, v);

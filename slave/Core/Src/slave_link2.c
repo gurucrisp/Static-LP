@@ -161,7 +161,7 @@ void SL2_Service(uint32_t now_ms)
     if (reached(now_ms, s_e_next))
     {
         LinkE_t e;
-        e.seq = s_e_seq; e.setv_dv = 0U; e.flags2 = 0U; e.clr = 0U; e.reach_lo_dv = 0U; e.reach_hi_dv = 0U; e.iout_rms_ca = 0U; e.iout_pk_ca = 0U; e.sq_id = 0U; e.sq_delay_us = 0U; e.sq_period_us = 0U; e.cbc = 0U;
+        e.seq = s_e_seq; e.setv_dv = 0U; e.flags2 = 0U; e.clr = 0U; e.reach_lo_dv = 0U; e.reach_hi_dv = 0U; e.iout_rms_ca = 0U; e.iout_pk_ca = 0U; e.sq_id = 0U; e.sq_delay_us = 0U; e.sq_period_us = 0U; e.cbc = 0U; e.lp_ms = 0U; e.lp_flt = 0U; e.lp_zc = 0U; e.flt_raw = 0U; e.zc_noise = 0U;
         if (s_hk.fill_e != 0) s_hk.fill_e(&e);
         e.seq = s_e_seq;
         s_e_seq++;

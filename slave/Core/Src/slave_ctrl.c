@@ -156,6 +156,29 @@ static void IsrFail(uint16_t code)
     if (g_ctrl.isr_fault == 0U) g_ctrl.isr_fault = code;
 }
 
+/* v0.9.70 diagnostics (slave_ctrl.h) */
+static volatile uint32_t s_dg_flt, s_dg_zc, s_dg_zc_noise;     /* written by the interrupts */
+static uint32_t s_dg_zc_last_us; static uint8_t s_dg_zc_have;
+static uint32_t s_dg_prev_us, s_dg_prev_flt, s_dg_prev_zc; static uint8_t s_dg_prev_ok;
+static uint32_t s_dg_lp_ms, s_dg_lp_flt, s_dg_lp_zc;
+static uint16_t DgSat(uint32_t v) { return (uint16_t)((v > CTRL_DIAG_MAX) ? CTRL_DIAG_MAX : v); }
+void SlaveCtrl_GetDiag(CtrlDiag_t *d)
+{
+    d->lp_ms = DgSat(s_dg_lp_ms); d->lp_flt = DgSat(s_dg_lp_flt); d->lp_zc = DgSat(s_dg_lp_zc);
+    d->flt_raw = DgSat(s_dg_flt); d->zc_noise = DgSat(s_dg_zc_noise);
+}
+/* once per main-loop pass (the top of SlaveCtrl_Service): the time since the previous pass, and what the interrupts did meanwhile */
+static void DgLoopPass(uint32_t now_us)
+{
+    const uint32_t flt = s_dg_flt, zc = s_dg_zc;
+    if (s_dg_prev_ok != 0U)
+    {
+        const uint32_t ms = (uint32_t)(now_us - s_dg_prev_us) / 1000U;
+        if (ms > s_dg_lp_ms) { s_dg_lp_ms = ms; s_dg_lp_flt = flt - s_dg_prev_flt; s_dg_lp_zc = zc - s_dg_prev_zc; }
+    }
+    s_dg_prev_us = now_us; s_dg_prev_flt = flt; s_dg_prev_zc = zc; s_dg_prev_ok = 1U;
+}
+
 /* v0.9.69 the voltage gate (slave_ctrl.h) */
 #if (CTRL_VGATE_V != 0U)
 static uint8_t  s_vg_n;                 /* reads in a row that confirmed the pending diagonal's polarity */
@@ -172,6 +195,10 @@ void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
     int32_t  dev_in, dev_out;
     uint8_t  selected, ok_all, ok_fall = 0U, ok, why_all = 0U, why_fall = 0U, why;
     uint32_t dt_all = 0U, dt_fall = 0U, interval;
+
+    s_dg_zc++;                                                        /* v0.9.70 diagnostics: every edge, and those too close to the one before */
+    if ((s_dg_zc_have != 0U) && ((uint32_t)(now_us - s_dg_zc_last_us) < CTRL_DIAG_ZC_NOISE_US)) s_dg_zc_noise++;
+    s_dg_zc_last_us = now_us; s_dg_zc_have = 1U;
 
     selected = (uint8_t)((g_ctrl.mode == CTRL_ZC_BOTH) ||
                          ((g_ctrl.mode == CTRL_ZC_FALL) && (rising == 0U)));
@@ -517,6 +544,7 @@ static FltCbc_t s_cbc;
 uint32_t SlaveCtrl_CbcCount(void) { return s_cbc.total; }
 void SlaveCtrl_OnFltCbcIrq(void)
 {
+    s_dg_flt++;                                                   /* v0.9.70 diagnostics: every FLT interrupt (the PWM is already forced off) */
     if ((g_ctrl.state == CTRL_RUN) && (g_ctrl.run_allowed != 0U) && (g_ctrl.isr_fault == 0U) && (FltCbc_OnEdge(&s_cbc, CtrlHw_NowMs()) == FLT_CBC_LIMIT))
     {
         SlavePower_CbcArm();                                      /* resume at a PWM period start with FLT released */
@@ -569,6 +597,9 @@ void     SlaveCtrl_OnPwmPeriodIrq(void) { }
 void SlaveCtrl_OnFltIrq(void)
 {
     SlavePower_FltOffNow();       /* FIRST (decision D25). On the target EXTI2_3_IRQHandler has already done it: the second call is harmless and costs nothing that matters. v0.9.65: high sides off, low sides on */
+#if (SLAVE_FLT_CBC == 0)
+    s_dg_flt++;                   /* v0.9.70 diagnostics (with the limit, SlaveCtrl_OnFltCbcIrq counts every interrupt and calls this only to escalate) */
+#endif
     if ((g_ctrl.run_allowed != 0U) || (g_ctrl.isr_fault != 0U)) { if (g_ctrl.flt_run  < 31U) g_ctrl.flt_run++;  }
     else                                                        { if (g_ctrl.flt_idle < 31U) g_ctrl.flt_idle++; }
     if (g_ctrl.run_allowed != 0U) CaptureTrip();                /* reads only a timer count and two controller fields: independent of the output stage */
@@ -1274,6 +1305,7 @@ void SlaveCtrl_Service(void)
     uint32_t   now_us = CtrlHw_NowUs();
     uint16_t   f;
 
+    DgLoopPass(now_us);                    /* v0.9.70 diagnostics: the main-loop pass time */
     SlavePower_BreakIrqRearm();            /* break interrupts stay masked while a BKIN is held */
     CtrlHw_GetMeas(&m);
     TrackMeas(&m, now_ms);

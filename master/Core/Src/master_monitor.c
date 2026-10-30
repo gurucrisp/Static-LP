@@ -79,7 +79,7 @@ void Mon_ProcessBytesCtx(MasterMon_t *m, LinkRx_t *lrx, LinkV2Rx_t *l2rx, uint32
             on_frame(m, fps, &st, now_ms);
         }
         {   LinkV2Frame_t f2; int32_t t2 = LinkV2Rx_Feed(l2rx, b, &f2);
-            if (t2 == (int32_t)LINKV2_E) { m->e_valid = 1U; m->e_flags2 = f2.u.e.flags2; m->e_clr = f2.u.e.clr; m->e_setv_dv = f2.u.e.setv_dv; m->e_iout_rms_ca = f2.u.e.iout_rms_ca; m->e_iout_pk_ca = f2.u.e.iout_pk_ca; m->e_sq_id = f2.u.e.sq_id; m->e_sq_delay_us = f2.u.e.sq_delay_us; m->e_sq_period_us = f2.u.e.sq_period_us; m->e_cbc = f2.u.e.cbc; m->e_t_ms = now_ms; }
+            if (t2 == (int32_t)LINKV2_E) { m->e_valid = 1U; m->e_flags2 = f2.u.e.flags2; m->e_clr = f2.u.e.clr; m->e_setv_dv = f2.u.e.setv_dv; m->e_iout_rms_ca = f2.u.e.iout_rms_ca; m->e_iout_pk_ca = f2.u.e.iout_pk_ca; m->e_sq_id = f2.u.e.sq_id; m->e_sq_delay_us = f2.u.e.sq_delay_us; m->e_sq_period_us = f2.u.e.sq_period_us; m->e_cbc = f2.u.e.cbc; m->e_lp_ms = f2.u.e.lp_ms; m->e_lp_flt = f2.u.e.lp_flt; m->e_lp_zc = f2.u.e.lp_zc; m->e_flt_raw = f2.u.e.flt_raw; m->e_zc_noise = f2.u.e.zc_noise; m->e_t_ms = now_ms; }
             else if (t2 == (int32_t)LINKV2_T) { m->t_step = f2.u.t.step; m->t_ticks = f2.u.t.ticks; m->t_vin_dv = f2.u.t.vin_dv; m->t_dv_dv = f2.u.t.dv; m->t_result = f2.u.t.result; m->t_n++; }
             else if (t2 == (int32_t)LINKV2_R) { m->r_id = f2.u.r.id; m->r_status = f2.u.r.status; m->r_value = f2.u.r.value; m->r_n++; }
             else if (t2 == (int32_t)LINKV2_H) { m->h_valid = 1U; m->h_win_lo_dv = f2.u.h.vin_min_dv; m->h_win_hi_dv = f2.u.h.vin_max_dv; m->h_vout_max_dv = f2.u.h.vout_max_dv; m->h_rst = f2.u.h.rst; m->h_tuned = f2.u.h.tuned; m->h_prof_cap = f2.u.h.prof_cap; m->h_prof_kib = f2.u.h.prof_kib; m->h_prof_kiu = f2.u.h.prof_kiu; m->h_prof_vref_dv = f2.u.h.prof_vref_dv; m->h_prof_maxc_dv = f2.u.h.prof_maxc_dv; m->h_prof_n = f2.u.h.prof_n; m->h_prof_knee = f2.u.h.prof_knee; }
@@ -198,9 +198,18 @@ void Mon_Compose(const MasterMon_t *m, uint32_t now_ms,
             (void)snprintf(tmp, sizeof tmp, "--.--Hz");
         }
         put_text(rows[3], 0U, tmp);
-        if (((s->diag2 & 0x4000U) != 0U) && ((s->diag2 & 0x8000U) == 0U))
+        if ((m->e_valid != 0U) && ((m->e_lp_ms != 0U) || (m->e_flt_raw != 0U) || (m->e_zc_noise != 0U)))
+        {   /* v0.9.70 diagnostics, the whole row:  P<longest loop pass ms>/<FLT irqs in it>/<zero-cross irqs in it> F<all FLT irqs> Z<zero-cross noise edges> C<limited pulses> */
+            uint32_t k;
+            (void)snprintf(tmp, sizeof tmp, "P%u/%u/%u F%u Z%u C%u", (unsigned)m->e_lp_ms, (unsigned)m->e_lp_flt, (unsigned)m->e_lp_zc,
+                           (unsigned)m->e_flt_raw, (unsigned)m->e_zc_noise, (unsigned)m->e_cbc);
+            for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';
+            put_text(rows[3], 0U, tmp);
+            tmp[0] = '\0';
+        }
+        else if (((s->diag2 & 0x4000U) != 0U) && ((s->diag2 & 0x8000U) == 0U))
         {
-            /* passive converter-mapping check: M<agree>/<disagree> (see slave_ctrl.h; replaces the B / f statistics) */
+            /* passive converter-mapping check (v0.9.70: after the diagnostics): M<agree>/<disagree> (see slave_ctrl.h; replaces the B / f statistics) */
             (void)snprintf(tmp, sizeof tmp, " M%u/%u L%u", (unsigned)(s->diag2 & 127U), (unsigned)((s->diag2 >> 7) & 127U),
                            (unsigned)cap99(m->lost));
         }

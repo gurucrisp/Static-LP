@@ -85,9 +85,18 @@ void Mon_Compose(const MasterMon_t *m, uint32_t now_ms,
             (void)snprintf(tmp, sizeof tmp, "--.--Hz");
         }
         put_text(rows[3], 0U, tmp);
-        if (((s->diag2 & 0x4000U) != 0U) && ((s->diag2 & 0x8000U) == 0U))
+        if ((m->e_valid != 0U) && ((m->e_lp_ms != 0U) || (m->e_flt_raw != 0U) || (m->e_zc_noise != 0U)))
+        {   /* v0.9.70 diagnostics, the whole row:  P<longest loop pass ms>/<FLT irqs in it>/<zero-cross irqs in it> F<all FLT irqs> Z<zero-cross noise edges> C<limited pulses> */
+            uint32_t k;
+            (void)snprintf(tmp, sizeof tmp, "P%u/%u/%u F%u Z%u C%u", (unsigned)m->e_lp_ms, (unsigned)m->e_lp_flt, (unsigned)m->e_lp_zc,
+                           (unsigned)m->e_flt_raw, (unsigned)m->e_zc_noise, (unsigned)m->e_cbc);
+            for (k = 0U; k < MON_LCD_COLS; k++) rows[3][k] = ' ';
+            put_text(rows[3], 0U, tmp);
+            tmp[0] = '\0';
+        }
+        else if (((s->diag2 & 0x4000U) != 0U) && ((s->diag2 & 0x8000U) == 0U))
         {
-            /* passive converter-mapping check: M<agree>/<disagree> (see slave_ctrl.h; replaces the B / f statistics) */
+            /* passive converter-mapping check (v0.9.70: after the diagnostics): M<agree>/<disagree> (see slave_ctrl.h; replaces the B / f statistics) */
             (void)snprintf(tmp, sizeof tmp, " M%u/%u L%u", (unsigned)(s->diag2 & 127U), (unsigned)((s->diag2 >> 7) & 127U),
                            (unsigned)cap99(m->lost));
         }
