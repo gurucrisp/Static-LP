@@ -83,6 +83,20 @@ extern "C" {
 #ifndef TUNE_STEP_WAIT_MS
 #define TUNE_STEP_WAIT_MS    9000UL
 #endif
+/* v0.9.73: a step whose windows stay NOISY (not an input jump, not a drift) for the whole TUNE_STEP_WAIT_MS is ACCEPTED with its last window's average, if that
+ * spread is at most TUNE_ACCEPT_SPREAD_V + TUNE_ACCEPT_REL x the injection; above it the sweep still gives up (Input Not Steady, "Reading noisy"). The average of
+ * about 150 readings is good to about 0.2 V even with 2.3 V of spread: a toroid gave up at step 5 or 7 with "Reading spread 2.3 V". A window that keeps DRIFTING
+ * is never accepted (its average is biased) and now says so: "Not settling" (the frame's injection field: -500 - the drift in tenths of a volt). */
+#ifndef TUNE_ACCEPT_SPREAD_V
+#define TUNE_ACCEPT_SPREAD_V 3.0f
+#endif
+#ifndef TUNE_ACCEPT_REL
+#define TUNE_ACCEPT_REL      0.25f
+#endif
+uint8_t Tune_SpreadAccepts(void);           /* steps accepted that way in the last sweep (diagnostics) */
+#if defined(TUNE_TEST_HOOKS)
+uint8_t Tune_TestWindow(const float *d, uint32_t n, float ref, int16_t *unst, uint8_t *accept);
+#endif
 #ifndef TUNE_KNEE_MIN_V
 #define TUNE_KNEE_MIN_V      8.0f        /* ... but only when the injection at the cap point is at least this much. A core saturates near its rated injection (tens of volts); a slope that changes at 2 to 6 V is the noise (plus or minus 0.3 V) and the
                                           * non-linear low-duty region of the converter, not a knee: v0.9.38 and earlier called it one (a "knee" at 64 ticks, about 4 V) and, with SLAVE_TUNE_APPLY on, that cap held the regulator to about 4 V of correction */

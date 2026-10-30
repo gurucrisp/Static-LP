@@ -791,7 +791,7 @@ static void t_tune_app(void)
       unsigned e; for (e = 0U; e < sizeof AB / sizeof AB[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(7, 4, 1024, 2060, AB[e].dv); run(40U); tune_screen(fr);
         CHECK(fr_has(fr, AB[e].l1) && fr_has(fr, AB[e].l2) && strlen(fr[2]) <= 20U, "Aborted with a detail of %d: '%s' / '%s' ('%s' / '%s')", AB[e].dv, AB[e].l1, AB[e].l2, fr[1], fr[2]); } }
     /* the reason an Input Not Steady sweep gave up, from the final frame's injection field */
-    { static const struct { int dv; const char *txt; } UNS[] = { {123, "Input moved 12 V"}, {85, "Input moved 8.5 V"}, {-13, "Reading spread 1.3 V"}, {-120, "Reading spread 12 V"}, {0, "Input out of window"} };
+    { static const struct { int dv; const char *txt; } UNS[] = { {123, "Input moved 12 V"}, {85, "Input moved 8.5 V"}, {-13, "Reading noisy 1.3 V"}, {-120, "Reading noisy 12 V"}, {-523, "Not settling 2.3 V"}, {-500, "Not settling 0.0 V"}, {-999, "Not settling 49 V"}, {0, "Input out of window"} };
       unsigned e; for (e = 0U; e < sizeof UNS / sizeof UNS[0]; e++) { fresh(); to_run(); run(2000U); stop_unit(); ask_tune(&k); MApp_OnKResult(&A, k.id, 0U, 0); send_t(6, 5, 512, 2340, UNS[e].dv); run(40U); tune_screen(fr);
         CHECK(fr_has(fr, "Input Not Steady") && fr_has(fr, UNS[e].txt) && strlen(fr[2]) <= 20U, "Input Not Steady with a detail of %d tenths: '%s' ('%s' / '%s')", UNS[e].dv, UNS[e].txt, fr[1], fr[2]); } }
     /* STOP aborts: TABORT with a new id, repeated; the final frame (6) ends it */

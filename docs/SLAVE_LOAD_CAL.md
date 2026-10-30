@@ -47,3 +47,9 @@ Set-Mode **Load Source** now has three choices (START steps them): `Master CT`, 
 * the load of R is the slave's converter current with R's Slave Load Cal, or none (`--.-A`, no overload trip) until it is calibrated or while its reading is missing or clipped, exactly as Y and B;
 * the master CT inrush backup is off (the slave's own hardware over-current trip, F01 / F02, still protects the stage).
 It is the factory default; a unit with saved settings keeps what it had: **set Load Source to `Slave, No CT` in Set-Mode** on a unit without a master CT.
+
+## v0.9.73: why it fails in three-phase (Out Of Range / Load Too Low)
+Not a three-phase software fault: each phase's page reads its own slave. The converter current is NOT proportional to the load alone. Power balance says the converter supplies the injected power, so its current is about `load x |Vout - Vin| / Vin`. At 230 V in and 230 V out the converter carries almost nothing whatever the load:
+* "Load Too Low" = the peak is less than 0.5 A above the zero;
+* "Out Of Range" = the gain came out above 5.000 (tiny delta).
+A calibration taken at one input voltage is wrong at another. A load model that divides by the correction is possible (`load = k x (peak - zero) x Vin / |Vout - Vin|`), but near zero correction no converter-based reading can measure the load: overload protection there needs a load CT.

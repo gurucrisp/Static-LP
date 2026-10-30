@@ -1,5 +1,6 @@
 /* Tests for the transformer autotune (slave_tune): the sweep against a SIMULATED FAMILY of transformers (gain, dead time, saturation knee, flipped, absent, noisy, unsteady input, faults), the profile, the model check, the reach. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -29,9 +30,10 @@ typedef struct
     double wob;          /* the mains wanders: the sum of two sines (2.3 s and 0.7 s periods) of this amplitude, volts: up to 3 x wob peak to peak (a variac with a converter on it) */
     double isat_v, isat_k;   /* the converter-side current: 1 A RMS at no load, and above isat_v volts of injection it rises by isat_k amperes per volt (a core that saturates); 0 = never */
     double wob_from;         /* the common-mode wander of the mains starts at this ms (0 = from the start) */
+    double dwob, dwob_from;  /* v0.9.73: the INJECTION itself wobbles (not the mains): a 1.7 Hz sine of this amplitude, volts, from dwob_from effective ticks on (0 = never) */
     double jump_at, jump_gain;   /* above jump_at effective ticks the gain suddenly becomes jump_gain times larger (0 = never): a surprise that no step prediction can foresee */
 } Plant_t;
-static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; p.sh_lo = 0.0; p.sh_hi = 0.0; p.sh_frac = 1.0; p.isat_v = 0.0; p.isat_k = 0.0; p.wob_from = 0.0; return p; }
+static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; p.sh_lo = 0.0; p.sh_hi = 0.0; p.sh_frac = 1.0; p.isat_v = 0.0; p.isat_k = 0.0; p.wob_from = 0.0; p.dwob = 0.0; p.dwob_from = 0.0; return p; }
 
 static double true_inj(const Plant_t *p, double ticks, double vin)
 {
@@ -62,7 +64,7 @@ static Run_t sim(Plant_t p, double maxc, uint16_t hw_cap, uint32_t abort_at, uin
         if (inj > r.max_inj) r.max_inj = inj;
         if ((double)req > (double)hw_cap) r.max_ticks_over = (double)req - (double)hw_cap;
         { double wob_on = ((double)(t - t0) >= p.wob_from) ? p.wob : 0.0; double vm = vin + wob_on * (sin(6.2831853 * (double)(t - t0) / 2300.0) + 0.5 * sin(6.2831853 * (double)(t - t0) / 700.0));
-          in.vin = (float)(vm + 0.05 * gauss()); in.vout = (float)(vm + p.offset + inj + p.noise * gauss()); } in.meas_valid = 1U; in.vin_in_window = 1U;
+          in.vin = (float)(vm + 0.05 * gauss()); in.vout = (float)(vm + p.offset + inj + p.noise * gauss() + ((p.dwob > 0.0 && (double)req >= p.dwob_from) ? p.dwob * sin(6.2831853 * (double)(t - t0) / 588.0) : 0.0)); } in.meas_valid = 1U; in.vin_in_window = 1U;
         in.iout_valid = (uint8_t)(p.isat_k >= 0.0); in.iout_clip = 0U; in.iout_rms = (float)(1.0 + ((p.isat_k > 0.0 && inj > p.isat_v) ? p.isat_k * (inj - p.isat_v) : 0.0) + 0.03 * gauss()); in.iout_pk = in.iout_rms * 4.0f;       /* a no-load converter current of 1 A RMS, spiky */
         in.fault = (uint8_t)((fault_at != 0U && (t - t0) >= fault_at) ? 1U : 0U); in.maxc_v = (float)maxc; in.hw_cap_ticks = hw_cap;
         if (abort_at != 0U && (t - t0) == abort_at) Tune_Abort();
@@ -164,6 +166,38 @@ int main(void)
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "0.6 V of noise on the difference: accepted (result %u)", r.result);
     p = nominal(); p.noise = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
     CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv <= -10, "4 V of noise on the difference: UNSTEADY and the frame says the reading is noisy (%.1f V of spread), nothing stored", (double)r.last.dv_dv / 10.0);
+    {   /* v0.9.73: a toroid gave up at step 5 or 7 with "Reading spread 2.3 V": a step that stays noisy or drifting (not an input jump) for the whole wait is accepted
+         * with its average if the spread is within the hard limit */
+        TuneProfile_t pf; uint32_t clean_ms;
+        { Run_t rc = sim(nominal(), 60.0, 2752U, 0U, 0U, 300000U); clean_ms = rc.ms; }
+        p = nominal(); p.dwob = 3.2; p.dwob_from = 256.0; r = sim(p, 60.0, 2752U, 0U, 0U, 600000U); (void)Tune_GetProfile(&pf);
+        CHECK(r.ms >= clean_ms + (uint32_t)Tune_SpreadAccepts() * (TUNE_STEP_WAIT_MS - TUNE_STEP_MS), "each such step was accepted only after the full wait (%u ms against %u clean, %u accepted)", (unsigned)r.ms, (unsigned)clean_ms, (unsigned)Tune_SpreadAccepts());
+        {   /* the accepted points themselves: within 0.6 V of the true injection (their averages are unbiased) */
+            uint32_t pi; double worst = 0.0;
+            for (pi = 0U; pi < pf.n; pi++) { double tr = true_inj(&p, (double)pf.ticks[pi], (double)pf.vin_ref_dv / 10.0), er = fabs((double)pf.dv_dv[pi] / 10.0 - tr); if (pf.ticks[pi] >= 256U && er > worst) worst = er; }
+            CHECK(worst <= 0.6, "the points from step 5 on are within 0.6 V of the true injection (worst %.2f V)", worst);
+        }
+        CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && pf.kib_m >= 900U && pf.kib_m <= 1100U && Tune_SpreadAccepts() > 0U, "the injection itself wobbles 3.2 V (2.3 V of spread) at 1.7 Hz from step 5 on (a toroid): finishes, the gain scale right (result %u, %u thousandths, %u accepted)", r.result, (unsigned)pf.kib_m, (unsigned)Tune_SpreadAccepts());
+        {   /* the window judge itself: noisy (accepted after the wait within the hard limit), drifting (never accepted), the frame's encoding */
+            float w[150]; int16_t un; uint8_t ac, c; int k;
+            for (k = 0; k < 150; k++) w[k] = 6.0f + 3.2f * (float)sin(6.2831853 * (double)k * 10.0 / 588.0);                   /* 6 V of injection (step 5) wobbling 3.2 V: 2.3 V of spread */
+            c = Tune_TestWindow(w, 150U, 0.0f, &un, &ac);
+            CHECK(c == 2U && un < 0 && un > -500 && ac == 1U, "a noisy window (2.3 V of spread at 6 V): refused at first, 'reading noisy' (%d), accepted after the wait (%u)", (int)un, ac);
+            for (k = 0; k < 150; k++) w[k] = 6.0f + 8.0f * (float)sin(6.2831853 * (double)k * 10.0 / 588.0);
+            c = Tune_TestWindow(w, 150U, 0.0f, &un, &ac);
+            CHECK(c == 2U && un < 0 && un > -500 && ac == 0U, "8 V of wobble (5.7 V of spread) at 6 V: beyond the hard limit (4.5 V), never accepted (%d, %u)", (int)un, ac);
+            for (k = 0; k < 150; k++) w[k] = 8.0f + 3.0f * (float)k / 150.0f;                                                       /* a steady creep of 2 V/s */
+            c = Tune_TestWindow(w, 150U, 0.0f, &un, &ac);
+            CHECK(c == 2U && un <= -500 && ac == 0U, "a drifting window (2 V/s at 8 V): 'not settling' (%d), never accepted (%u)", (int)un, ac);
+            for (k = 0; k < 150; k++) w[k] = 10.0f + 0.3f * (float)sin((double)k);
+            c = Tune_TestWindow(w, 150U, 0.0f, &un, &ac);
+            CHECK(c == 0U, "a clean window: good (%u)", c);
+        }
+        p = nominal(); r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
+        CHECK(r.result == TUNE_R_FINISHED && Tune_SpreadAccepts() == 0U, "a clean plant: no step needs that (%u)", (unsigned)Tune_SpreadAccepts());
+        p = nominal(); p.dwob = 12.0; p.dwob_from = 256.0; r = sim(p, 60.0, 2752U, 0U, 0U, 600000U);
+        CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv <= -10 && r.last.dv_dv > -500, "an injection that wobbles 12 V from step 5: beyond the hard limit, still UNSTEADY, 'reading noisy' (frame %d)", (int)r.last.dv_dv);
+    }
     { TuneProfile_t pf; p = nominal(); p.tau = 1.3; r = sim(p, 60.0, 2752U, 0U, 0U, 400000U); (void)Tune_GetProfile(&pf);
       CHECK(r.result == TUNE_R_FINISHED && pf.kib_m >= 940U && pf.kib_m <= 1060U, "a slow plant (time constant 1.3 s): the windows are measured again until the difference has settled, and the gain scale is right (%u thousandths, %u ms)", (unsigned)pf.kib_m, (unsigned)r.ms); }
     { Plant_t q = nominal(); q.vin = 230.0; q.wob = 0.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U); CHECK(r.result == TUNE_R_FINISHED, "a steady mains: unchanged, finishes"); }

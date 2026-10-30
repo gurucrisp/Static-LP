@@ -439,7 +439,9 @@ void MApp_TuneScreen(const MApp_t *a, uint32_t now, char frame[MUI_ROWS][MUI_COL
         }
         case 5U:
         {   /* why: the slave's final frame carries it in the injection field: > 0 the input moved that much (tenths of a volt, peak to peak), < 0 the reading itself was noisy or had not settled (its spread), 0 the input left the slave's window */
-            int32_t v = (int32_t)a->tune_dv_dv; uint32_t av = (uint32_t)((v < 0) ? -v : v), q = 0U, whole = av / 10U, frac = av % 10U; const char *pre = (v > 0) ? "Input moved " : "Reading spread ";
+            int32_t v = (int32_t)a->tune_dv_dv; uint32_t av = (uint32_t)((v < 0) ? -v : v), q = 0U, whole, frac; const char *pre = (v > 0) ? "Input moved " : ((v <= -500) ? "Not settling " : "Reading noisy ");      /* v0.9.73: <= -50.0 V = not settling (the drift + 50.0 V) */
+            if (v <= -500) av -= 500U;
+            whole = av / 10U; frac = av % 10U;
             l0 = "Tuning Failed"; l1 = "Input Not Steady";
             if (v == 0) { l2 = "Input out of window"; }
             else

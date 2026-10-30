@@ -2,7 +2,23 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.72 — zero-cross ride-through: an output load switched on no longer trips "Mains Unstable" (current)
+## v0.9.73 — autotune: a noisy step on a toroid no longer ends the sweep; the failure message says noisy or not settling (current)
+* **Reported:** the autotune of a toroidal transformer ended at step 5 or 7 with "Input Not Steady / Reading spread 2.3 V".
+* **What that meant:** the input was steady, but the measured injection (output - input) had 2.3 V of spread within the 1.5 s window, above the strict limit (1 V + 12 % of the injection, about 1.7 V at step 5). After 9 s of retries on one step the sweep gave up. Reproduced in the simulator: an injection that wobbles 3.2 V from step 5 on ends v0.9.72's sweep exactly like that.
+* **Change (slave):** a step whose windows stay NOISY for the whole 9 s wait is now ACCEPTED with its last window's average, if the spread is at most 3 V + 25 % of the injection (`TUNE_ACCEPT_SPREAD_V`, `TUNE_ACCEPT_REL`). The average of about 150 readings is good to about 0.2 V. Never accepted: a window in which the INPUT moved (8 V), a spread beyond that limit, and a window that keeps DRIFTING between its halves (its average would be biased).
+* **The message now says which (slave and master):** "Reading noisy x.x V" or "Not settling x.x V" (was "Reading spread" for both). The frame's injection field carries it: down to -49.9 V for noisy, -50.0 V minus the drift for not settling. **Flash both;** an older master shows "Reading spread 5x.x V" for a not-settling result.
+* **Tests:**
+  * the toroid-like plant (3.2 V of wobble from step 5) finishes with the gain scale right; each such step is accepted only after the full wait, and its points are within 0.6 V of the true injection;
+  * a clean plant needs none of it;
+  * a 12 V wobble still gives up, saying "reading noisy";
+  * the window judge directly: noisy and accepted, beyond the limit and refused, drifting and never accepted ("not settling"), clean and good;
+  * the master's message for both, up to the 20-character line.
+* **Mutations:** 10. Eight were caught: two only after a timing check and a check on the accepted points were added. Two survive because they are equivalent: accepting an input jump, and accepting a drift, are both already refused by the hard limit; the explicit exclusion stays as the stated intent.
+* **Found while testing, NOT changed:** a plant that settles very slowly (4 s time constant) finishes v0.9.72's sweep with a gain scale 24 % high. The drift check does not catch it at the larger injections. It is not the toroid case, and it is unchanged in this version.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Flash the master and the slaves.**
+* **Not proven on hardware:** re-run the toroid autotune. If it ends now, the message says whether the reading was noisy (beyond the new limit) or not settling.
+
+## v0.9.72 — zero-cross ride-through: an output load switched on no longer trips "Mains Unstable"
 * **Reported:** in three-phase Domestic, switching a load on at the unit's OUTPUT, or changing the output phase with the manual selector, tripped "Mains Unstable" with F03, F15 or F16. The load's inrush notches the mains at the input near the zero-cross, and the zero-cross checks trip on it.
 * **Change (your choice, `SLAVE_ZC_RIDE` 1 in the production config; 0 = trip at once as before):**
   * While RUNNING, F03 (wrong time), F15 (no sign flip), F16 (last-moment polarity), F04 (no readable sign) and F08 (an overdue event) no longer trip.

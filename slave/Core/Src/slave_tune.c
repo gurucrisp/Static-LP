@@ -62,11 +62,34 @@ static uint8_t window_check(float ref, uint8_t at_end)
     mean = s.sum / n; var = (s.sumsq / n) - (mean * mean); if (var < 0.0f) var = 0.0f;
     m1 = (s.n1 > 0U) ? (s.sum1 / (float)s.n1) : mean; m2 = (s.n2 > 0U) ? (s.sum2 / (float)s.n2) : mean;
     inj = mean - ref; if (inj < 0.0f) inj = -inj;
-    { float lim = TUNE_D_SD_V + (TUNE_D_SD_REL * inj); if (var > (lim * lim)) { s.unst = (int16_t)(-tenths(fsqrt(var))); return 2U; } }
+    /* v0.9.73: the frame says WHICH: noisy = -(spread) down to -49.9 V, not settling = -(50.0 V + the drift between the halves) */
+    { float lim = TUNE_D_SD_V + (TUNE_D_SD_REL * inj); if (var > (lim * lim)) { int16_t t = tenths(fsqrt(var)); if (t > 499) t = 499; s.unst = (int16_t)(-t); return 2U; } }
     d = m1 - m2; if (d < 0.0f) d = -d;
-    if (d > (TUNE_D_TREND_V + (TUNE_D_TREND_REL * inj))) { s.unst = (int16_t)(-tenths(d)); return 2U; }
+    if (d > (TUNE_D_TREND_V + (TUNE_D_TREND_REL * inj))) { int16_t t = tenths(d); if (t > 499) t = 499; s.unst = (int16_t)(-(500 + t)); return 2U; }
     return 0U;
 }
+/* v0.9.73: after window_check() returned 2 (s.unst = -spread): is that spread within the hard limit for the injection of this window? */
+static uint8_t s_accepts;
+uint8_t Tune_SpreadAccepts(void) { return s_accepts; }
+static uint8_t spread_acceptable(void)
+{   /* only a NOISY window (its average is unbiased); a DRIFTING one (s.unst <= -500) is not accepted: its average is biased (a 4 s plant gave a gain 24 % high in simulation) */
+    const float spread = (float)(-s.unst) * 0.1f;
+    float inj = (s.n > 0U) ? ((s.sum / (float)s.n) - s.base) : 0.0f;
+    if (inj < 0.0f) inj = -inj;
+    return (uint8_t)((s.unst < 0) && (s.unst > -500) && (spread <= (TUNE_ACCEPT_SPREAD_V + (TUNE_ACCEPT_REL * inj))));
+}
+#if defined(TUNE_TEST_HOOKS)
+/* PC tests only: one measuring window of n differences d[] (1.5 s of 10 ms readings, the input steady at 230 V) judged against the baseline ref. Returns window_check()'s
+ * code; *unst its reason; *accept whether a step would be accepted on it after the wait. Leaves no sweep running. */
+uint8_t Tune_TestWindow(const float *d, uint32_t n, float ref, int16_t *unst, uint8_t *accept)
+{
+    uint32_t k; uint8_t c;
+    reset_accum(0U); s.base = ref; s.unst = 0;
+    for (k = 0U; k < n; k++) acc_sample(d[k], 230.0f, (uint32_t)(k * 10U), (uint32_t)((n * 10U) / 2U));
+    c = window_check(ref, 1U); *unst = s.unst; *accept = (uint8_t)((c == 2U) && (spread_acceptable() != 0U));
+    return c;
+}
+#endif
 /* the sweep gives up on an unsteady window: the frame carries WHY in its injection field */
 static void finish(uint8_t result, uint8_t knee, uint8_t cap_idx);
 static void give_up_unsteady(void) { s.last_dv = (float)s.unst * 0.1f; finish(TUNE_R_UNSTEADY, 0U, 0U); }
@@ -111,7 +134,7 @@ uint8_t Tune_Start(float maxc_v, uint32_t now_ms)
     if (maxc_v <= 0.0f) return 1U;
     if ((s.st == TS_BASE) || (s.st == TS_STEP)) return 2U;
     s.st = TS_BASE; s.maxc = maxc_v; s.npts = 0U; s.step_i = 0U; s.last_step = 0U; s.cur_ticks = 0.0f; s.prof_ok = 0U; s.done_pending = 0U; s.qh = 0U; s.qn = 0U;
-    s.wait_t0 = now_ms; s.t_valid = now_ms; s.last_vin = 0.0f; s.last_dv = 0.0f; s.hw_cap = 2752U; s.i_base = 0.0f; s.i_strikes = 0U; s.abort_detail = 0;
+    s.wait_t0 = now_ms; s.t_valid = now_ms; s.last_vin = 0.0f; s.last_dv = 0.0f; s.hw_cap = 2752U; s.i_base = 0.0f; s.i_strikes = 0U; s.abort_detail = 0; s_accepts = 0U;
     reset_accum(now_ms);
     return 0U;
 }
@@ -230,7 +253,15 @@ void Tune_Service(uint32_t now, const TuneIn_t *in, TuneOut_t *out)
             }
             if ((el >= TUNE_STEP_MS) && (s.n > 0U))
             {
-                if (window_check(s.base, 1U) != 0U)
+                const uint8_t wc = window_check(s.base, 1U);
+                if ((wc == 2U) && ((uint32_t)(now - s.wait_t0) >= TUNE_STEP_WAIT_MS) && (spread_acceptable() != 0U))
+                {   /* v0.9.73: noisy or drifting for the whole wait, but within the hard limit: the window's average is used (see slave_tune.h) */
+                    float dv = (s.sum / (float)s.n) - s.base, vin = s.vin_sum / (float)s.n;
+                    if (s_accepts < 255U) s_accepts++;
+                    step_done(dv, vin);
+                    if (s.st == TS_STEP) { reset_accum(now); s.wait_t0 = now; }
+                }
+                else if (wc != 0U)
                 {   /* the difference was noisy or had not settled: measure this step again */
                     if ((uint32_t)(now - s.wait_t0) >= TUNE_STEP_WAIT_MS) { give_up_unsteady(); goto out; }
                     reset_accum(now);
