@@ -445,8 +445,8 @@ static void sim_run_until(uint64_t t_end)
         uint64_t t_next = t_end;
         int ev = -1;
 
-        while (neq == 0 && (double)next_k * half_period_us() + W.phase0_us < (double)t_end)
-            gen_crossing(next_k++);
+        while (neq == 0 && (double)next_k * half_period_us() + W.phase0_us - ((W.early_n > 0) ? (W.early_us + 100.0) : 0.0) < (double)t_end)
+            gen_crossing(next_k++);                 /* v0.9.71: an EARLY edge is generated ahead of its nominal time (else a test stepping in short slices got it on time) */
 
         if (neq > 0 && (uint64_t)eq[0].t < t_next) { t_next = (uint64_t)eq[0].t; ev = 0; }
         if (dt_armed && dt_fire < t_next)          { t_next = dt_fire;           ev = 1; }
@@ -1482,16 +1482,28 @@ static void t_glitch_skip(void)
     CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
     W.preen_glitch = 3;
     run_for(1000000);
+#if (SLAVE_ZC_RIDE == 0)
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_PRE_ENERGISE, "the third glitch within 2 s is F16 as before (got %d/%d)", g_ctrl.state, g_ctrl.fault);
     CHECK(diag == 0, "and nothing is energised");
+#else
+    CHECK(g_ctrl.state == CTRL_RUN && g_ctrl.fault == CF_NONE && SlaveCtrl_RideCount() == 1U, "v0.9.71: the third glitch within 2 s is ridden through, not F16 (state %d fault %d, rides %u)", g_ctrl.state, g_ctrl.fault, (unsigned)SlaveCtrl_RideCount());
+    CHECK(g_ctrl.commutations > 0U && SlaveCtrl_RideActive() == 0U, "and it has recovered: commutating again");
+#endif
 
     /* c) a REAL polarity problem fails on every half-cycle: the unit stops within a few events (F04 for a signal too small to read) */
     world_reset(74000000);
     run_for(12000000);
     CHECK(g_ctrl.state == CTRL_RUN, "in RUN first (state %d)", g_ctrl.state);
     W.amp = 10.0;                                        /* mains too small to read a sign: every event fails */
+#if (SLAVE_ZC_RIDE == 0)
     run_for(100000);
     CHECK(diag == 0 && g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_POLARITY, "a persistent tiny signal: F04 within 0.1 s (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+#else
+    run_for(100000);
+    CHECK(diag == 0 && SlaveCtrl_RideActive() != 0U && g_ctrl.fault == CF_NONE, "v0.9.71: a persistent tiny signal is ridden through at first, nothing energised (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    run_for(500000);
+    CHECK(diag == 0 && g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_POLARITY, "and F04 at the ride-through's 0.5 s deadline (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+#endif
     check_invariants("persistent tiny signal");
 
     /* d) ONE unreadable sign at one event: tolerated */
@@ -3034,6 +3046,177 @@ static void t_diag_cbc_once(void)
 }
 #endif
 
+
+#if (SLAVE_ZC_RIDE != 0)
+/* ======================================================================= */
+/* v0.9.71 the zero-cross ride-through                                      */
+/* ======================================================================= */
+static void ride_world(uint64_t seed, double ph_us)
+{
+    world_reset(seed); W.amp = 1288.0; W.phase0_us += ph_us; resync_crossings();
+    { uint64_t t0 = sim_t; while (g_ctrl.state != CTRL_RUN && sim_t < t0 + 25000000ULL) run_for(5000); }
+    run_for(300000);
+}
+static int ride_recovered(uint64_t max_us)     /* runs until the ride ends and a diagonal is energised again; 1 = within max_us */
+{
+    uint64_t t0 = sim_t; long e0 = n_energise;
+    while (sim_t < t0 + max_us) { run_for(1000); if (SlaveCtrl_RideActive() == 0U && n_energise > e0) return 1; }
+    return 0;
+}
+
+/* an early zero-cross edge (an output load switched on) at 3 points of the wave: ridden through, recovered, no fault, never unsafe */
+static void t_ride_early_edge(void)
+{
+    double ph[3] = { 0.0, 6666.7, 13333.3 }; int p; uint64_t worst = 0;
+    for (p = 0; p < 3; p++)
+    {
+        uint32_t r0; uint64_t t0;
+        ride_world(1100000000ULL + (uint64_t)p * 50000000ULL, ph[p]);
+        CHECK(is_running(), "phase %d: running", p);
+        r0 = SlaveCtrl_RideCount(); v_polarity = 0; v_against_any = 0;
+        W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0;
+        { uint64_t ts = sim_t; while (SlaveCtrl_RideActive() == 0U && g_ctrl.fault == CF_NONE && sim_t < ts + 100000ULL) run_for(100); }
+        CHECK(SlaveCtrl_RideActive() != 0U && SlaveCtrl_RideCount() == r0 + 1U && g_ctrl.fault == CF_NONE, "phase %d: an edge 2.4 ms early is ridden through, no F03 / F16 / F08 (ride %u, fault %d)", p, (unsigned)SlaveCtrl_RideActive(), g_ctrl.fault);
+        CHECK(diag == 0 && leg1 == 0 && leg2 == 0 && inv_enabled, "phase %d: riding: converter off, duty zero, the inverter (low sides) still on", p);
+        t0 = sim_t;
+        CHECK(ride_recovered(300000ULL), "phase %d: recovered and energising again", p);
+        CHECK(sim_t - t0 >= 30000ULL, "phase %d: only after %u good half-cycles (%llu ms)", p, (unsigned)CTRL_RIDE_GOOD, (unsigned long long)((sim_t - t0) / 1000ULL));
+        if (sim_t - t0 > worst) worst = sim_t - t0;
+        run_for(500000);
+        CHECK(is_running() && g_ctrl.fault == CF_NONE, "phase %d: still running, no fault (state %d fault %d)", p, g_ctrl.state, g_ctrl.fault);
+        CHECK(v_polarity == 0 && v_against_any == 0, "phase %d: never against the line (%ld / %ld)", p, v_polarity, v_against_any);
+        check_invariants("ride-through, early edge");
+    }
+    printf("  an early edge at 3 points of the wave: ridden through, energising again after at most %llu ms, no fault\n", (unsigned long long)(worst / 1000ULL));
+}
+
+/* a misread sign at an event (F15) and an input notch that leaves no readable sign (F04): ridden through */
+static void t_ride_sign_and_notch(void)
+{
+    ride_world(1300000000ULL, 0.0);
+    W.sign_glitch = 1;
+    run_for(30000);
+    CHECK(SlaveCtrl_RideCount() == 1U && g_ctrl.fault == CF_NONE, "a misread sign (F15): ridden through (rides %u, fault %d)", (unsigned)SlaveCtrl_RideCount(), g_ctrl.fault);
+    CHECK(ride_recovered(300000ULL) && is_running(), "and recovered");
+    run_for(11000000);                                       /* a new window */
+    { uint64_t t1 = sim_t; W.in_zero = 1; vg_notch_until = sim_t + 25000ULL; while (sim_t < t1 + 25000ULL) run_for(500); W.in_zero = 0; }
+    CHECK(g_ctrl.fault == CF_NONE && (SlaveCtrl_RideCount() >= 2U || SlaveCtrl_GlitchSkips() > 0U), "a 25 ms notch with no readable sign: skipped / ridden through, no F04 (rides %u, skips %u, fault %d)", (unsigned)SlaveCtrl_RideCount(), (unsigned)SlaveCtrl_GlitchSkips(), g_ctrl.fault);
+    run_for(500000);
+    CHECK(is_running() && g_ctrl.fault == CF_NONE && SlaveCtrl_RideActive() == 0U, "running normally afterwards (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
+    check_invariants("ride-through, sign and notch");
+}
+
+/* a disturbance that does not end (+-3.5 ms of edge jitter): the original fault within the 0.5 s deadline, never unsafe */
+static void t_ride_persistent(void)
+{
+    uint64_t t0;
+    ride_world(1400000000ULL, 0.0);
+    v_polarity = 0; v_both = 0; v_dead = 0;
+    W.jitter_us = 3500.0; t0 = sim_t;
+    while (g_ctrl.fault == CF_NONE && g_ctrl.isr_fault == 0U && sim_t < t0 + 2000000ULL) run_for(1000);
+    CHECK(g_ctrl.fault != CF_NONE || g_ctrl.isr_fault != 0U, "a disturbance that does not end: it trips (fault %d / %d)", g_ctrl.fault, g_ctrl.isr_fault);
+    CHECK(sim_t - t0 <= 650000ULL, "within the 0.5 s deadline plus a half-cycle (%llu ms)", (unsigned long long)((sim_t - t0) / 1000ULL));
+    { const uint16_t f = (g_ctrl.isr_fault != 0U) ? g_ctrl.isr_fault : g_ctrl.fault;
+      CHECK(f == CF_ZC_PATTERN || f == CF_ZC_SEQUENCE || f == CF_POLARITY || f == CF_PRE_ENERGISE || f == CF_ZC_LOST, "with the original code: F03 / F15 / F04 / F16 / F08 (%u)", (unsigned)f); }
+    run_for(1000000);
+    CHECK(v_polarity == 0 && v_both == 0 && v_dead == 0, "never unsafe (%ld / %ld / %ld)", v_polarity, v_both, v_dead);
+}
+
+/* the fourth disturbance within 10 s trips; after the window a new one is ridden through again */
+static void t_ride_count(void)
+{
+    int k;
+    ride_world(1500000000ULL, 0.0);
+    for (k = 0; k < 3; k++) { W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0; run_for(40000); CHECK(ride_recovered(300000ULL), "ride %d recovered", k + 1); run_for(200000); }
+    CHECK(SlaveCtrl_RideCount() == 3U && is_running() && g_ctrl.fault == CF_NONE, "three in about 1.5 s: all ridden through (%u)", (unsigned)SlaveCtrl_RideCount());
+    W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0; run_for(60000);
+    { const uint16_t f = (g_ctrl.isr_fault != 0U) ? g_ctrl.isr_fault : g_ctrl.fault;
+      CHECK(SlaveCtrl_RideCount() == 3U && (f == CF_ZC_PATTERN || f == CF_PRE_ENERGISE || f == CF_ZC_LOST || f == CF_ZC_SEQUENCE), "the fourth within 10 s: the original fault as before (%u)", (unsigned)f); }
+    /* and after a restart beyond the window: allowed again */
+    { uint64_t t0 = sim_t; while (g_ctrl.state != CTRL_RUN && sim_t < t0 + 60000000ULL) run_for(10000); }
+    if (g_ctrl.state == CTRL_RUN)
+    {
+        run_for(11000000);
+        W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0; run_for(60000);
+        CHECK(ride_recovered(300000ULL), "after the 10 s window: recovered");
+        CHECK(SlaveCtrl_RideCount() == 4U && is_running() && g_ctrl.isr_fault == 0U, "after the 10 s window: ridden through again (%u, state %d)", (unsigned)SlaveCtrl_RideCount(), g_ctrl.state);
+    }
+    else CHECK(SlaveCtrl_RideActive() == 0U, "not restarted in this build: nothing left riding");
+}
+
+/* during a START (not yet RUN) the checks stay strict; a stop / fault clears a ride; F11 still trips */
+static void t_ride_strict_outside_run(void)
+{
+    uint64_t t0;
+    world_reset(1600000000ULL); W.amp = 1288.0;
+    t0 = sim_t; while (g_ctrl.state != CTRL_RECT && sim_t < t0 + 25000000ULL) run_for(1000);
+    CHECK(g_ctrl.state == CTRL_RECT, "converter starting (state %d)", g_ctrl.state);
+    W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0; run_for(40000);
+    CHECK(SlaveCtrl_RideCount() == 0U && (g_ctrl.isr_fault == CF_ZC_PATTERN || g_ctrl.fault == CF_ZC_PATTERN || g_ctrl.state == CTRL_RESHUNT || g_ctrl.state == CTRL_FAULT), "an early edge during the start: F03 as before, no ride-through (rides %u, state %d fault %d)", (unsigned)SlaveCtrl_RideCount(), g_ctrl.state, g_ctrl.fault);
+    /* a ride, then the run request is withdrawn: nothing is left riding */
+    ride_world(1700000000ULL, 0.0);
+    W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0;
+    { uint64_t ts = sim_t; while (SlaveCtrl_RideActive() == 0U && sim_t < ts + 100000ULL) run_for(100); }
+    CHECK(SlaveCtrl_RideActive() != 0U, "riding");
+    SlaveCtrl_OnFltIrq(); run_for(2000);
+    CHECK(SlaveCtrl_RideActive() == 0U && g_ctrl.state != CTRL_RUN, "a FLT during a ride: the ride is over, the FLT shutdown goes on (state %d)", g_ctrl.state);
+    /* F11: a phase jump while a diagonal is on still trips */
+    ride_world(1800000000ULL, 0.0);
+    { uint64_t z = sim_t; while (diag == 0 && sim_t < z + 20000ULL) run_for(50); }
+    run_for(3000);
+    W.phase0_us += 5000.0; resync_crossings();
+    run_for(5000);
+    CHECK(g_ctrl.isr_fault == CF_LINE_REVERSED || g_ctrl.fault == CF_LINE_REVERSED, "a phase jump with a diagonal on: F11 as before, no ride-through (fault %d / %d)", g_ctrl.fault, g_ctrl.isr_fault);
+}
+
+
+/* a second disturbance DURING a ride restarts the count of good half-cycles (a misread sign; and, with the glitch skip, a sign-less event that must not be
+ * spent as a glitch while riding) */
+static void t_ride_restart(void)
+{
+    int kind;
+    for (kind = 0; kind < 2; kind++)
+    {
+        uint64_t t0, t1; long e0; uint32_t r0, s0;
+        ride_world(2000000000ULL + (uint64_t)kind * 50000000ULL, 0.0);
+        r0 = SlaveCtrl_RideCount();
+        W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0;
+        t0 = sim_t; while (SlaveCtrl_RideActive() == 0U && sim_t < t0 + 100000ULL) run_for(100);
+        CHECK(SlaveCtrl_RideActive() != 0U, "kind %d: riding", kind);
+        s0 = SlaveCtrl_GlitchSkips();                                   /* (with the glitch skip, the early edge's F16 was skipped once BEFORE the ride) */
+        t0 = sim_t; e0 = n_energise;
+        run_for(25000);                                                 /* two good half-cycles into the ride */
+        if (kind == 0) W.sign_glitch = 1;                               /* the next event's sign is misread (F15) */
+        else           { W.in_zero = 1; }                               /* the next event has no readable sign (F04) */
+        run_for(10000);
+        W.in_zero = 0; t1 = sim_t;
+        while (n_energise == e0 && sim_t < t0 + 400000ULL) run_for(500);
+        CHECK(n_energise > e0 && SlaveCtrl_RideActive() == 0U && is_running(), "kind %d: recovered in the end (state %d fault %d)", kind, g_ctrl.state, g_ctrl.fault);
+        CHECK(sim_t - t1 >= 25000ULL, "kind %d: the second disturbance restarted the count: energising %llu ms after it (at least %u good half-cycles)", kind, (unsigned long long)((sim_t - t1) / 1000ULL), (unsigned)CTRL_RIDE_GOOD - 1U);
+        CHECK(SlaveCtrl_RideCount() == r0 + 1U && SlaveCtrl_GlitchSkips() == s0, "kind %d: still ONE ride-through, no glitch skip spent while riding (rides +%u, skips +%u)", kind, (unsigned)(SlaveCtrl_RideCount() - r0), (unsigned)(SlaveCtrl_GlitchSkips() - s0));
+        check_invariants("ride-through, restart");
+    }
+}
+#if defined(TEST_LEGACY_REG)
+/* the regulator does not integrate while riding: the duty after the ride is the duty before it */
+static void t_ride_reg_frozen(void)
+{
+    uint16_t d0; uint64_t ts;
+    l3_world(1900000000ULL, 222.0f); l3_wait_run();                /* inside the range: the duty is below its cap, so a wind-up would show */
+    run_for(6000000);
+    d0 = g_ctrl.duty_counts;
+    CHECK(d0 > 0U && d0 < L3_CCR_MAX - 50U && is_running() && fabs((double)W.vout - 230.0) < 1.5, "correcting 222 V below the cap (duty %u, Vout %.1f)", d0, (double)W.vout);
+    W.early_n = 1; W.early_from_k = next_k + 1; W.early_us = 2400.0;
+    ts = sim_t; while (SlaveCtrl_RideActive() == 0U && sim_t < ts + 100000ULL) run_for(100);
+    CHECK(SlaveCtrl_RideActive() != 0U, "riding");
+    W.in_zero = 1; run_for(350000); W.in_zero = 0;                  /* a long disturbance (0.35 s, within the deadline): the output is uncorrected all along */
+    CHECK(SlaveCtrl_RideActive() != 0U && g_ctrl.isr_fault == 0U, "still riding after 0.35 s, no fault");
+    while (SlaveCtrl_RideActive() != 0U && sim_t < ts + 800000ULL) run_for(1000);
+    CHECK(abs((int)g_ctrl.duty_counts - (int)d0) <= (int)(d0 / 20U) + 8, "the duty after the ride %u is the duty before it %u (no wind-up)", g_ctrl.duty_counts, d0);
+}
+#endif
+#endif
+
 int main(void)
 {
 #if (SLAVE_FLT_KEEP_LOWS == 0) && !defined(ALLOW_FLT_KEEP_LOWS_0)
@@ -3061,6 +3244,17 @@ int main(void)
     run_isolated(t_lost_pulse_midrun,         "one zero-cross pulse lost mid-run");
     run_isolated(t_guard_margin,              "polarity guard: no false trips at the extremes");
     run_isolated(t_resync_clears_state,       "restart discards the old synchronisation");
+#if (SLAVE_ZC_RIDE != 0)
+    run_isolated(t_ride_early_edge,           "ride-through: an early edge at 3 points of the wave (v0.9.71)");
+    run_isolated(t_ride_sign_and_notch,       "ride-through: a misread sign and an input notch");
+    run_isolated(t_ride_persistent,           "ride-through: a disturbance that does not end trips");
+    run_isolated(t_ride_count,                "ride-through: the fourth within 10 s trips");
+    run_isolated(t_ride_restart,              "ride-through: a disturbance during a ride restarts its count");
+    run_isolated(t_ride_strict_outside_run,   "ride-through: strict during a start, cleared by a FLT, F11 unchanged");
+#if defined(TEST_LEGACY_REG)
+    run_isolated(t_ride_reg_frozen,           "ride-through: the regulator does not wind up");
+#endif
+#endif
     run_isolated(t_diag,                      "diagnostics: loop stall, FLT and zero-cross counts (v0.9.70)");
     run_isolated(t_diag_patterns,             "diagnostics: no noise edges for normal ZCD patterns");
 #if (SLAVE_FLT_CBC != 0)

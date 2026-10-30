@@ -156,6 +156,40 @@ static void IsrFail(uint16_t code)
     if (g_ctrl.isr_fault == 0U) g_ctrl.isr_fault = code;
 }
 
+#if (SLAVE_ZC_RIDE != 0)
+/* v0.9.71 the zero-cross ride-through (slave_features.h). Interrupt level only (the zero-cross, dead-time and watchdog interrupts share one priority). */
+static volatile uint8_t  s_ride;              /* riding through: nothing is energised, the duty is zero */
+static volatile uint16_t s_ride_code;         /* the fault it stands for (raised if it does not recover) */
+static volatile uint8_t  s_ride_good;         /* good events in a row since the last bad one */
+static volatile uint8_t  s_ride_n;            /* ride-throughs in this window */
+static volatile uint32_t s_ride_win_ms, s_ride_total;
+uint32_t SlaveCtrl_RideCount(void)  { return s_ride_total; }
+uint8_t  SlaveCtrl_RideActive(void) { return s_ride; }
+/* A disturbed-mains check failed: 1 = ride through it (the caller returns), 0 = raise the fault as before */
+static uint8_t Ride(uint16_t code, uint32_t now_us)
+{
+    uint32_t now_ms;
+    if ((g_ctrl.state != CTRL_RUN) || (g_ctrl.run_allowed == 0U) || (g_ctrl.isr_fault != 0U)) return 0U;      /* during a start the checks stay strict */
+    if (s_ride != 0U) { s_ride_good = 0U; return 1U; }                     /* already riding: another bad event; the deadline stays */
+    now_ms = CtrlHw_NowMs();
+    if ((uint32_t)(now_ms - s_ride_win_ms) >= CTRL_RIDE_WINDOW_MS) { s_ride_win_ms = now_ms; s_ride_n = 0U; }
+    if (s_ride_n >= (uint8_t)CTRL_RIDE_MAX_EVENTS) return 0U;              /* too many: it is real */
+    s_ride_n++; s_ride_total++;
+    s_ride = 1U; s_ride_code = code; s_ride_good = 0U;
+    SlavePower_ConverterOffNow();
+    g_ctrl.conv_pol = 0;
+    if (g_ctrl.inv_active != 0U) SlavePower_SetLegDuty(0U, 0U);            /* the low sides keep the primary shorted: the output follows the input */
+    CtrlHw_DisarmDeadtime();
+    CtrlHw_DisarmPredictOff();
+    CtrlHw_ArmWatchdog((uint32_t)(now_us + CTRL_RIDE_MAX_US));             /* the deadline: not recovered by then = the original fault */
+    return 1U;
+}
+#else
+uint32_t SlaveCtrl_RideCount(void)  { return 0U; }
+uint8_t  SlaveCtrl_RideActive(void) { return 0U; }
+static uint8_t Ride(uint16_t code, uint32_t now_us) { (void)code; (void)now_us; return 0U; }
+#endif
+
 /* v0.9.70 diagnostics (slave_ctrl.h) */
 static volatile uint32_t s_dg_flt, s_dg_zc, s_dg_zc_noise;     /* written by the interrupts */
 static uint32_t s_dg_zc_last_us; static uint8_t s_dg_zc_have;
@@ -249,22 +283,32 @@ void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
     if (sign_in == 0)
     {
 #if (SLAVE_GLITCH_SKIP != 0)
-        if (GlitchTolerated(now_us))                   /* the sample at this event is too small to read: no diagonal this half-cycle, keep the watchdog armed */
+        if ((SlaveCtrl_RideActive() == 0U) && GlitchTolerated(now_us))                   /* the sample at this event is too small to read: no diagonal this half-cycle, keep the watchdog armed */
         {
             CtrlHw_ArmWatchdog((uint32_t)(now_us + interval + CTRL_WD_MARGIN_US));
             return;
         }
 #endif
+        if (Ride(CF_POLARITY, now_us) != 0U) return;
         IsrFail(CF_POLARITY);
         return;
     }
     if (ok == 0U)                                      /* say WHICH check failed: wrong TIME (F03) or wrong SIGN sequence (F15) */
     {
-        IsrFail(((why & TRK_WHY_INTERVAL) != 0U || why == 0U) ? CF_ZC_PATTERN : CF_ZC_SEQUENCE);
+        const uint16_t code = ((why & TRK_WHY_INTERVAL) != 0U || why == 0U) ? CF_ZC_PATTERN : CF_ZC_SEQUENCE;
+        if (Ride(code, now_us) != 0U) return;
+        IsrFail(code);
         return;
     }
     if ((sign_out != 0) && (sign_out != sign_in))      { IsrFail(CF_SENSE_MISMATCH); return; }
 
+#if (SLAVE_ZC_RIDE != 0)
+    if (s_ride != 0U)
+    {   /* riding through: a good event; the converter stays off until CTRL_RIDE_GOOD in a row, then this event arms the next diagonal (and the normal watchdog) */
+        if (++s_ride_good < (uint8_t)CTRL_RIDE_GOOD) return;
+        s_ride = 0U;
+    }
+#endif
     g_ctrl.events++;
     g_ctrl.pending_pol = (int8_t)(-sign_in);           /* the NEXT half-cycle has the opposite sign */
 
@@ -319,6 +363,7 @@ void SlaveCtrl_OnDeadtimeIrq(void)
 #if (SLAVE_GLITCH_SKIP != 0)
             if (GlitchTolerated(CtrlHw_NowUs())) return;   /* an early or noisy event: energise NOTHING this half-cycle (the safe state), the next event carries on */
 #endif
+            if (Ride(CF_PRE_ENERGISE, CtrlHw_NowUs()) != 0U) return;
             IsrFail(CF_PRE_ENERGISE);
             return;
         }
@@ -442,6 +487,10 @@ void SlaveCtrl_OnSampleTick(void)
 
 void SlaveCtrl_OnWatchdogIrq(void)
 {
+#if (SLAVE_ZC_RIDE != 0)
+    if ((s_ride != 0U) && (g_ctrl.run_allowed != 0U)) { s_ride = 0U; IsrFail(s_ride_code); return; }     /* not recovered in time: the fault it stood for */
+#endif
+    if ((g_ctrl.run_allowed != 0U) && (Ride(CF_ZC_LOST, CtrlHw_NowUs()) != 0U)) return;   /* v0.9.71: an overdue event after an early one (the watchdog was timed from it); a zero-cross that is really gone is F08 at the deadline */
     if (g_ctrl.run_allowed != 0U) IsrFail(CF_ZC_LOST);
     else                          SlavePower_AllOffNow();
 }
@@ -1306,6 +1355,9 @@ void SlaveCtrl_Service(void)
     uint16_t   f;
 
     DgLoopPass(now_us);                    /* v0.9.70 diagnostics: the main-loop pass time */
+#if (SLAVE_ZC_RIDE != 0)
+    if ((g_ctrl.state != CTRL_RUN) || (g_ctrl.run_allowed == 0U)) s_ride = 0U;   /* a ride-through never outlives RUN (a stop, any fault): the next start begins clean. The interrupts set it only in RUN */
+#endif
     SlavePower_BreakIrqRearm();            /* break interrupts stay masked while a BKIN is held */
     CtrlHw_GetMeas(&m);
     TrackMeas(&m, now_ms);
@@ -1562,8 +1614,8 @@ void SlaveCtrl_Service(void)
 #else
         {
             float d;
-            if (SlaveCtrl_LoadHoldActive(now_ms) != 0U)
-            {   /* v0.9.61: the contactor is connecting the load: the duty stays where it is. The controller's clocks follow, so it resumes with a normal step (no 0.5 s of error integrated at once) */
+            if ((SlaveCtrl_LoadHoldActive(now_ms) != 0U) || (SlaveCtrl_RideActive() != 0U))
+            {   /* v0.9.71: also while riding through a disturbed mains (nothing is injected: the error must not be integrated). v0.9.61: the contactor is connecting the load: the duty stays where it is. The controller's clocks follow, so it resumes with a normal step (no 0.5 s of error integrated at once) */
                 s_reg.last_time_ms = now_ms;
                 if (s_reg.ramp_last_ms != 0U) s_reg.ramp_last_ms = now_ms;
             }

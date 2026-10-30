@@ -146,6 +146,21 @@ extern "C" {
 #ifndef CTRL_GLITCH_MAX
 #define CTRL_GLITCH_MAX          2U
 #endif
+/* SLAVE_ZC_RIDE (slave_features.h), v0.9.71 */
+#ifndef CTRL_RIDE_GOOD
+#define CTRL_RIDE_GOOD           4U         /* good zero-cross events in a row that end a ride-through */
+#endif
+#ifndef CTRL_RIDE_MAX_US
+#define CTRL_RIDE_MAX_US         500000UL   /* not recovered within this = the original fault */
+#endif
+#ifndef CTRL_RIDE_MAX_EVENTS
+#define CTRL_RIDE_MAX_EVENTS     3U         /* ride-throughs allowed per window; the next disturbance is the fault */
+#endif
+#ifndef CTRL_RIDE_WINDOW_MS
+#define CTRL_RIDE_WINDOW_MS      10000UL
+#endif
+uint32_t SlaveCtrl_RideCount(void);         /* ride-throughs since power-up (0 when SLAVE_ZC_RIDE is 0) */
+uint8_t  SlaveCtrl_RideActive(void);        /* 1 while riding through */
 uint32_t SlaveCtrl_GlitchSkips(void);       /* how many half-cycles have been skipped since power-up (0 when SLAVE_GLITCH_SKIP is 0) */
 #ifndef CTRL_GUARD_BLANK_US
 #define CTRL_GUARD_BLANK_US      250U       /* polarity guard ignores this long after a commutation (the

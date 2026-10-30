@@ -2,7 +2,40 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.71 — F10 every 71.6 minutes fixed (a timer wrap in the measurement), found with the v0.9.70 diagnostics (current)
+## v0.9.72 — zero-cross ride-through: an output load switched on no longer trips "Mains Unstable" (current)
+* **Reported:** in three-phase Domestic, switching a load on at the unit's OUTPUT, or changing the output phase with the manual selector, tripped "Mains Unstable" with F03, F15 or F16. The load's inrush notches the mains at the input near the zero-cross, and the zero-cross checks trip on it.
+* **Change (your choice, `SLAVE_ZC_RIDE` 1 in the production config; 0 = trip at once as before):**
+  * While RUNNING, F03 (wrong time), F15 (no sign flip), F16 (last-moment polarity), F04 (no readable sign) and F08 (an overdue event) no longer trip.
+  * The converter stays off and the inverter at zero duty, low sides on: the output follows the input, uncorrected.
+  * After 4 good zero-crosses in a row it carries on; a bad one meanwhile restarts the count.
+  * The regulator does not integrate meanwhile (no wind-up).
+  * Not recovered within 0.5 s, or a 4th disturbance within 10 s: the original fault, exactly as before.
+  * During a start the checks stay strict.
+  * F11 (the line reverses under a diagonal), FLT / BKIN, output high, input range, F10 and relay faults: unchanged, they trip at once.
+  * The v0.9.69 voltage gate stays in front of every turn-on: nothing can be energised against the line during a disturbance.
+* **F08 was added after a test found it:** with the glitch skip on (production), an early edge was forgiven as a glitch, but the zero-cross watchdog was then timed from that early edge, so it expired before the next genuine edge and tripped F08. The same disturbance under another code. F08 now rides through too; a zero-cross that is really gone is still F08, at the 0.5 s deadline.
+* Code: slave_ctrl.c (`Ride()`, `SlaveCtrl_RideCount / RideActive`), `CTRL_RIDE_*` (slave_ctrl.h), `SLAVE_ZC_RIDE` (slave_features.h 0 / production config 1). No new files.
+* **Tests (simulator, the real slave_ctrl.c):**
+  * an edge 2.4 ms early at 3 points of the wave: ridden through, energising again only after 4 good half-cycles, never against the line;
+  * a misread sign (F15) and a 25 ms input notch with no readable sign (F04);
+  * a second disturbance during a ride restarts the count, and spends no glitch-skip budget;
+  * a disturbance that does not end: the original fault within 0.65 s, never unsafe;
+  * the 4th within 10 s trips, and after the window it rides through again;
+  * an early edge during a START still trips;
+  * a FLT during a ride ends it;
+  * a phase jump under a diagonal is still F11;
+  * the duty after a 0.35 s ride equals the duty before it, at 222 V below the cap.
+* **Mutations:** 17, all caught except 2 that are equivalent: switching the converter off and zeroing the duty again at the start of a ride (on every path the diagonal is already off by then; kept as defence in depth). Four were caught only after the tests were sharpened.
+* **New runner jobs:** `s3_ride`, and `s3_ride_glitch` (the production combination), each the whole harness. Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.**
+* **Mistakes found and corrected:**
+  * **The simulator** generated an "early" zero-cross edge only once its nominal time had passed, so a test stepping in short slices received it on time. It now generates it ahead. The v0.9.69 early-edge test ran in one long step and did get its early edges.
+  * **The v0.9.69 entry blamed `SLAVE_GLITCH_SKIP=1`** for the failing legacy saturation test. Wrong: the cause is that job's `CTRL_STAGE3_MAX_EFF_TICKS=2752U` (the test assumes the default cap). The glitch skip and the ride-through pass the whole harness at the default cap.
+* **Not proven on hardware.**
+  * The monitor page does not show the ride-through count yet.
+  * On the bench: switch a load on at the output and change the output phase; the unit should keep running, with the output uncorrected for a few cycles.
+  * If it still trips: the code in the log tells which limit was hit (0.5 s, or the 4th in 10 s).
+
+## v0.9.71 — F10 every 71.6 minutes fixed (a timer wrap in the measurement), found with the v0.9.70 diagnostics
 * **Bench (v0.9.70, single phase ageing from 12:13):** F10 at 13:34, 14:45 and 15:57, 71 to 72 minutes apart. Meanwhile the slave's longest main-loop pass stayed at 4 ms (`P4/0/0`), so the loop never stalled.
 * **Cause, a firmware bug present since the measurement was written:** `SlaveMeas_Service` checked its 100 ms power-up warm-up on EVERY call as `(now - start) < 100 ms` on TIM2. TIM2 is the free-running 32-bit microsecond timer and wraps every 2^32 us = 71.6 minutes, so the check matched again once per wrap. For 100 ms no measurement was computed, the controller saw none for more than 100 ms (`CTRL_MEAS_STALE_MS`), and it tripped F10 while running. Last night's 10 x F10 in 17 h has the same cause: 14 wraps, and F10 is only checked while running, at a gap just over 100 ms.
 * **Fix:** slave_meas_due.h (new header, header only: **no CubeIDE project change**). The update period and the warm-up are now wrap-safe, and the warm-up is checked only until it has passed once. slave_meas.c uses it.
