@@ -101,7 +101,7 @@ extern "C" {
 #define CTRL_EVENT_MIN_US        7500U      /* valid spacing of zero-cross events: a half-cycle */
 #endif
 #ifndef CTRL_EVENT_MAX_US
-#define CTRL_EVENT_MAX_US        12500U     /*   of 40...66 Hz mains                           */
+#define CTRL_EVENT_MAX_US        13500U     /*   of 37...66 Hz mains (v0.9.76: was 12500 = exactly 40 Hz, so a 40 Hz mains with any edge jitter never started) */
 #endif
 #ifndef CTRL_WATCHDOG_US
 #define CTRL_WATCHDOG_US         14500U     /* nominal watchdog before the first interval is known */
@@ -193,6 +193,11 @@ uint32_t SlaveCtrl_GlitchSkips(void);       /* how many half-cycles have been sk
 #endif
 #ifndef CTRL_VGATE_MIN_ON_US
 #define CTRL_VGATE_MIN_ON_US     1000U      /* ...or if fewer than this would remain before the predicted turn-off */
+#endif
+#ifndef CTRL_VGATE_EARLY_US
+#define CTRL_VGATE_EARLY_US      400U       /* v0.9.76: for this long after a zero-cross event, the newest samples still showing the OLD polarity mean an early zero-cross
+                                               signal, not a fault: the gate keeps waiting (nothing is energised); only later is it F16. At 60 Hz and 300 V a signal 120 us
+                                               early tripped F16 (the line passes the 30 V check sooner than at 50 Hz) */
 #endif
 #ifndef CTRL_VGATE_OFF_TICKS
 #define CTRL_VGATE_OFF_TICKS     2U         /* 20 kHz ticks in a row below the threshold (or the wrong sign) that switch the diagonal off */

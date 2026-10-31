@@ -97,11 +97,11 @@ uint32_t SlaveMeas_WindowFrames(float period_us)
 
 float SlaveMeas_MainsPeriodFromZc(uint32_t p)
 {
-    if ((p >= 15000U) && (p <= 25000U))   /* one rising edge per mains cycle (40-66 Hz)   */
+    if ((p >= 15000U) && (p <= 27000U))   /* one rising edge per mains cycle (37-66 Hz; v0.9.76: was 25000 = exactly 40 Hz) */
     {
         return (float)p;
     }
-    if ((p >= 7500U) && (p <= 12500U))    /* one rising edge per half-cycle (80-133 Hz)    */
+    if ((p >= 7500U) && (p <= 13500U))    /* one rising edge per half-cycle (74-133 Hz)    */
     {
         return 2.0f * (float)p;
     }

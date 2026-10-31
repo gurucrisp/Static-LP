@@ -2,7 +2,24 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.75 — final protection settings: cycle-by-cycle limit on, one inrush retry (current)
+## v0.9.76 — 40 to 60 Hz mains (current)
+* **Your request:** check from 40 to 60 Hz. The simulator had only ever run at 50 Hz. Run at 40, 45, 55 and 60 Hz, it found two firmware limits:
+  1. **40 Hz did not start.** The half-cycle (12.5 ms) was exactly the firmware's limit for a valid zero-cross spacing (`CTRL_EVENT_MAX_US` 12500), so the slightest edge jitter rejected every half-cycle and the slave waited in SYNC for ever. The frequency measurement had the same edge (25 000 us = exactly 40 Hz); outside it the RMS window falls back to 50 Hz, which is not a whole cycle at 40 Hz.
+  2. **60 Hz: an early zero-cross signal tripped F16.** At 300 V a signal 120 us before the true zero tripped F16 at 60 Hz but not at 50 Hz, because the line passes the 30 V last-moment check sooner. In production (glitch skip, ride-through) every such half-cycle would be skipped and the unit would trip within about 0.5 s.
+* **Changes (slave):**
+  * `CTRL_EVENT_MAX_US` 13500 (37 Hz); the frequency measurement accepts 37 to 66 Hz.
+  * With the voltage gate, the old polarity still showing within `CTRL_VGATE_EARLY_US` (400 us) after the event is treated as an early zero-cross signal: the gate keeps waiting, and nothing is energised until the line shows the new polarity beyond 25 V. A false edge in the middle of a half-cycle still shows the old polarity after 400 us, and that is F16.
+* **Simulator (tests only):**
+  * The mains frequency is selectable (`TEST_F_HZ`).
+  * The plant can average the duty over one mains period (`TEST_PLANT_AVG`), as the slave's RMS window does. Its instant duty sample, phase-locked to a 50 Hz half-cycle, showed false regulation errors of 2 to 3.5 V at 55 and 60 Hz.
+  * The tests that assumed 50 Hz (100 half-cycles a second, a 10 ms half-cycle, offsets, a 5 ms jump) now scale with the frequency.
+  * The simulated last-moment disagreement now lasts for its whole event, as a real false edge does; a short one is now an early zero-cross, tolerated.
+* **New runner jobs:** `s3_40hz`, `s3_45hz`, `s3_55hz`, `s3_60hz` (production protections) and `s3_60hz_strict` (without them), each the whole harness, all passing. A new test (`test_meas_freq.c`) takes the frequency-measurement functions straight from the current slave_meas.c and checks 37.5 to 65 Hz with 300 us of jitter.
+* **Mutations (all caught):** the old 12.5 ms limit (12 failures at 40 Hz); no early tolerance (4 at 60 Hz); a tolerance window so long that a false edge is never F16 (12); the old frequency-measurement limits (8 each).
+* Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.** The master only displays the frequency.
+* **Not proven on hardware:** a 40 Hz or 60 Hz supply (a frequency-variable source or a 60 Hz site). The relay timing, the autotune and the overheat logic are time-based, not frequency-based.
+
+## v0.9.75 — final protection settings: cycle-by-cycle limit on, one inrush retry
 * **Your choice:**
   * `SLAVE_FLT_CBC` **1** in the production slave config (was 0).
   * `MASTER_INRUSH_RETRIES` **1** in master_monitor.h (was 3).

@@ -360,6 +360,18 @@ void SlaveCtrl_OnDeadtimeIrq(void)
         int8_t s = CtrlHw_SignLatest(1U);
         if ((s != 0) && (pol != 0) && (s != pol))
         {
+#if (CTRL_VGATE_V != 0U)
+            {   /* v0.9.76: just after the event, the old polarity still showing = the zero-cross signal came a little EARLY: keep waiting (the gate energises nothing until
+                 * the line shows THIS polarity); a false edge in the middle of a half-cycle still shows it after CTRL_VGATE_EARLY_US and is F16 then */
+                const uint32_t t = CtrlHw_NowUs();
+                if ((int32_t)(t - g_ctrl.t_event_us) < (int32_t)CTRL_VGATE_EARLY_US)
+                {
+                    s_vg_n = 0U;
+                    if ((int32_t)(s_vg_deadline - (uint32_t)(t + CTRL_VGATE_STEP_US)) >= 0) CtrlHw_ArmDeadtime((uint32_t)(t + CTRL_VGATE_STEP_US));
+                    return;
+                }
+            }
+#endif
 #if (SLAVE_GLITCH_SKIP != 0)
             if (GlitchTolerated(CtrlHw_NowUs())) return;   /* an early or noisy event: energise NOTHING this half-cycle (the safe state), the next event carries on */
 #endif

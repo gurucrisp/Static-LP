@@ -16,6 +16,8 @@ cd "$T" || exit 1
 
 # the master display test uses the compose function cut out of the CURRENT master_monitor.c
 awk '/^static void put_text\(/{f=1} /^void Mon_Compose\(/{g=1} (f||g){print} g&&/^}/{exit}' "$ROOT/master/Core/Src/master_monitor.c" > old_snippets/mon_compose.inc
+# v0.9.76: the mains period and the RMS window, cut out of the CURRENT slave_meas.c
+awk '/^uint32_t SlaveMeas_WindowFrames\(/{f=1} f{print} f&&/^}/{n++} n==2{exit}' "$SREAL/Src/slave_meas.c" > old_snippets/meas_freq.inc
 
 line() { printf '  %-58s %s\n' "$1" "$2"; }
 # v0.9.58: every "gcc ... && r=$(...)" line starts with r="": a test that does NOT BUILD must fail, not inherit the previous line's "ALL PASSED"
@@ -67,6 +69,7 @@ r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -DSLAVE_VOLTAGE_CAL=1 -DSLAVE_FLAS
 r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$S/Inc" test_slave_profile.c "$S/Src/slave_profile.c" "$S/Src/slave_store.c" "$S/Src/slave_tune.c" -o $OUT/prof -lm && r=$($OUT/prof | grep -E "RESULT") ; ok "$r" && line "slave: transformer profile store (two copies, power cut at every point)" PASS || { line "slave: transformer profile store (two copies, power cut at every point)" FAIL; fail=1; }
 r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$S/Inc" test_flt_filter.c -o $OUT/fltf && r=$(timeout 10 $OUT/fltf | grep -E "RESULT") ; ok "$r" && line "slave: FLT glitch filter (wait, spikes, burst limit; v0.9.62)" PASS || { line "slave: FLT glitch filter" FAIL; fail=1; }
 r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$S/Inc" test_meas_due.c -o $OUT/mdue && r=$(timeout 30 $OUT/mdue | grep -E "RESULT") ; ok "$r" && line "slave: measurement timing over TIM2 wraps (the F10 every 71.6 min; v0.9.71)" PASS || { line "slave: measurement timing over TIM2 wraps" FAIL; fail=1; }
+r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow test_meas_freq.c -o $OUT/mfreq && r=$(timeout 10 $OUT/mfreq | grep -E "RESULT") ; ok "$r" && line "slave: mains period and RMS window, 37 to 66 Hz (v0.9.76)" PASS || { line "slave: mains period and RMS window, 37 to 66 Hz" FAIL; fail=1; }
 r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$S/Inc" test_flt_cbc.c -o $OUT/fltc && r=$(timeout 10 $OUT/fltc | grep -E "RESULT") ; ok "$r" && line "slave: FLT cycle-by-cycle limit decisions (v0.9.66)" PASS || { line "slave: FLT cycle-by-cycle limit" FAIL; fail=1; }
 fb=0; printf '#define SLAVE_FLT_FILTER_US 2U\n#include "slave_flt_filter.h"\nint x;\n' | gcc -std=c99 -fsyntax-only -I"$S/Inc" -x c - 2>/dev/null || fb=1; if printf '#define SLAVE_FLT_FILTER_US 3U\n#include "slave_flt_filter.h"\nint x;\n' | gcc -std=c99 -fsyntax-only -I"$S/Inc" -x c - 2>/dev/null; then fb=1; fi; [ $fb = 0 ] && line "slave: a FLT filter of 2 us builds, above 2 us is refused at build time" PASS || { line "slave: FLT filter limit at build time" FAIL; fail=1; }
 r=""; gcc -std=c99 -O2 -Wall -Wextra -Wshadow -I"$S/Inc" test_slave_iout.c "$S/Src/slave_iout.c" -o $OUT/iout -lm && r=$($OUT/iout | grep -E "RESULT") ; ok "$r" && line "slave: converter-side current (I-OUT) conversion, burden 120 ohm x 3 (the production default, v0.9.74)" PASS || { line "slave: converter-side current (I-OUT) conversion, burden 120 ohm x 3 (the production default, v0.9.74)" FAIL; fail=1; }
@@ -158,6 +161,12 @@ echo "s3_vgate_off -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG
 # v0.9.71 the zero-cross ride-through: the whole harness with it on, alone and with the glitch skip (the production combination)
 echo "s3_ride -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1" >> "$JOBS"
 echo "s3_ride_glitch -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1 -DSLAVE_GLITCH_SKIP=1" >> "$JOBS"
+# v0.9.76: the whole harness at other mains frequencies (the plant averages the duty over one mains period, TEST_PLANT_AVG), with the production protections, and 60 Hz without them
+echo "s3_40hz -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1 -DSLAVE_GLITCH_SKIP=1 -DTEST_F_HZ=40.0 -DTEST_PLANT_AVG" >> "$JOBS"
+echo "s3_45hz -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1 -DSLAVE_GLITCH_SKIP=1 -DTEST_F_HZ=45.0 -DTEST_PLANT_AVG" >> "$JOBS"
+echo "s3_55hz -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1 -DSLAVE_GLITCH_SKIP=1 -DTEST_F_HZ=55.0 -DTEST_PLANT_AVG" >> "$JOBS"
+echo "s3_60hz -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_ZC_RIDE=1 -DSLAVE_GLITCH_SKIP=1 -DTEST_F_HZ=60.0 -DTEST_PLANT_AVG" >> "$JOBS"
+echo "s3_60hz_strict -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DTEST_F_HZ=60.0 -DTEST_PLANT_AVG" >> "$JOBS"
 echo "s3_flt_filter -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DCTRL_STAGE3_MAX_EFF_TICKS=2752U -DTEST_LEGACY_REG -DSLAVE_FLT_FILTER_US=1" >> "$JOBS"
 echo "s3_flt_all_off -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_FLT_KEEP_LOWS=0 -DALLOW_FLT_KEEP_LOWS_0" >> "$JOBS"
 echo "s3_flt_cbc -DSLAVE_POWER_STAGE=3 -DSLAVE_RELAYS_MODE=2 -DTEST_LEGACY_REG -DSLAVE_FLT_CBC=1" >> "$JOBS"

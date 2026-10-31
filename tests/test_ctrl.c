@@ -171,10 +171,13 @@ void CtrlHw_ArmWatchdog(uint32_t at_us)  { if (!W.no_wd) { wd_armed = 1; wd_fire
 void CtrlHw_DisarmWatchdog(void)         { wd_armed = 0; }
 
 /* The guard looks at the newest two frames, about 75 us old on average. */
+static uint32_t preen_evt; static int preen_on;
 int8_t CtrlHw_SignLatest(uint8_t strong)
 {
     if (!strong && W.guard_glitch > 0) { W.guard_glitch--; return (int8_t)(-g_ctrl.conv_pol); }   /* a bad sample */
-    if (strong && W.preen_glitch > 0) { W.preen_glitch--; return (int8_t)(-g_ctrl.pending_pol); }   /* disagrees right before energising */
+    if (strong && W.preen_glitch > 0 && g_ctrl.t_event_us != preen_evt) { W.preen_glitch--; preen_evt = g_ctrl.t_event_us; preen_on = 1; }
+    else if (strong && g_ctrl.t_event_us != preen_evt) preen_on = 0;
+    if (strong && preen_on) return (int8_t)(-g_ctrl.pending_pol);   /* disagrees right before energising, for the WHOLE of that event (v0.9.76: a real false edge keeps showing the old polarity; a short one is an early zero-cross, tolerated) */
     int32_t sum = (int32_t)lround(W.amp * mains((double)sim_t - 75.0) * 2.0);
     int32_t thr = strong ? 240 : 80;                     /* 2 samples x (120 or 40 counts) */
     return (int8_t)((sum > thr) ? 1 : ((sum < -thr) ? -1 : 0));
@@ -238,6 +241,7 @@ void SlavePower_AllOffNow(void)
 static int n_fltoff; static long v_duty_forced;
 /* v0.9.66: the cycle-by-cycle limit's hardware */
 static int n_force_off, n_resume; static uint64_t next_pwm; static unsigned fs_tot, fs_forced; static double duty_sum;   /* v0.9.76: the leg duty summed over each 100 us sample since the last measurement update (the plant averages it) */
+static double duty_ring[512]; static unsigned duty_ri;   /* v0.9.76: the last 51.2 ms of 100 us duty samples: the plant averages over ONE mains period, as the slave's RMS window does */
 void SlavePower_InverterForceOffNow(void) { probe_shutdown(); if (inv_enabled) inv_forced = 1; n_force_off++; }
 void SlavePower_InverterResume(void)      { inv_forced = 0; if (!W.brk) inv_moe_off = 0; n_resume++; }
 void SlavePower_CbcArm(void)              { cbc_armed = 1; next_pwm = sim_t + 50U - (sim_t % 50U); }      /* the next period start */
@@ -484,7 +488,12 @@ static void sim_run_until(uint64_t t_end)
                 /* crude plant: output = input +/- duty * gain (boost adds, buck subtracts) */
                 double d;
 #if defined(TEST_PLANT_AVG)
-                d = (fs_tot != 0U) ? duty_sum / (double)fs_tot : 0.0;       /* v0.9.76: the duty AVERAGED over the 10 ms (the transformer averages it): an instant sample beats against a 60 Hz half-cycle */
+                {   /* v0.9.76: the duty AVERAGED over the last mains period (the slave's RMS window is one period): an instant sample, or a 10 ms window, beats against 55 / 60 Hz */
+                    unsigned nper = (unsigned)lround(2.0 * half_period_us() / 100.0), q; double acc = 0.0;
+                    if (nper > 512U) nper = 512U; if (nper == 0U) nper = 1U;
+                    for (q = 0U; q < nper; q++) acc += duty_ring[(duty_ri + 512U - 1U - q) & 511U];
+                    d = acc / (double)nper; (void)duty_sum;
+                }
 #else
                 d = (double)((leg1 > leg2) ? leg1 : leg2);
 #endif
@@ -495,7 +504,7 @@ static void sim_run_until(uint64_t t_end)
             }
             fs_tot = 0U; fs_forced = 0U; duty_sum = 0.0;
             next_meas += 10000; break;
-        case 5: sample_invariants(); fs_tot++; if (inv_forced) fs_forced++; duty_sum += (double)((inv_enabled && !inv_forced) ? ((leg1 > leg2) ? leg1 : leg2) : 0U); next_sample += 100; break;
+        case 5: sample_invariants(); fs_tot++; if (inv_forced) fs_forced++; { const double dd = (double)((inv_enabled && !inv_forced) ? ((leg1 > leg2) ? leg1 : leg2) : 0U); duty_sum += dd; duty_ring[duty_ri & 511U] = dd; duty_ri++; } next_sample += 100; break;
         case 6: SlaveCtrl_OnSampleTick(); next_tick += 50; break;
         case 7: pf_armed = 0; SlaveCtrl_OnPredictOffIrq(); break;
         case 8: next_pwm += 50; SlaveCtrl_OnPwmPeriodIrq(); break;          /* v0.9.66: TIM1 update while the cycle-by-cycle limit is armed */
@@ -531,7 +540,8 @@ static void world_reset(uint64_t start_t)
     n_inv_enable = n_alloff = n_sync = n_energise = n_setduty = 0; n_fltoff = 0; inv_forced = 0; v_duty_forced = 0; cbc_armed = 0; n_force_off = n_resume = 0; fs_tot = fs_forced = 0U; inv_moe_off = 0;
     v_both = v_dead = v_polarity = v_duty_disabled = v_duty_no_conv = v_two_legs = v_over_cap = v_leg_table = v_energised_not_running = 0;
     wrong_us = max_wrong_run_us = cur_wrong_run_us = 0;
-    vg_notch_until = 0; vg_alt_until = 0; vg_alt = 0; vg_fake_pol = 0; vg_fake_n = 0; v_near_zero = v_against_any = 0;
+    memset(duty_ring, 0, sizeof duty_ring); duty_ri = 0U; duty_sum = 0.0;
+    vg_notch_until = 0; vg_alt_until = 0; vg_alt = 0; preen_evt = 0U; preen_on = 0; vg_fake_pol = 0; vg_fake_n = 0; v_near_zero = v_against_any = 0;
     resync_crossings();
 
     SlaveCtrl_Init();
@@ -643,7 +653,7 @@ static void t_pulse_rising_ignored(void)
         uint64_t t0 = sim_t;
         /* run 1 s and count commutations: must be ~100 (one per falling edge), not ~200 */
         run_for(1000000);
-        CHECK(n_energise - e0 >= 95 && n_energise - e0 <= 105, "pulse mode: %ld commutations per second, expected ~100", n_energise - e0);
+        CHECK(n_energise - e0 >= lround(2.0 * W.f_hz) - 5 && n_energise - e0 <= lround(2.0 * W.f_hz) + 5, "pulse mode: %ld commutations per second, expected ~%ld (2 x the mains frequency)", n_energise - e0, lround(2.0 * W.f_hz));
         printf("  pulse mode: %ld commutations in 1 s (one per falling edge, rising ignored)\n", n_energise - e0);
         (void)t0;
     }
@@ -667,7 +677,7 @@ static void t_pattern_lost_and_restart(void)
         }
         t_alloff = t_diag_off;          /* exact time of the last switch-off, not a sampled one */
         CHECK(diag == 0, "converter still on 100 ms after the pattern vanished");
-        CHECK(t_alloff - t_last <= 10000, "converter must be off BEFORE the next expected zero: off %llu us after the last edge",
+        CHECK(t_alloff - t_last <= (uint64_t)half_period_us(), "converter must be off BEFORE the next expected zero: off %llu us after the last edge",
               (unsigned long long)(t_alloff - t_last));
         CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_ZC_LOST, "expected FAULT/ZC_LOST, got state %d fault %d", g_ctrl.state, g_ctrl.fault);
         CHECK(SlaveCtrl_LinkState() == 3 && SlaveCtrl_FaultCode() == CF_ZC_LOST, "link must report fault 8");
@@ -1651,18 +1661,19 @@ static void t_trip_capture(void)
     {
         static const uint32_t offs[6] = { 60, 500, 3000, 6000, 9000, 9700 };
         int8_t pol;
-        uint32_t e0;
+        uint32_t e0, off;
         world_reset(68100000ULL + (uint64_t)k * 1000000ULL);
         run_for(1000000 + WARM);
         e0 = g_ctrl.events;
         while (g_ctrl.events == e0) run_for(50);                    /* just after a real zero-cross event */
-        { uint64_t t0 = sim_t; run_for(offs[k]); (void)t0; }
+        off = (uint32_t)lround((double)offs[k] * half_period_us() / 10000.0);     /* v0.9.76: the same POINTS of the half-cycle at any mains frequency */
+        { uint64_t t0 = sim_t; run_for(off); (void)t0; }
         pol = g_ctrl.conv_pol;
         SlaveCtrl_OnFltIrq();
         c = SlaveCtrl_TripCapture();
         us = (uint32_t)(c & 0x03FFU) * 16U;
-        CHECK((c & 0x8000U) != 0, "offset %u us: capture must be valid (0x%04X)", offs[k], c);
-        CHECK(us + 150U >= offs[k] && us <= offs[k] + 250U, "offset %u us measured as %u us", offs[k], us);
+        CHECK((c & 0x8000U) != 0, "offset %u us: capture must be valid (0x%04X)", off, c);
+        CHECK(us + 150U >= off && us <= off + 250U, "offset %u us measured as %u us", off, us);
         CHECK(((c & 0x0400U) != 0) == (pol > 0) && ((c & 0x0800U) != 0) == (pol < 0), "offset %u us: diagonal bits 0x%04X vs conv_pol %d", offs[k], c & 0x0C00U, pol);
         if (c & 0x0400U) pos_seen = 1;
         if (c & 0x0800U) neg_seen = 1;
@@ -2834,7 +2845,7 @@ static void t_vgate_normal(void)
         { long e0 = n_energise; uint32_t s0 = SlaveCtrl_VgateSkips(), o0 = SlaveCtrl_VgateOffs();
           v_near_zero = v_against_any = 0;
           run_for(1000000);
-          CHECK(n_energise - e0 >= 95, "%.0f counts: a diagonal every half-cycle (%ld in 1 s)", amps[j], (long)(n_energise - e0));
+          CHECK(n_energise - e0 >= lround(1.9 * W.f_hz), "%.0f counts: a diagonal every half-cycle (%ld in 1 s)", amps[j], (long)(n_energise - e0));
           CHECK(SlaveCtrl_VgateSkips() == s0 && SlaveCtrl_VgateOffs() == o0, "%.0f counts: a clean line: no half-cycle skipped (%u), none cut short (%u)", amps[j],
                 (unsigned)(SlaveCtrl_VgateSkips() - s0), (unsigned)(SlaveCtrl_VgateOffs() - o0)); }
         CHECK(v_near_zero == 0, "%.0f counts: no diagonal within 5 %% of a zero (%ld samples)", amps[j], v_near_zero);
@@ -2889,14 +2900,15 @@ static void t_vgate_notch(void)
       CHECK(SlaveCtrl_VgateOffs() == o0 + 1U, "counted as one early turn-off (%u)", (unsigned)(SlaveCtrl_VgateOffs() - o0));
       run_for(2000);
       CHECK(diag == 0 && n_energise == e0, "it stays off after the notch until the next zero-cross (energised %ld)", (long)(n_energise - e0));
-      run_for(z + 10000 + 3000 - sim_t);
+      run_for(z + (uint64_t)half_period_us() + 3000 - sim_t);
       CHECK(diag != 0 && n_energise == e0 + 1, "the next half-cycle runs normally (energised %ld)", (long)(n_energise - e0)); }
     CHECK(is_running() && g_ctrl.fault == CF_NONE, "a notch is not a fault (state %d fault %d)", g_ctrl.state, g_ctrl.fault);
     { uint32_t s0 = SlaveCtrl_VgateSkips(); long e0;
-      vg_notch_until = sim_t + 40000;
+      const uint64_t dur = (uint64_t)(4.0 * half_period_us());                /* four half-cycles (40 ms at 50 Hz) */
+      vg_notch_until = sim_t + dur;
       run_for(1000); e0 = n_energise;
-      run_for(39000);
-      CHECK(n_energise == e0, "the line never confirmed: no diagonal for 40 ms (%ld)", (long)(n_energise - e0));
+      run_for(dur - 1000U);
+      CHECK(n_energise == e0, "the line never confirmed: no diagonal for 4 half-cycles (%ld)", (long)(n_energise - e0));
       CHECK(SlaveCtrl_VgateSkips() >= s0 + 3U, "the half-cycles are counted as skipped (%u)", (unsigned)(SlaveCtrl_VgateSkips() - s0));
       run_for(100000);
       CHECK(is_running() && g_ctrl.fault == CF_NONE, "no fault, running again (state %d fault %d)", g_ctrl.state, g_ctrl.fault); }
@@ -2920,10 +2932,10 @@ static void t_vgate_late(void)
     CHECK(n_energise == e0, "single reads in between non-confirming ones: never energised (%ld)", (long)(n_energise - e0));
     run_for(100000);
     z = next_zero_after(sim_t + 1000);
-    vg_notch_until = z + 9300;
+    vg_notch_until = z + (uint64_t)half_period_us() - 700U;                  /* past the predicted turn-off (9.3 ms at 50 Hz) */
     v_near_zero = v_against_any = 0;
     run_for(z - sim_t + 1000); e0 = n_energise;
-    run_for(9500);                                          /* to 0.5 ms into the next half-cycle */
+    run_for((uint64_t)half_period_us() - 500U);             /* to 0.5 ms into the next half-cycle */
     CHECK(n_energise - e0 <= 1, "late confirmation: at most the next half-cycle's diagonal (%ld)", (long)(n_energise - e0));
     CHECK(v_near_zero == 0 && v_against_any == 0, "late confirmation: no diagonal near the zero (%ld) or against the line (%ld)", v_near_zero, v_against_any);
     run_for(100000);
@@ -2997,10 +3009,11 @@ static void t_diag(void)
     run_for(151000);
     SlaveCtrl_GetDiag(&d);
     CHECK(d.lp_ms >= 150U && d.lp_ms <= 151U, "a 150 ms stall is the longest pass: %u ms", d.lp_ms);
-    CHECK(d.lp_zc >= 14U && d.lp_zc <= 16U && d.lp_flt == 0U, "during it: %u zero-cross interrupts (about 15), no FLT (%u)", d.lp_zc, d.lp_flt);
+    { const long want = lround(0.3 * W.f_hz);                          /* 150 ms of two edges per cycle: 15 at 50 Hz */
+      CHECK((long)d.lp_zc >= want - 1 && (long)d.lp_zc <= want + 1 && d.lp_flt == 0U, "during it: %u zero-cross interrupts (about %ld), no FLT (%u)", d.lp_zc, want, d.lp_flt); }
     run_for(100000);
     SlaveCtrl_GetDiag(&d);
-    CHECK(d.lp_ms >= 150U && d.lp_ms <= 151U && d.lp_zc >= 14U, "a shorter pass later does not replace it (%u ms, %u)", d.lp_ms, d.lp_zc);
+    CHECK(d.lp_ms >= 150U && d.lp_ms <= 151U && (long)d.lp_zc >= lround(0.3 * W.f_hz) - 1, "a shorter pass later does not replace it (%u ms, %u)", d.lp_ms, d.lp_zc);
     /* a stray zero-cross edge 0.4 ms after a real one */
     { uint64_t te = t_last_edge; uint8_t r;
       while (t_last_edge == te) run_for(50);
@@ -3172,7 +3185,7 @@ static void t_ride_strict_outside_run(void)
     ride_world(1800000000ULL, 0.0);
     { uint64_t z = sim_t; while (diag == 0 && sim_t < z + 20000ULL) run_for(50); }
     run_for(3000);
-    W.phase0_us += 5000.0; resync_crossings();
+    W.phase0_us += half_period_us(); resync_crossings();                     /* a 180 degree jump: the line reverses under the diagonal */
     run_for(5000);
     CHECK(g_ctrl.isr_fault == CF_LINE_REVERSED || g_ctrl.fault == CF_LINE_REVERSED, "a phase jump with a diagonal on: F11 as before, no ride-through (fault %d / %d)", g_ctrl.fault, g_ctrl.isr_fault);
 }
@@ -3193,14 +3206,14 @@ static void t_ride_restart(void)
         CHECK(SlaveCtrl_RideActive() != 0U, "kind %d: riding", kind);
         s0 = SlaveCtrl_GlitchSkips();                                   /* (with the glitch skip, the early edge's F16 was skipped once BEFORE the ride) */
         t0 = sim_t; e0 = n_energise;
-        run_for(25000);                                                 /* two good half-cycles into the ride */
+        run_for((uint64_t)(2.5 * half_period_us()));                    /* two good half-cycles into the ride */
         if (kind == 0) W.sign_glitch = 1;                               /* the next event's sign is misread (F15) */
         else           { W.in_zero = 1; }                               /* the next event has no readable sign (F04) */
-        run_for(10000);
+        run_for((uint64_t)half_period_us());
         W.in_zero = 0; t1 = sim_t;
         while (n_energise == e0 && sim_t < t0 + 400000ULL) run_for(500);
         CHECK(n_energise > e0 && SlaveCtrl_RideActive() == 0U && is_running(), "kind %d: recovered in the end (state %d fault %d)", kind, g_ctrl.state, g_ctrl.fault);
-        CHECK(sim_t - t1 >= 25000ULL, "kind %d: the second disturbance restarted the count: energising %llu ms after it (at least %u good half-cycles)", kind, (unsigned long long)((sim_t - t1) / 1000ULL), (unsigned)CTRL_RIDE_GOOD - 1U);
+        CHECK(sim_t - t1 >= (uint64_t)(2.5 * half_period_us()), "kind %d: the second disturbance restarted the count: energising %llu ms after it (at least %u good half-cycles)", kind, (unsigned long long)((sim_t - t1) / 1000ULL), (unsigned)CTRL_RIDE_GOOD - 1U);
         CHECK(SlaveCtrl_RideCount() == r0 + 1U && SlaveCtrl_GlitchSkips() == s0, "kind %d: still ONE ride-through, no glitch skip spent while riding (rides +%u, skips +%u)", kind, (unsigned)(SlaveCtrl_RideCount() - r0), (unsigned)(SlaveCtrl_GlitchSkips() - s0));
         check_invariants("ride-through, restart");
     }
