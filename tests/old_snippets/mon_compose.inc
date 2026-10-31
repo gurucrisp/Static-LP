@@ -74,6 +74,7 @@ void Mon_Compose(const MasterMon_t *m, uint32_t now_ms,
         }
         if ((s->flags & LINK_FLAG_CLIP_IN) != 0U)  put_text(rows[1], 15U, "CLIP");
         if ((s->flags & LINK_FLAG_CLIP_OUT) != 0U) put_text(rows[2], 15U, "CLIP");
+        if ((m->e_valid != 0U) && ((m->e_flags2 & LINKV2_FLAG_NO_BOR) != 0U)) put_text(rows[2], 15U, "NOBOR");     /* v0.9.79: that slave's brown-out reset is not on */
 
         if ((s->flags & LINK_FLAG_FREQ_VALID) != 0U)
         {

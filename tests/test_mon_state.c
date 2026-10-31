@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "link_proto.h"
+#include "link_v2.h"          /* v0.9.79: LINKV2_FLAG_NO_BOR in the compose function */
 #define MON_LINK_TIMEOUT_MS 500U
 #define MON_LCD_COLS 20U
 #define MON_LCD_ROWS 4U

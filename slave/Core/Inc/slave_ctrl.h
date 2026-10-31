@@ -472,8 +472,16 @@ uint32_t SlaveCtrl_GuardCount(void);    /* how many times the guard has taken th
 #define CTRL_LINK_TIMEOUT_MS   1000UL   /* no valid $M for this long: the slave stops (D9)                          */
 #endif
 #ifndef CTRL_IN_BAND_V
-#define CTRL_IN_BAND_V         2.0f     /* IN_BAND: running and |Vout - set voltage| within this (my choice, D1) */
+#define CTRL_IN_BAND_V         2.0f     /* IN_BAND: running and |Vout - set voltage| within this (my choice, D1); v0.9.79: on the AVERAGED output, to ENTER the band */
 #endif
+#ifndef CTRL_IN_BAND_OUT_V
+#define CTRL_IN_BAND_OUT_V     3.5f     /* v0.9.79: once in band, it is left only beyond this (hysteresis) */
+#endif
+#ifndef CTRL_IN_BAND_AVG_N
+#define CTRL_IN_BAND_AVG_N     20U      /* v0.9.79: the output averaged over this many measurement updates (20 x 10 ms = 0.2 s) for the in-band decision: a toroid hunting +-2 V
+                                           never stayed 1 s inside +-2 V on every 10 ms reading, so the contactor never closed */
+#endif
+uint8_t SlaveCtrl_InBand(void);         /* v0.9.79: the averaged, hysteretic in-band state (what LINKV2_FLAG_IN_BAND reports) */
 /* A valid $M arrived (main-loop context). run is a LEVEL; the set voltage is adopted only while the unit is NOT energised (the master repeats it every 100 ms, so
  * it is picked up the moment the unit stops); the clear counter is adopted by the first $M and a CHANGE of it clears a latched fault (the fault's cause is checked again
  * by the normal start); maxc is the Max Correction (used by the autotune, step 5). */

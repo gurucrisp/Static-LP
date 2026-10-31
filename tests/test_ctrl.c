@@ -38,6 +38,7 @@
 #include "slave_ctrl_hw.h"
 #include "slave_power.h"
 #include "slave_relay.h"
+#include "link_v2.h"
 
 #define PI 3.14159265358979323846
 #ifndef TEST_F_HZ
@@ -3276,6 +3277,40 @@ static void t_ride_reg_frozen(void)
 #endif
 #endif
 
+
+/* v0.9.79: the in-band decision (LINKV2_FLAG_IN_BAND): the output averaged over 0.2 s, in at +-2 V, out beyond +-3.5 V; a toroid hunting +-2..3 V around 230 V
+ * never stayed 1 s inside +-2 V on every 10 ms reading, so the master never closed the contactor */
+static void ib_hold(double v, uint64_t us) { uint64_t t0 = sim_t; while (sim_t < t0 + us) { W.vout = (float)v; run_for(10000); } }
+static void t_in_band(void)
+{
+    uint64_t t0; int k, flips = 0; uint8_t last;
+    world_reset(2200000000ULL);
+    { uint64_t ts = sim_t; while (g_ctrl.state != CTRL_RUN && sim_t < ts + 25000000ULL) run_for(5000); }
+    CHECK(g_ctrl.state == CTRL_RUN, "running (state %d)", g_ctrl.state);
+    ib_hold(230.0, 300000);
+    CHECK(SlaveCtrl_InBand() == 1U, "a steady 230 V output: in band");
+    /* hunting +-3 V every 30 ms (227 / 233): the 10 ms readings leave +-2 V all the time, the 0.2 s average does not */
+    last = SlaveCtrl_InBand(); t0 = sim_t;
+    for (k = 0; k < 200; k++) { W.vout = (k / 3) % 2 ? 233.0f : 227.0f; run_for(10000); if (SlaveCtrl_InBand() != last) { flips++; last = SlaveCtrl_InBand(); } }
+    CHECK(SlaveCtrl_InBand() == 1U && flips == 0, "an output hunting +-3 V (227 / 233 every 30 ms) for 2 s: stays in band, no drop-out (%d changes)", flips);
+    /* the hysteresis: 232.5 keeps it in, 234 takes it out, back only at 232 */
+    ib_hold(232.5, 400000); CHECK(SlaveCtrl_InBand() == 1U, "averaged 232.5 V (2.5 V off): still in band (left only beyond 3.5 V)");
+    ib_hold(234.0, 400000); CHECK(SlaveCtrl_InBand() == 0U, "averaged 234 V: out of band");
+    ib_hold(232.5, 400000); CHECK(SlaveCtrl_InBand() == 0U, "back at 232.5 V: still out (entered only within 2 V)");
+    ib_hold(231.5, 400000); CHECK(SlaveCtrl_InBand() == 1U, "231.5 V: in band again");
+    ib_hold(226.0, 400000); CHECK(SlaveCtrl_InBand() == 0U, "226 V (4 V low): out of band");
+    /* a real excursion is not hidden: 240 V for 0.3 s takes it out */
+    ib_hold(230.0, 400000); ib_hold(240.0, 300000); CHECK(SlaveCtrl_InBand() == 0U, "240 V for 0.3 s: out of band");
+    /* outside RUN it is never in band, and it starts again (a full average) after a restart */
+    ib_hold(230.0, 400000); SlaveCtrl_OnFltIrq(); run_for(30000);
+    CHECK(SlaveCtrl_InBand() == 0U && (SlaveCtrl_Flags2() & LINKV2_FLAG_IN_BAND) == 0U, "a FLT: not in band at once (state %d)", g_ctrl.state);
+    /* after the retry, the old run's readings (230 V) must not count: an output of 236 V at the start of RUN is out of band until a full new average says otherwise */
+    { uint64_t ts = sim_t; while (g_ctrl.state != CTRL_RUN && sim_t < ts + 25000000ULL) { W.vout = 236.0f; run_for(5000); } }
+    { int q, early = 0; for (q = 0; q < 25; q++) { W.vout = 236.0f; run_for(10000); if (SlaveCtrl_InBand() != 0U) early++; }
+      CHECK(g_ctrl.state == CTRL_RUN && early == 0, "restarted at 236 V: never in band on the old run's readings (%d updates in band, state %d)", early, g_ctrl.state); }
+    printf("  in band: a +-3 V hunt stays in (0.2 s average), hysteresis 2 V in / 3.5 V out, real excursions and a fault take it out\n");
+}
+
 int main(void)
 {
 #if (SLAVE_FLT_KEEP_LOWS == 0) && !defined(ALLOW_FLT_KEEP_LOWS_0)
@@ -3314,6 +3349,9 @@ int main(void)
 #if defined(TEST_LEGACY_REG)
     run_isolated(t_ride_reg_frozen,           "ride-through: the regulator does not wind up");
 #endif
+#endif
+#if (SLAVE_POWER_STAGE >= 2)                                       /* stage 1 never reaches RUN */
+    run_isolated(t_in_band,                   "in band: averaged, with hysteresis (v0.9.79)");
 #endif
     run_isolated(t_diag,                      "diagnostics: loop stall, FLT and zero-cross counts (v0.9.70)");
     run_isolated(t_diag_patterns,             "diagnostics: no noise edges for normal ZCD patterns");

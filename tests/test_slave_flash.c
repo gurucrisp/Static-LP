@@ -11,8 +11,21 @@ static uint8_t mem[0x80000]; static uint32_t image_end = 0x08020000UL; static in
 uint32_t SlaveFlash_ImageEnd(void) { return image_end; }
 uint8_t SlaveFlashTest_Rd8(uint32_t a) { return mem[a - 0x08000000UL]; }
 static int erase_noop = 0;
-void HAL_FLASH_Unlock(void) { unlocked = 1; }
-void HAL_FLASH_Lock(void) { unlocked = 0; }
+HAL_StatusTypeDef HAL_FLASH_Unlock(void) { unlocked = 1; return HAL_OK; }
+HAL_StatusTypeDef HAL_FLASH_Lock(void) { unlocked = 0; return HAL_OK; }
+/* v0.9.79: a model of the option-byte HAL: OBProgram changes only USERType's bits of OPTR (as the G0 HAL does for OPTIONBYTE_USER, keeping the read protection);
+ * Launch would reset the MCU: the model counts it and returns, the test then boots again with OBLRSTF set */
+RCC_TypeDef rcc_m; static int ob_unlocked = 0, ob_writes = 0, ob_launches = 0, ob_fail = 0, ob_ignore = 0; static uint32_t ob_last_type = 0U;
+HAL_StatusTypeDef HAL_FLASH_OB_Unlock(void) { if (!unlocked) return HAL_ERROR; ob_unlocked = 1; return HAL_OK; }
+HAL_StatusTypeDef HAL_FLASH_OB_Lock(void) { ob_unlocked = 0; return HAL_OK; }
+HAL_StatusTypeDef HAL_FLASH_OB_Launch(void) { if (!ob_unlocked) return HAL_ERROR; ob_launches++; return HAL_OK; }
+HAL_StatusTypeDef HAL_FLASHEx_OBProgram(FLASH_OBProgramInitTypeDef *ob)
+{
+    if (!ob_unlocked || ob->OptionType != OPTIONBYTE_USER || ob_fail) return HAL_ERROR;
+    ob_writes++; ob_last_type = ob->USERType;
+    if (!ob_ignore) flash_m.OPTR = (flash_m.OPTR & ~ob->USERType) | (ob->USERConfig & ob->USERType);
+    return HAL_OK;
+}
 static uint32_t hal_err = 0U; uint32_t HAL_FLASH_GetError(void) { return hal_err; }
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t addr, uint64_t data)
 {
@@ -82,6 +95,35 @@ int main(void)
     CHECK(g_slave_flash.erase(0x0803F800UL) != 0 && SlaveFlash_Diag() == 5U * 1000000UL + 100000UL + 40U, "an erase that did nothing: refused with reason 5 and offset 40 (%lu)", (unsigned long)SlaveFlash_Diag());
     erase_noop = 0; CHECK(g_slave_flash.erase(0x0803F800UL) == 0 && mem[0x3F800 + 40] == 0xFFU, "a working erase passes the blank check");
     printf("  slave flash driver (against a HAL model): bank and page arithmetic in both modes, double-word programming, only the two calibration pages, the image check, the store on top\n");
+    /* ---- v0.9.79: the brown-out reset at power-up ---- */
+    {   const uint32_t factory = 0xFFFFFEAAUL & ~FLASH_OPTR_BOR_EN & ~FLASH_OPTR_DBANK;     /* RDP 0, BOR off */
+        flash_m.OPTR = factory; rcc_m.CSR = 0U; unlocked = 0; ob_writes = ob_launches = ob_fail = ob_ignore = 0;
+        SlaveFlash_EnsureBor();
+        CHECK(ob_writes == 1 && ob_launches == 1, "BOR off at power-up: written once and the option bytes reloaded (writes %d, launches %d)", ob_writes, ob_launches);
+        CHECK(ob_last_type == (FLASH_OPTR_BOR_EN | FLASH_OPTR_BORF_LEV | FLASH_OPTR_BORR_LEV), "only the BOR fields were in the write (0x%08lX)", (unsigned long)ob_last_type);
+        CHECK(SlaveFlash_BorOk() == 1U && (flash_m.OPTR & 0xFFUL) == 0xAAUL && (flash_m.OPTR & ~(FLASH_OPTR_BOR_EN | FLASH_OPTR_BORF_LEV | FLASH_OPTR_BORR_LEV)) == (factory & ~(FLASH_OPTR_BOR_EN | FLASH_OPTR_BORF_LEV | FLASH_OPTR_BORR_LEV)), "BOR on, the read protection and every other bit unchanged (0x%08lX)", (unsigned long)flash_m.OPTR);
+        CHECK(!unlocked && !ob_unlocked, "the flash and the option bytes are locked again");
+        /* the boot after the reload: nothing more */
+        rcc_m.CSR = RCC_CSR_OBLRSTF; SlaveFlash_EnsureBor();
+        CHECK(ob_writes == 1 && ob_launches == 1 && SlaveFlash_BorResult() == 0U, "the boot after the reload finds BOR on: no second write (writes %d, result %u)", ob_writes, (unsigned)SlaveFlash_BorResult());
+        /* later power-ups: nothing */
+        rcc_m.CSR = 0U; SlaveFlash_EnsureBor(); SlaveFlash_EnsureBor();
+        CHECK(ob_writes == 1 && ob_launches == 1, "later power-ups: nothing written (writes %d)", ob_writes);
+        /* a write that does not take (the option bytes come back unchanged): ONE attempt, the boot after the reload gives up (no reset loop) */
+        flash_m.OPTR = factory; rcc_m.CSR = 0U; ob_writes = ob_launches = 0; ob_ignore = 1;
+        SlaveFlash_EnsureBor(); CHECK(ob_writes == 1 && ob_launches == 1, "a write that does not take: one attempt and one reload");
+        rcc_m.CSR = RCC_CSR_OBLRSTF; SlaveFlash_EnsureBor();
+        CHECK(ob_writes == 1 && ob_launches == 1 && SlaveFlash_BorResult() == 2U && SlaveFlash_BorOk() == 0U, "the boot after that reload still finds BOR off: it gives up, no second attempt, no reset loop (writes %d, result %u)", ob_writes, (unsigned)SlaveFlash_BorResult());
+        /* the HAL refuses the write: no reload, it runs on and reports it */
+        flash_m.OPTR = factory; rcc_m.CSR = 0U; ob_writes = ob_launches = 0; ob_ignore = 0; ob_fail = 1;
+        SlaveFlash_EnsureBor();
+        CHECK(ob_launches == 0 && SlaveFlash_BorResult() == 2U && !unlocked && !ob_unlocked, "the HAL refuses the write: no reload, it runs on, reports it, everything locked (launches %d, result %u)", ob_launches, (unsigned)SlaveFlash_BorResult());
+        ob_fail = 0;
+        /* BOR already on at level 3: nothing at all */
+        flash_m.OPTR = factory | FLASH_OPTR_BOR_EN | FLASH_OPTR_BORF_LEV | FLASH_OPTR_BORR_LEV; ob_writes = ob_launches = 0;
+        SlaveFlash_EnsureBor();
+        CHECK(ob_writes == 0 && ob_launches == 0 && SlaveFlash_BorOk() == 1U, "BOR already on: nothing written");
+    }
     printf("  %d checks, %d failures\n  RESULT: %s\n", tot, bad, bad ? "FAILURES" : "ALL PASSED");
     return bad ? 1 : 0;
 }

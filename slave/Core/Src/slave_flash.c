@@ -1,9 +1,10 @@
 /** @file slave_flash.c  @brief Flash access of the calibration record on the STM32G0B1. See slave_flash.h. */
 #include "slave_features.h"
-#if (SLAVE_VOLTAGE_CAL != 0) || (SLAVE_AUTOTUNE != 0)
 #include <string.h>
 #include "main.h"
 #include "slave_flash.h"
+#include "slave_bor.h"                                   /* v0.9.79: the BOR check below is built in every configuration (main calls it) */
+#if (SLAVE_VOLTAGE_CAL != 0) || (SLAVE_AUTOTUNE != 0)
 
 #define SFL_BASE        0x08000000UL
 #define SFL_BANK2_BASE  0x08040000UL
@@ -84,3 +85,34 @@ static int fl_erase(uint32_t page_addr)
 
 const SFlash_t g_slave_flash = { fl_read, fl_prog, fl_erase };
 #endif
+
+/* ------------------------------------------------------------------------- */
+/* v0.9.79: the brown-out reset option bytes (slave_bor.h), at the top of main */
+/* ------------------------------------------------------------------------- */
+#if defined(FLASH_OPTR_BOR_EN) && ((FLASH_OPTR_BOR_EN != BOR_OPTR_EN) || (FLASH_OPTR_BORF_LEV != (3UL << BOR_OPTR_F_POS)) || (FLASH_OPTR_BORR_LEV != (3UL << BOR_OPTR_R_POS)))
+#error "slave_bor.h: the BOR bit positions do not match this device's FLASH_OPTR"
+#endif
+static uint8_t s_bor_result = BOR_OK;
+uint8_t SlaveFlash_BorResult(void) { return s_bor_result; }
+uint8_t SlaveFlash_BorOk(void)     { return Bor_IsSet(FLASH->OPTR); }
+void SlaveFlash_EnsureBor(void)
+{
+#if (SLAVE_BOR_ENSURE != 0)
+    const uint32_t optr = FLASH->OPTR;
+    s_bor_result = Bor_Decide(optr, (uint8_t)((RCC->CSR & RCC_CSR_OBLRSTF) != 0U));     /* OBLRSTF: this boot follows an option-byte reload (slave_link.c clears the flags later) */
+    if (s_bor_result != BOR_PROGRAM) return;
+    {
+        FLASH_OBProgramInitTypeDef ob;
+        memset(&ob, 0, sizeof ob);
+        ob.OptionType = OPTIONBYTE_USER;                       /* the user option byte only: the HAL keeps the read protection level as it is */
+        ob.USERType   = BOR_OPTR_MASK;                         /* = OB_USER_BOR_EN | OB_USER_BOR_LEV: only these fields change */
+        ob.USERConfig = Bor_Wanted(optr) & BOR_OPTR_MASK;
+        if ((HAL_FLASH_Unlock() == HAL_OK) && (HAL_FLASH_OB_Unlock() == HAL_OK) && (HAL_FLASHEx_OBProgram(&ob) == HAL_OK))
+        {
+            (void)HAL_FLASH_OB_Launch();                       /* reloads the option bytes and RESETS the MCU: the next boot finds BOR on */
+        }
+        (void)HAL_FLASH_OB_Lock(); (void)HAL_FLASH_Lock();
+        s_bor_result = BOR_GAVE_UP;                            /* only reached if the write or the reload failed: run on, report it */
+    }
+#endif
+}

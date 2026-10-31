@@ -13,6 +13,7 @@
 #include "main.h"
 #include "link_proto.h"
 #include "slave_link.h"
+#include "slave_flash.h"
 #include "slave_meas.h"
 #include "slave_zc.h"
 #include "slave_config.h"
@@ -136,6 +137,7 @@ static void hk_fill_e(LinkE_t *e)
     e->iout_pk_ca   = Iout_ToCentiAmps(g_meas.ipk_a);
     if (g_meas.valid != 0U) e->flags2 = (uint16_t)(e->flags2 | LINKV2_FLAG_IOUT_VALID | ((g_meas.clipped_iout != 0U) ? LINKV2_FLAG_IOUT_CLIP : 0U));
 #endif
+    if (SlaveFlash_BorOk() == 0U) e->flags2 = (uint16_t)(e->flags2 | LINKV2_FLAG_NO_BOR);      /* v0.9.79: the brown-out reset is not on */
     { uint32_t n = SlaveCtrl_CbcCount(); e->cbc = (uint16_t)((n > 65535UL) ? 65535UL : n); }      /* v0.9.68: the cycle-by-cycle limit's count, for the master's monitor page */
     { CtrlDiag_t d; SlaveCtrl_GetDiag(&d); e->lp_ms = d.lp_ms; e->lp_flt = d.lp_flt; e->lp_zc = d.lp_zc; e->flt_raw = d.flt_raw; e->zc_noise = d.zc_noise; }      /* v0.9.70: the diagnostics, for the monitor page */
 }

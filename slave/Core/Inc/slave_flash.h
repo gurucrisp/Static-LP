@@ -21,6 +21,9 @@ extern const SFlash_t g_slave_flash;
 uint32_t SlaveFlash_Diag(void);            /* why the LAST failed erase / program failed, packed in decimal: reason x 1,000,000 + dual-bank flag x 100,000 + the HAL error flags or the failing page (16 bits).
                                               reason 1 = address refused by the guard, 2 = misaligned, 3 = the HAL returned an error (the flags are HAL_FLASH_GetError()), 4 = the erase reported a failing page */
 uint32_t SlaveFlash_ImageEnd(void);        /* the first address after the program image in flash: the calibration pages must lie above it */
+void     SlaveFlash_EnsureBor(void);         /* v0.9.79: at the TOP of main: brown-out reset on at SLAVE_BOR_LEVEL, written once if not (the MCU resets once); see slave_bor.h */
+uint8_t  SlaveFlash_BorOk(void);            /* BOR is on at the level now (FLASH->OPTR) */
+uint8_t  SlaveFlash_BorResult(void);        /* this boot's decision: BOR_OK, or BOR_GAVE_UP (the write did not take) */
 
 #ifdef __cplusplus
 }

@@ -391,6 +391,7 @@ int main(void)
 {
     HAL_Init();
     SystemClock_Config();
+    SlaveFlash_EnsureBor();    /* v0.9.79: brown-out reset on (written once if not: the MCU resets once); before ANY pin is driven */
 
     MX_GPIO_Init();
 #if (BRINGUP_PWM_MODE == 1)

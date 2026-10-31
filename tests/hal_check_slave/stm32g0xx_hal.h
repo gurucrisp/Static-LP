@@ -158,4 +158,29 @@ HAL_StatusTypeDef HAL_TIM_ConfigClockSource(TIM_HandleTypeDef *htim, TIM_ClockCo
 HAL_StatusTypeDef HAL_TIMEx_MasterConfigSynchronization(TIM_HandleTypeDef *htim, TIM_MasterConfigTypeDef *cfg);
 HAL_StatusTypeDef HAL_TIM_PWM_ConfigChannel(TIM_HandleTypeDef *htim, TIM_OC_InitTypeDef *cfg, uint32_t ch);
 HAL_StatusTypeDef HAL_TIMEx_ConfigBreakDeadTime(TIM_HandleTypeDef *htim, TIM_BreakDeadTimeConfigTypeDef *cfg);
+/* v0.9.79: flash and option bytes, for slave_flash.c (the names of the STM32G0 HAL / CMSIS) */
+typedef struct { volatile uint32_t ACR, RES0, KEYR, OPTKEYR, SR, CR, ECCR, ECC2R, OPTR; } FLASH_TypeDef;
+#define FLASH ((FLASH_TypeDef *)0x40022000UL)
+#define FLASH_OPTR_BOR_EN   (0x1UL << 8U)
+#define FLASH_OPTR_BORF_LEV (0x3UL << 9U)
+#define FLASH_OPTR_BORR_LEV (0x3UL << 11U)
+#define FLASH_OPTR_DBANK    (0x1UL << 21U)
+#define RCC_CSR_OBLRSTF     0x02000000U
+typedef struct { uint32_t TypeErase, Banks, Page, NbPages; } FLASH_EraseInitTypeDef;
+typedef struct { uint32_t OptionType, WRPArea, WRPStartOffset, WRPEndOffset, RDPLevel, USERType, USERConfig, PCROPConfig, PCROP1AStartAddr, PCROP1AEndAddr, PCROP1BStartAddr, PCROP1BEndAddr, BootEntryPoint, SecSize; } FLASH_OBProgramInitTypeDef;
+#define FLASH_TYPEERASE_PAGES        0x00000002U
+#define FLASH_TYPEPROGRAM_DOUBLEWORD 0x00000001U
+#define FLASH_BANK_1                 0x00000004U
+#define FLASH_BANK_2                 0x00000008U
+#define OPTIONBYTE_USER              0x00000004U
+HAL_StatusTypeDef HAL_FLASH_Unlock(void);
+HAL_StatusTypeDef HAL_FLASH_Lock(void);
+HAL_StatusTypeDef HAL_FLASH_OB_Unlock(void);
+HAL_StatusTypeDef HAL_FLASH_OB_Lock(void);
+HAL_StatusTypeDef HAL_FLASH_OB_Launch(void);
+HAL_StatusTypeDef HAL_FLASH_Program(uint32_t TypeProgram, uint32_t Address, uint64_t Data);
+HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t *PageError);
+HAL_StatusTypeDef HAL_FLASHEx_OBProgram(FLASH_OBProgramInitTypeDef *pOBInit);
+uint32_t HAL_FLASH_GetError(void);
+
 #endif

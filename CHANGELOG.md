@@ -2,7 +2,39 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.78 — F05 (sense mismatch) is ridden through too (current)
+## v0.9.79 — the start check tolerates a small output wobble; the brown-out reset is switched on at power-up (current)
+### 1. In band: averaged, with hysteresis (slave)
+* **Reported (video):** with a toroid the output wandered 227 to 231 V at 213 V in, the display flipped between "At Setpoint" and "To 230 V (227)", and the unit never turned on.
+* **Cause:** the master closes the contactor only after the slave has reported IN_BAND for 1 s without a break, and the slave judged it on every 10 ms output reading at +-2 V. Each touch of 227 or 231 V started the second again.
+* **Change:** IN_BAND is now judged on the output averaged over 0.2 s (`CTRL_IN_BAND_AVG_N` 20). It is entered within +-2 V (`CTRL_IN_BAND_V`) and left only beyond +-3.5 V (`CTRL_IN_BAND_OUT_V`). It holds only in RUN; after a restart it waits for a full new average.
+* **This hides a hunting regulator, it does not cure it.** Re-tune the toroid (v0.9.77 or newer): the hunting most likely comes from a profile made on another transformer.
+* **Tests:**
+  * an output hunting +-3 V every 30 ms for 2 s stays in band with no drop-out;
+  * 232.5 V stays in, 234 V goes out, 232.5 V stays out, 231.5 V comes back in;
+  * 226 V and 240 V for 0.3 s go out;
+  * a FLT takes it out at once;
+  * after a restart at 236 V the old run's readings never count.
+* The old rule (no average, no hysteresis) fails the hunting test. Mutations: 6, five caught; one equivalent (the flag outside RUN, since the state is cleared at the first measurement outside RUN).
+### 2. Brown-out reset at power-up (slave, and NOBOR on the master)
+* **Why:** a slave lost its IGBTs **and its STM32G0B1** during continuous output-phase switching. The slave is powered from its own phase. The STM32G0 leaves the factory with BOR off, so on a sagging supply the MCU runs on far below a safe voltage, down to about 1.7 V, with its gate pins undefined.
+* **Change (`SLAVE_BOR_ENSURE` 1):** `SlaveFlash_EnsureBor()` runs at the top of main, before any pin is driven:
+  * BOR on at level 3 (about 2.8 V falling, 2.9 V rising; `SLAVE_BOR_LEVEL`) or higher: nothing to do;
+  * otherwise it writes ONLY the BOR fields of the user option byte through the HAL (`OPTIONBYTE_USER`, so the read protection is kept) and reloads the option bytes, which resets the MCU once;
+  * if the boot right after a reload (`RCC_CSR_OBLRSTF`) still finds BOR off, it does not try again (no reset loop): it runs and sets `LINKV2_FLAG_NO_BOR` in `$E`, and the master shows **NOBOR** on that slave's monitor page (row 2).
+  * The decision is in slave_bor.h (new header, no project change); the HAL part is in slave_flash.c (already in the project). A build check refuses a device whose FLASH_OPTR bit positions differ.
+* **Tests:**
+  * the decision (test_slave_bor.c): what is written, only the BOR fields, read protection levels 0 and 1 kept, the levels and BOR_EN each checked, no second attempt after a reload;
+  * the whole path against the flash test's HAL model: written once and reloaded; the next boot does nothing; later power-ups do nothing; a write that does not take gives one attempt and then gives up after the reload (no loop); a refused write gives no reload, a report, and everything locked; BOR already on writes nothing;
+  * the master shows NOBOR, and nothing when BOR is on.
+* **Mutations:** 9, eight caught. Not caught: the slave's setting of the flag in slave_link.c (glue, compile-checked only). slave_flash.c is now also compile-checked against the HAL stand-in.
+* **Risk:** if the power fails during the few milliseconds of the very first write, the option bytes can come back corrupted: the chip then runs at read protection level 1 and is recovered with STM32CubeProgrammer (full erase, reflash).
+* **Not proven on hardware:** after flashing, read the option bytes in STM32CubeProgrammer: BOR_EN checked, BORF_LEV and BORR_LEV = level 3. The first boot resets once.
+* **Mistakes caught by the runner before release:**
+  * the BOR code was first placed after slave_flash.c's feature switch (voltage calibration / autotune), so a stage-1 build without those features would not have compiled (main always calls it): it now builds in every configuration;
+  * the in-band test ran in the stage-1 jobs, which never reach RUN: it now runs from stage 2 up.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Flash the master and the slaves.**
+
+## v0.9.78 — F05 (sense mismatch) is ridden through too
 * **Reported (three-phase bench):** "Mains Unstable F05" on Y at 10:09, 10:27 and 11:33, and on B at 10:17. Never on R, and intermittent.
 * **F05:** at a zero-cross event the slave reads the sign of AC_IN and AC_OUT about 0.4 ms before the edge (about 40 V at 230 V). F05 trips when the output reads the opposite sign beyond about 5 V. A wiring fault (the output sensed on the wrong phase) would trip at every half-cycle; this was intermittent, so something briefly distorted the Y and B outputs near the zero.
 * **Change (your choice, slave):** in RUN, F05 is handled like F03 / F15 / F16 / F04 / F08 (v0.9.72):

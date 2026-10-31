@@ -122,6 +122,10 @@
  * F04 no readable sign, F08 an overdue event, v0.9.78 F05 AC_IN / AC_OUT sign mismatch) no longer trips: the converter stays off and the duty at zero (the output follows the input) until CTRL_RIDE_GOOD good zero-crosses in a
  * row, then it carries on. Not recovered within CTRL_RIDE_MAX_US, or more than CTRL_RIDE_MAX_EVENTS in CTRL_RIDE_WINDOW_MS = the original fault. F11 and
  * everything else trip as before. 0 here (the harness jobs); 1 in the production config. */
+/* v0.9.79: at power-up the slave makes sure the brown-out reset is on (slave_bor.h, SlaveFlash_EnsureBor): written once if not (one extra reset). 1 = on. */
+#ifndef SLAVE_BOR_ENSURE
+#define SLAVE_BOR_ENSURE       1
+#endif
 #ifndef SLAVE_ZC_RIDE
 #define SLAVE_ZC_RIDE          0
 #endif
@@ -144,7 +148,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       978UL
+#define SLAVE_FW_VERSION       979UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

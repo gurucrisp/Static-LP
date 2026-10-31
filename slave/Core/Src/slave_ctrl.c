@@ -1097,6 +1097,24 @@ static void EnterFault(uint16_t code, uint32_t now_ms)
 }
 
 /* Debounced range checks, evaluated once per NEW RMS result. */
+/* v0.9.79: the in-band decision for the master's contactor: the output averaged over CTRL_IN_BAND_AVG_N updates, entered within CTRL_IN_BAND_V, left beyond
+ * CTRL_IN_BAND_OUT_V; only in RUN (anything else starts it again) */
+static float   s_ib_ring[CTRL_IN_BAND_AVG_N];
+static uint8_t s_ib_n, s_ib_i, s_ib_state;
+static void InBandReset(void) { s_ib_n = 0U; s_ib_i = 0U; s_ib_state = 0U; }
+static void InBandUpdate(float vout)
+{
+    float sum = 0.0f, d; uint8_t k;
+    if (g_ctrl.state != CTRL_RUN) { InBandReset(); return; }
+    s_ib_ring[s_ib_i] = vout; s_ib_i = (uint8_t)((s_ib_i + 1U) % CTRL_IN_BAND_AVG_N); if (s_ib_n < CTRL_IN_BAND_AVG_N) s_ib_n++;
+    if (s_ib_n < CTRL_IN_BAND_AVG_N) { s_ib_state = 0U; return; }       /* a full average first */
+    for (k = 0U; k < CTRL_IN_BAND_AVG_N; k++) sum += s_ib_ring[k];
+    d = (sum / (float)CTRL_IN_BAND_AVG_N) - s_target_v; if (d < 0.0f) d = -d;
+    if (s_ib_state == 0U) { if (d <= CTRL_IN_BAND_V)     s_ib_state = 1U; }
+    else                  { if (d >  CTRL_IN_BAND_OUT_V) s_ib_state = 0U; }
+}
+uint8_t SlaveCtrl_InBand(void) { return s_ib_state; }
+
 static void TrackMeas(const CtrlMeas_t *m, uint32_t now_ms)
 {
     if (m->valid == 0U) return;
@@ -1106,6 +1124,7 @@ static void TrackMeas(const CtrlMeas_t *m, uint32_t now_ms)
         s_meas_seen    = 1U;
         s_last_upd     = m->update_count;
         s_last_meas_ms = now_ms;
+        InBandUpdate(m->vout);                                   /* v0.9.79 */
 
 #if (SLAVE_TEST_NO_VOLTAGE_CUTS == 0)
         if ((m->vin < CTRL_VIN_MIN_V) || (m->vin > CTRL_VIN_MAX_V)) { if (s_vin_bad < 255U) s_vin_bad++; }
@@ -1285,12 +1304,7 @@ uint16_t SlaveCtrl_Flags2(void)
     if ((g_ctrl.run_request != 0U) && (s_mc_link_lost == 0U)) f |= LINKV2_FLAG_RUN_ACK;
     if (s_mc_link_lost != 0U)                                  f |= LINKV2_FLAG_LINK_LOST;
 #endif
-    if ((g_ctrl.state == CTRL_RUN) && (s_last_vout_valid != 0U))
-    {
-        float d = s_last_vout - s_target_v;
-        if (d < 0.0f) d = -d;
-        if (d <= CTRL_IN_BAND_V) f |= LINKV2_FLAG_IN_BAND;
-    }
+    if ((g_ctrl.state == CTRL_RUN) && (s_last_vout_valid != 0U) && (s_ib_state != 0U)) f |= LINKV2_FLAG_IN_BAND;     /* v0.9.79: averaged, with hysteresis */
 #if (SLAVE_POWER_STAGE >= 3)
     if ((g_ctrl.state == CTRL_RUN) && ((float)s_reg_eff >= (REG_CAP() - 1.0f))) f |= LINKV2_FLAG_AT_CAP;
 #endif

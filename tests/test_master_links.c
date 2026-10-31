@@ -74,6 +74,15 @@ static void t_module(void)
         MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
         CHECK(v.e_cbc == 0U && strstr(rows[3], " C") == NULL && strstr(rows[3], " B") != NULL, "no count: row 3 as before '%s'", rows[3]);
     }
+    {   /* v0.9.79: a slave whose brown-out reset is not on: NOBOR on the monitor page */
+        MasterMon_t v; char rows[MON_LCD_ROWS][MON_LCD_COLS + 1U];
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, LINKV2_FLAG_NO_BOR, 0U); push(0, b, n); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(strstr(rows[2], "NOBOR") != NULL && strlen(rows[2]) == MON_LCD_COLS, "NOBOR on row 2 ('%s')", rows[2]);
+        reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n); n = e_frame(b, 1U, 0U, 0U); push(0, b, n); feed(0, 1000U);
+        MLinks_DisplayMon(0U, &v); Mon_Compose(&v, 1005U, rows);
+        CHECK(strstr(rows[2], "NOBOR") == NULL, "BOR on: no NOBOR ('%s')", rows[2]);
+    }
     {   /* v0.9.70: the slave's diagnostics take the whole of row 3 */
         MasterMon_t v; char rows[MON_LCD_ROWS][MON_LCD_COLS + 1U];
         reset(); n = s_frame(b, 'R', 9U, 2300U, 2300U, 2U, 0U); push(0, b, n);

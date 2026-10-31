@@ -65,6 +65,7 @@ typedef enum
 #define LINKV2_FLAG_IOUT_VALID     0x0200U   /* the slave measures the converter-side current (I-OUT): iout_rms_ca / iout_pk_ca are real      */
 #define LINKV2_FLAG_IOUT_CLIP      0x0400U   /* that measurement is at the limit of its range: the true current is larger                       */
 #define LINKV2_FLAG_LOAD_HOLD      0x0800U   /* v0.9.61: the regulator's duty is frozen while the contactor connects the load ($M hold)          */
+#define LINKV2_FLAG_NO_BOR         0x1000U   /* v0.9.79: the slave's brown-out reset is NOT on (the power-up write did not take): the master shows NOBOR */
 
 typedef struct
 {
