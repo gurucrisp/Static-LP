@@ -2,7 +2,24 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.77 — autotune: input ripple no longer reads as "input moved" (current)
+## v0.9.78 — F05 (sense mismatch) is ridden through too (current)
+* **Reported (three-phase bench):** "Mains Unstable F05" on Y at 10:09, 10:27 and 11:33, and on B at 10:17. Never on R, and intermittent.
+* **F05:** at a zero-cross event the slave reads the sign of AC_IN and AC_OUT about 0.4 ms before the edge (about 40 V at 230 V). F05 trips when the output reads the opposite sign beyond about 5 V. A wiring fault (the output sensed on the wrong phase) would trip at every half-cycle; this was intermittent, so something briefly distorted the Y and B outputs near the zero.
+* **Change (your choice, slave):** in RUN, F05 is handled like F03 / F15 / F16 / F04 / F08 (v0.9.72):
+  * the converter stays off and the output follows the input;
+  * it carries on after 4 good zero-crosses;
+  * a mismatch that stays (a wiring fault), or a 4th disturbance within 10 s, is F05 at the 0.5 s deadline;
+  * during a start it stays strict: F05 at once.
+* **Tests:**
+  * one and two events with the output's sign misread: ridden through, recovered, no F05, never against the line;
+  * a mismatch that stays in RUN: F05 within 0.65 s, nothing energised meanwhile;
+  * the original F05 test (a mismatch outside RUN) still trips at once, with and without the ride-through.
+* **Mutations:** 3, all caught: F05 not ridden; the wrong code at the deadline; the wrong code on the strict path (caught by the original F05 test).
+* Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.**
+* **Not proven on hardware.** If F05 keeps coming, note what was switched on Y / B at that moment.
+* **B Phase Missing at 9:43:** not changed. It means B's slave went silent, or B's input was below 60 V / 50 % of the others for 0.2 s (expected if B was switched on after R and Y).
+
+## v0.9.77 — autotune: input ripple no longer reads as "input moved"
 * **Reported:** the toroid autotune failed again with "Input Not Steady / Input moved 8.1 V".
 * **Cause:** the input check was the spread of every 10 ms input reading in the 1.5 s window, at 8 V. On a soft supply (a variac) the converter's own current makes the input ripple as the steps grow, and the output with it: the transformer is in series, so the measured injection (output - input) does not move. 8.1 V of ripple was judged an input jump, measured again for the whole 9 s, and the sweep ended. Reproduced in the simulator: a 9 V peak-to-peak common ripple from step 5 ends v0.9.76's sweep with "Input moved 8.9 V".
 * **Change (slave):** the input has MOVED, and the window is measured again, when any of these holds:

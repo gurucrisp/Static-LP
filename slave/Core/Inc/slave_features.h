@@ -119,7 +119,7 @@
 #define SLAVE_GLITCH_SKIP      0
 #endif
 /* v0.9.71 the ZERO-CROSS RIDE-THROUGH (slave_ctrl.h CTRL_RIDE_*): while RUNNING, a disturbed mains (F03 wrong time, F15 no sign flip, F16 last-moment polarity,
- * F04 no readable sign, F08 an overdue event) no longer trips: the converter stays off and the duty at zero (the output follows the input) until CTRL_RIDE_GOOD good zero-crosses in a
+ * F04 no readable sign, F08 an overdue event, v0.9.78 F05 AC_IN / AC_OUT sign mismatch) no longer trips: the converter stays off and the duty at zero (the output follows the input) until CTRL_RIDE_GOOD good zero-crosses in a
  * row, then it carries on. Not recovered within CTRL_RIDE_MAX_US, or more than CTRL_RIDE_MAX_EVENTS in CTRL_RIDE_WINDOW_MS = the original fault. F11 and
  * everything else trip as before. 0 here (the harness jobs); 1 in the production config. */
 #ifndef SLAVE_ZC_RIDE
@@ -144,7 +144,7 @@
 #endif
 /* major*10000 + minor*100 + patch of the VERSION file; the test runner checks that they agree. Sent in the $H frame. */
 #ifndef SLAVE_FW_VERSION
-#define SLAVE_FW_VERSION       977UL
+#define SLAVE_FW_VERSION       978UL
 #endif
 
 #if (SLAVE_MASTER_CONTROL != 0) && (SLAVE_LINK_V2 == 0)

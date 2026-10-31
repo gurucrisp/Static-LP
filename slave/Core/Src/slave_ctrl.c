@@ -300,7 +300,12 @@ void SlaveCtrl_OnZcEdge(uint32_t now_us, uint8_t rising)
         IsrFail(code);
         return;
     }
-    if ((sign_out != 0) && (sign_out != sign_in))      { IsrFail(CF_SENSE_MISMATCH); return; }
+    if ((sign_out != 0) && (sign_out != sign_in))
+    {   /* v0.9.78: also ridden through (an output disturbed near the zero by a load switched on it); a mismatch that stays (a wiring fault) is F05 at the deadline */
+        if (Ride(CF_SENSE_MISMATCH, now_us) != 0U) return;
+        IsrFail(CF_SENSE_MISMATCH);
+        return;
+    }
 
 #if (SLAVE_ZC_RIDE != 0)
     if (s_ride != 0U)

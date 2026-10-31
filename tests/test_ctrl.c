@@ -78,6 +78,7 @@ static struct
     int     guard_glitch;               /* the next N polarity-guard samples show the WRONG sign (noise injection) */
     int     sign_glitch;                /* the next N AC_IN signs read at a zero-cross event are WRONG (opposite)  */
     int     preen_glitch;               /* the next N last-moment (strong) polarity checks show the OPPOSITE sign  */
+    int     out_glitch;                 /* v0.9.78: the next N AC_OUT signs read at a zero-cross event are WRONG (an output disturbed by a load) */
     int     early_n; int64_t early_from_k; double early_us;   /* v0.9.69: the next early_n zero-cross edges from crossing early_from_k come early_us early */
 } W;
 
@@ -203,6 +204,7 @@ int8_t CtrlHw_Sign(uint8_t out_channel, int32_t *dev_sum)
     else             { if (W.in_zero) v = 0.0; }
     sum = (int32_t)lround(v * 8.0);
     if (!out_channel && W.sign_glitch > 0) { W.sign_glitch--; sum = -sum; }          /* a misread sign at an event */
+    if (out_channel && W.out_glitch > 0) { W.out_glitch--; sum = -sum; }             /* v0.9.78: the output reads the opposite sign at one event */
     if (dev_sum) *dev_sum = sum;
     return (int8_t)((sum > 160) ? 1 : ((sum < -160) ? -1 : 0));
 }
@@ -702,8 +704,17 @@ static void t_sense_mismatch(void)
     world_reset(4000000);
     run_for(800000 + WARM);
     CHECK(is_running(), "should be running");
+    { const int in_run = (g_ctrl.state == CTRL_RUN);
     t0 = sim_t; W.out_gain = -1.0;                       /* AC_OUT now reads the opposite sign */
     run_for(30000);
+#if (SLAVE_ZC_RIDE != 0)
+    if (in_run)
+    {   /* v0.9.78: in RUN it is ridden through first; it stays, so it is F05 at the 0.5 s deadline (outside RUN the check stays strict: F05 at once, as below) */
+        CHECK(diag == 0 && SlaveCtrl_RideActive() != 0U && g_ctrl.fault == CF_NONE, "v0.9.78: in RUN a sense mismatch is ridden through first: converter off within one event, no fault yet (state %d)", g_ctrl.state);
+        run_for(600000);
+    }
+#endif
+    (void)in_run; }
     CHECK(diag == 0 && !is_running(), "must stop within one event of a sense mismatch (state %d)", g_ctrl.state);
     CHECK(g_ctrl.state == CTRL_FAULT && g_ctrl.fault == CF_SENSE_MISMATCH, "expected SENSE_MISMATCH, got %d/%d", g_ctrl.state, g_ctrl.fault);
     CHECK(g_ctrl.fault_count == 1, "escalating fault must count (%u)", g_ctrl.fault_count);
@@ -3218,6 +3229,33 @@ static void t_ride_restart(void)
         check_invariants("ride-through, restart");
     }
 }
+
+/* v0.9.78: one event at which the OUTPUT reads the opposite sign (a load switched on the output): ridden through, recovered, no F05 */
+static void t_ride_sense_mismatch(void)
+{
+    uint32_t r0;
+    ride_world(2100000000ULL, 0.0);
+    r0 = SlaveCtrl_RideCount(); v_polarity = 0; v_against_any = 0;
+    W.out_glitch = 1;
+    run_for((uint64_t)(1.5 * half_period_us()));
+    CHECK(SlaveCtrl_RideCount() == r0 + 1U && g_ctrl.fault == CF_NONE && g_ctrl.isr_fault == 0U, "one output sign mismatch (F05): ridden through, no fault (rides +%u, fault %d)", (unsigned)(SlaveCtrl_RideCount() - r0), g_ctrl.fault);
+    CHECK(ride_recovered(300000ULL) && is_running(), "and recovered");
+    W.out_glitch = 2;
+    run_for(300000);
+    CHECK(SlaveCtrl_RideCount() == r0 + 2U && is_running() && g_ctrl.isr_fault == 0U, "two in a row: one ride-through, still running (rides +%u)", (unsigned)(SlaveCtrl_RideCount() - r0));
+    CHECK(v_polarity == 0 && v_against_any == 0, "never against the line (%ld / %ld)", v_polarity, v_against_any);
+    {   /* a mismatch that STAYS (the output sensed on the wrong phase, a wiring fault): F05 at the deadline, never energised meanwhile */
+        uint64_t t0; long e0;
+        run_for(11000000);
+        CHECK(is_running(), "running again before the wiring-fault case");
+        W.out_gain = -1.0; t0 = sim_t; e0 = n_energise;
+        while (g_ctrl.isr_fault == 0U && g_ctrl.fault == CF_NONE && sim_t < t0 + 2000000ULL) run_for(1000);
+        CHECK((g_ctrl.isr_fault == CF_SENSE_MISMATCH || g_ctrl.fault == CF_SENSE_MISMATCH) && sim_t - t0 <= 650000ULL, "a mismatch that stays: F05 within the 0.5 s deadline (%llu ms, fault %d / %d)", (unsigned long long)((sim_t - t0) / 1000ULL), g_ctrl.fault, g_ctrl.isr_fault);
+        CHECK(n_energise - e0 <= 1, "and nothing energised meanwhile (%ld)", (long)(n_energise - e0));
+        W.out_gain = 1.0;
+    }
+    check_invariants("ride-through, sense mismatch");
+}
 #if defined(TEST_LEGACY_REG)
 /* the regulator does not integrate while riding: the duty after the ride is the duty before it */
 static void t_ride_reg_frozen(void)
@@ -3270,6 +3308,7 @@ int main(void)
     run_isolated(t_ride_sign_and_notch,       "ride-through: a misread sign and an input notch");
     run_isolated(t_ride_persistent,           "ride-through: a disturbance that does not end trips");
     run_isolated(t_ride_count,                "ride-through: the fourth within 10 s trips");
+    run_isolated(t_ride_sense_mismatch,       "ride-through: an output sign mismatch (F05, v0.9.78)");
     run_isolated(t_ride_restart,              "ride-through: a disturbance during a ride restarts its count");
     run_isolated(t_ride_strict_outside_run,   "ride-through: strict during a start, cleared by a FLT, F11 unchanged");
 #if defined(TEST_LEGACY_REG)

@@ -63,7 +63,7 @@
 #ifndef CTRL_VGATE_V
 #define CTRL_VGATE_V           25U
 #endif
-/* v0.9.71 the ZERO-CROSS RIDE-THROUGH (slave_features.h): a disturbed mains while running (F03 / F15 / F16 / F04 / F08: an output load switched on, the output
+/* v0.9.71 the ZERO-CROSS RIDE-THROUGH (slave_features.h): a disturbed mains while running (F03 / F15 / F16 / F04 / F08, and F05 since v0.9.78: an output load switched on, the output
  * phase changed) no longer trips: the converter stays off, the output follows the input, and it carries on after 4 good half-cycles. Not recovered in 0.5 s, or a
  * 4th in 10 s = the fault as before. F11 and the over-current trips are unchanged. 0 = trip at once as before. */
 #ifndef SLAVE_ZC_RIDE
