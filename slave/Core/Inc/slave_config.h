@@ -308,9 +308,13 @@
  * This config = the 100 V/s fast-correction profile above + the 4th ADC channel for the CT2500 sense chain (net I-OUT, PA2): its AC RMS and peak go to the master in $E and are shown on the Converter Current page (LOG, MENU x7).
  * Confirmed on the bench (v0.9.31) with a 68 ohm x 3 burden. v0.9.58: the burden is 180 ohm x 3 = 60 ohm (the drawing's value): 0.1632 V per ampere, 4.9 mA per count, the channel CLIPS at +-10.1 A peak
  * (a load of roughly 13 A at the converter peaks measured on the bench: above it the slave's load reading is "clipped" and the Y / B overload trip has no reading), and the hardware
- * short-circuit comparators trip at about +-41 A peak (it was 108 A with 68 ohm). With 68 ohm resistors fitted put 68.0f back here. See docs/IOUT.md. */
+ * short-circuit comparators trip at about +-41 A peak (it was 108 A with 68 ohm). With 68 ohm resistors fitted put 68.0f back here. See docs/IOUT.md.
+ * v0.9.74: 120 ohm x 3 = 40 ohm, the production boards: 0.1088 V per ampere, 7.4 mA per count, the channel clips at +-15.2 A peak, the hardware comparators trip at about
+ * +-61 A peak (references measured on the bench: TP32 0.68 V, TP33 2.69 V around 1.69 V). A slave load calibration made with another burden must be done again. */
 #define SLAVE_IOUT 1
-#define IOUT_BURDEN_R_EACH_OHM 180.0f
+#ifndef IOUT_BURDEN_R_EACH_OHM
+#define IOUT_BURDEN_R_EACH_OHM 120.0f
+#endif
 /* v0.9.62: the FLT glitch filter (slave_flt_filter.h): the FLT interrupt shuts down only if FLT is STILL asserted this many microseconds after the edge; a shorter spike
  * (noise: F02 came even when a heavy load nearby was switched) is ignored, more than 4 in one millisecond trip. A real short circuit is switched off this much later:
  * 0 = off (the old behaviour), at most 2 (refused above). 1 us chosen with you; 2 only with gate-driver desaturation protection. NOT measured on the hardware. */

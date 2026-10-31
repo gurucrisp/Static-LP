@@ -49,3 +49,6 @@ The boards change to 180 ohm x 3 (60 ohm, the drawing's value). `IOUT_BURDEN_R_E
 
 ## v0.9.61: F02 when the contactor closes onto a load
 Reported: every phase tripped F02 (these comparators) when the contactor closed onto a load, never at no load or when the load was added later. v0.9.61 freezes the regulator's duty from 150 ms before the contactor closes to 500 ms after (the load-connect hold, docs/LINK_V2.md). If F02 remains, the peak is the load step itself: measure I-OUT at the closing with a scope, and change the trip in hardware (burden or R37 .. R40), not above about 75 A.
+
+## v0.9.74: 120 ohm x 3 is the production default
+The production boards have R42, R43, R44 = 120 ohm each = 40 ohm: 0.1088 V per ampere, 7.4 mA per count, the channel clips at +-15.2 A peak, and the comparators trip at about +-61 A peak (bench references: TP31 1.69 V, TP32 0.68 V, TP33 2.69 V). `IOUT_BURDEN_R_EACH_OHM` is 120.0f in slave_iout.h and in the production slave_config.h (now inside `#ifndef`, so a test can build another burden: the runner's 68 and 180 ohm jobs had silently tested the config's value since v0.9.58). A Slave Load Cal made with another burden must be done again.

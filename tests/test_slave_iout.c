@@ -27,12 +27,14 @@ static void adc_window(double irms, double offset_counts, double noise, uint32_t
 int main(void)
 {
     IoutResult_t r; float rms, mean; uint16_t mn, mx; uint32_t seed = 1U; double t, apc = (double)IOUT_A_PER_COUNT, clip_rms = (double)IOUT_PK_LIMIT_A / 1.41421356237;
-    int is68 = (fabs((double)IOUT_BURDEN_R_EACH_OHM - 68.0) < 0.01), is180 = (fabs((double)IOUT_BURDEN_R_EACH_OHM - 180.0) < 0.01);
+    int is68 = (fabs((double)IOUT_BURDEN_R_EACH_OHM - 68.0) < 0.01), is180 = (fabs((double)IOUT_BURDEN_R_EACH_OHM - 180.0) < 0.01), is120 = (fabs((double)IOUT_BURDEN_R_EACH_OHM - 120.0) < 0.01);
     printf("  burden under test: %.0f ohm x 3 in parallel = %.2f ohm: %.4f V/A, %.2f mA per count, clips at +-%.1f A peak, hardware trip about %.0f A peak\n", (double)IOUT_BURDEN_R_EACH_OHM, (double)IOUT_BURDEN_OHM, (double)IOUT_V_PER_A, apc * 1000.0, (double)IOUT_PK_LIMIT_A, (double)IOUT_TRIP_A);
     /* the constants follow from the circuit: 6.8 x R_burden / 2500 V per ampere; counts of 3.3 V / 4095 */
     CHECK(fabs((double)IOUT_V_PER_A - 6.8 * ((double)IOUT_BURDEN_R_EACH_OHM / 3.0) / 2500.0) < 1e-7, "V per ampere = 6.8 x burden / 2500 (%.5f)", (double)IOUT_V_PER_A);
     CHECK(fabs(apc - (3.3 / 4095.0) / (double)IOUT_V_PER_A) < 1e-9, "amperes per count follow from it (%.6f A)", apc);
     if (is68) CHECK(fabs((double)IOUT_V_PER_A - 0.06165) < 2e-5 && fabs(apc - 0.013072) < 5e-5 && fabs((double)IOUT_PK_LIMIT_A - 26.76) < 0.05 && fabs((double)IOUT_TRIP_A - 108.3) < 0.5, "68 ohm x 3: 0.0617 V/A, 13.1 mA per count, clips at 26.8 A peak, trips at about 108 A peak");
+    if (is120) CHECK(fabs((double)IOUT_V_PER_A - 0.1088) < 1e-5 && fabs(apc - 0.007407) < 2e-5 && fabs((double)IOUT_PK_LIMIT_A - 15.17) < 0.05 && fabs((double)IOUT_TRIP_A - 61.4) < 0.3, "120 ohm x 3 (v0.9.74, production): 0.1088 V/A, 7.41 mA per count, clips at 15.2 A peak, trips at about 61 A peak");
+    CHECK(is68 || is120 || is180, "the burden under test is one of the known boards (68, 120 or 180 ohm)");
     if (is180) CHECK(fabs((double)IOUT_V_PER_A - 0.1632) < 1e-5 && fabs(apc - 0.004937) < 2e-5 && fabs((double)IOUT_PK_LIMIT_A - 10.11) < 0.05 && fabs((double)IOUT_TRIP_A - 40.9) < 0.3, "180 ohm x 3: 0.1632 V/A, 4.94 mA per count, clips at 10.1 A peak, trips at about 41 A peak");
     /* a 5.89 A RMS load (the original board's full load): 8.33 A peak, inside the range for either burden */
     adc_window(5.89, 0.0, 0.0, &seed, &rms, &mean, &mn, &mx); Iout_Compute(rms, mean, mn, mx, &r);

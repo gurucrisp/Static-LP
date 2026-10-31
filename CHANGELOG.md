@@ -2,7 +2,17 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.73 — autotune: a noisy step on a toroid no longer ends the sweep; the failure message says noisy or not settling (current)
+## v0.9.74 — the converter-current burden is 120 ohm in the final code (current)
+* **Your request:** the final code has the burden at 120.0. `IOUT_BURDEN_R_EACH_OHM` is now 120.0f in slave_iout.h (the default) and in the production slave_config.h (and its identical copy in configs/). 120 ohm x 3 = 40 ohm gives:
+  * 0.1088 V per ampere;
+  * 7.4 mA per count;
+  * the channel clips at +-15.2 A peak;
+  * the hardware comparators trip at about +-61 A peak.
+* **A Slave Load Cal made with a different burden must be done again.** Your own builds already used 120, so their calibrations stay valid.
+* **Test gap found and fixed:** the production config defined the burden without `#ifndef`, so the runner's "68 ohm" job, which passes `-DIOUT_BURDEN_R_EACH_OHM=68.0f`, compiled with the config's value. That job has really been testing 180 ohm since v0.9.58, and its redefinition warning went to the compiler's error output, which the runner does not count. The config's define is now guarded. The 68, 120 and 180 ohm builds each test their own constants, and a new check refuses any other value.
+* **Tests:** the I-OUT conversion for 120 ohm (0.1088 V/A, 7.41 mA per count, 15.2 A clip, about 61 A trip) in the default job; the 68 and 180 ohm jobs now really build those. Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.**
+
+## v0.9.73 — autotune: a noisy step on a toroid no longer ends the sweep; the failure message says noisy or not settling
 * **Reported:** the autotune of a toroidal transformer ended at step 5 or 7 with "Input Not Steady / Reading spread 2.3 V".
 * **What that meant:** the input was steady, but the measured injection (output - input) had 2.3 V of spread within the 1.5 s window, above the strict limit (1 V + 12 % of the injection, about 1.7 V at step 5). After 9 s of retries on one step the sweep gave up. Reproduced in the simulator: an injection that wobbles 3.2 V from step 5 on ends v0.9.72's sweep exactly like that.
 * **Change (slave):** a step whose windows stay NOISY for the whole 9 s wait is now ACCEPTED with its last window's average, if the spread is at most 3 V + 25 % of the injection (`TUNE_ACCEPT_SPREAD_V`, `TUNE_ACCEPT_REL`). The average of about 150 readings is good to about 0.2 V. Never accepted: a window in which the INPUT moved (8 V), a spread beyond that limit, and a window that keeps DRIFTING between its halves (its average would be biased).

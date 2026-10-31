@@ -24,7 +24,7 @@ extern "C" {
 #define IOUT_ADC_FULL        4095.0f
 #define IOUT_CT_TURNS        2500.0f           /* CT2500 */
 #ifndef IOUT_BURDEN_R_EACH_OHM
-#define IOUT_BURDEN_R_EACH_OHM  180.0f         /* R42, R43, R44, each: 180 ohm (the drawing; v0.9.58, the boards change from 68 ohm). slave_config.h sets it too */
+#define IOUT_BURDEN_R_EACH_OHM  120.0f         /* R42, R43, R44, each: v0.9.74 120 ohm, the production boards (180 ohm on the drawing, v0.9.58; 68 ohm on the first boards). slave_config.h sets it too */
 #endif
 #define IOUT_BURDEN_PARALLEL 3.0f
 #define IOUT_BURDEN_OHM      (IOUT_BURDEN_R_EACH_OHM / IOUT_BURDEN_PARALLEL)
