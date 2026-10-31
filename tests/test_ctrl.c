@@ -40,6 +40,9 @@
 #include "slave_relay.h"
 
 #define PI 3.14159265358979323846
+#ifndef TEST_F_HZ
+#define TEST_F_HZ 50.0          /* v0.9.76: the mains frequency of the simulated world (the s3_60hz jobs run it at 60) */
+#endif
 #if (SLAVE_RELAYS_MODE == 2)
 #define WARM 3000000ULL          /* LEGACY relays: wait for a trustworthy zero-cross, SH 1 s, W settle 1 s, then the converter starts */
 #elif (SLAVE_RELAYS_MODE == 1)
@@ -234,7 +237,7 @@ void SlavePower_AllOffNow(void)
 /* v0.9.65: the FLT shutdown. SLAVE_FLT_KEEP_LOWS: the PWM channels are FORCED inactive (high sides off, low sides on) until the next InverterEnable; the inverter stays enabled */
 static int n_fltoff; static long v_duty_forced;
 /* v0.9.66: the cycle-by-cycle limit's hardware */
-static int n_force_off, n_resume; static uint64_t next_pwm; static unsigned fs_tot, fs_forced;
+static int n_force_off, n_resume; static uint64_t next_pwm; static unsigned fs_tot, fs_forced; static double duty_sum;   /* v0.9.76: the leg duty summed over each 100 us sample since the last measurement update (the plant averages it) */
 void SlavePower_InverterForceOffNow(void) { probe_shutdown(); if (inv_enabled) inv_forced = 1; n_force_off++; }
 void SlavePower_InverterResume(void)      { inv_forced = 0; if (!W.brk) inv_moe_off = 0; n_resume++; }
 void SlavePower_CbcArm(void)              { cbc_armed = 1; next_pwm = sim_t + 50U - (sim_t % 50U); }      /* the next period start */
@@ -479,15 +482,20 @@ static void sim_run_until(uint64_t t_end)
             if (W.plant_on && inv_enabled)
             {
                 /* crude plant: output = input +/- duty * gain (boost adds, buck subtracts) */
-                double d = (double)((leg1 > leg2) ? leg1 : leg2);
+                double d;
+#if defined(TEST_PLANT_AVG)
+                d = (fs_tot != 0U) ? duty_sum / (double)fs_tot : 0.0;       /* v0.9.76: the duty AVERAGED over the 10 ms (the transformer averages it): an instant sample beats against a 60 Hz half-cycle */
+#else
+                d = (double)((leg1 > leg2) ? leg1 : leg2);
+#endif
                 d = (d > W.plant_dead) ? (d - W.plant_dead) : 0.0;          /* a pulse shorter than the dead time is NOT generated at all */
                 double inj = d * (W.plant_curve ? plant_g_of_vin((double)W.vin) : W.plant_gain);
                 if (fs_tot != 0U) inj *= 1.0 - (double)fs_forced / (double)fs_tot;      /* v0.9.66: no injection while the PWM is forced off */
                 W.vout = (float)((g_ctrl.boost ? W.vin + inj : W.vin - inj) + W.out_offset);
             }
-            fs_tot = 0U; fs_forced = 0U;
+            fs_tot = 0U; fs_forced = 0U; duty_sum = 0.0;
             next_meas += 10000; break;
-        case 5: sample_invariants(); fs_tot++; if (inv_forced) fs_forced++; next_sample += 100; break;
+        case 5: sample_invariants(); fs_tot++; if (inv_forced) fs_forced++; duty_sum += (double)((inv_enabled && !inv_forced) ? ((leg1 > leg2) ? leg1 : leg2) : 0U); next_sample += 100; break;
         case 6: SlaveCtrl_OnSampleTick(); next_tick += 50; break;
         case 7: pf_armed = 0; SlaveCtrl_OnPredictOffIrq(); break;
         case 8: next_pwm += 50; SlaveCtrl_OnPwmPeriodIrq(); break;          /* v0.9.66: TIM1 update while the cycle-by-cycle limit is armed */
@@ -499,7 +507,7 @@ static void run_for(uint64_t us) { sim_run_until(sim_t + us); }
 static void world_reset(uint64_t start_t)
 {
     memset(&W, 0, sizeof W);
-    W.f_hz = 50.0; W.amp = 784.0; W.pattern = PAT_SQUARE;
+    W.f_hz = TEST_F_HZ; W.amp = 784.0; W.pattern = PAT_SQUARE;
     W.edge_delay_us = 20.0; W.pulse_w_us = 1500.0; W.jitter_us = 0.0;
     W.vin = 230.0f; W.vout = 230.0f; W.meas_valid = 1; W.meas_running = 1; W.inv_ok = 1;
     W.out_gain = 1.0; W.plant_gain = 0.010; W.out_offset = 0.0; W.plant_curve = 0; W.plant_dead = (double)POWER_DEADTIME_TICKS;     /* the hardware always has the dead time */
