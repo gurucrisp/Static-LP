@@ -30,10 +30,11 @@ typedef struct
     double wob;          /* the mains wanders: the sum of two sines (2.3 s and 0.7 s periods) of this amplitude, volts: up to 3 x wob peak to peak (a variac with a converter on it) */
     double isat_v, isat_k;   /* the converter-side current: 1 A RMS at no load, and above isat_v volts of injection it rises by isat_k amperes per volt (a core that saturates); 0 = never */
     double wob_from;         /* the common-mode wander of the mains starts at this ms (0 = from the start) */
+    double crip, crip_from;  /* v0.9.77: the INPUT ripples (and the output with it, the transformer is in series): a 150 ms sine of this amplitude, volts, from crip_from ticks on: the converter's own current on a soft supply */
     double dwob, dwob_from;  /* v0.9.73: the INJECTION itself wobbles (not the mains): a 1.7 Hz sine of this amplitude, volts, from dwob_from effective ticks on (0 = never) */
     double jump_at, jump_gain;   /* above jump_at effective ticks the gain suddenly becomes jump_gain times larger (0 = never): a surprise that no step prediction can foresee */
 } Plant_t;
-static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; p.sh_lo = 0.0; p.sh_hi = 0.0; p.sh_frac = 1.0; p.isat_v = 0.0; p.isat_k = 0.0; p.wob_from = 0.0; p.dwob = 0.0; p.dwob_from = 0.0; return p; }
+static Plant_t nominal(void) { Plant_t p; p.k = 1.0; p.dead = 40.0; p.knee = 0.0; p.knee_slope = 0.25; p.sign = 1.0; p.noise = 0.1; p.offset = 0.2; p.vin = 230.0; p.drift = 0.0; p.jump_t = 0.0; p.jump_v = 0.0; p.tau = 0.3; p.superlin = 1.0; p.jump_at = 0.0; p.jump_gain = 1.0; p.wob = 0.0; p.sh_lo = 0.0; p.sh_hi = 0.0; p.sh_frac = 1.0; p.isat_v = 0.0; p.isat_k = 0.0; p.wob_from = 0.0; p.dwob = 0.0; p.dwob_from = 0.0; p.crip = 0.0; p.crip_from = 0.0; return p; }
 
 static double true_inj(const Plant_t *p, double ticks, double vin)
 {
@@ -63,7 +64,7 @@ static Run_t sim(Plant_t p, double maxc, uint16_t hw_cap, uint32_t abort_at, uin
         if (fabs(inj) > r.max_inj) r.max_inj = fabs(inj);
         if (inj > r.max_inj) r.max_inj = inj;
         if ((double)req > (double)hw_cap) r.max_ticks_over = (double)req - (double)hw_cap;
-        { double wob_on = ((double)(t - t0) >= p.wob_from) ? p.wob : 0.0; double vm = vin + wob_on * (sin(6.2831853 * (double)(t - t0) / 2300.0) + 0.5 * sin(6.2831853 * (double)(t - t0) / 700.0));
+        { double wob_on = ((double)(t - t0) >= p.wob_from) ? p.wob : 0.0; double vm = vin + wob_on * (sin(6.2831853 * (double)(t - t0) / 2300.0) + 0.5 * sin(6.2831853 * (double)(t - t0) / 700.0)) + ((p.crip > 0.0 && (double)req >= p.crip_from) ? p.crip * sin(6.2831853 * (double)(t - t0) / 150.0) : 0.0);
           in.vin = (float)(vm + 0.05 * gauss()); in.vout = (float)(vm + p.offset + inj + p.noise * gauss() + ((p.dwob > 0.0 && (double)req >= p.dwob_from) ? p.dwob * sin(6.2831853 * (double)(t - t0) / 588.0) : 0.0)); } in.meas_valid = 1U; in.vin_in_window = 1U;
         in.iout_valid = (uint8_t)(p.isat_k >= 0.0); in.iout_clip = 0U; in.iout_rms = (float)(1.0 + ((p.isat_k > 0.0 && inj > p.isat_v) ? p.isat_k * (inj - p.isat_v) : 0.0) + 0.03 * gauss()); in.iout_pk = in.iout_rms * 4.0f;       /* a no-load converter current of 1 A RMS, spiky */
         in.fault = (uint8_t)((fault_at != 0U && (t - t0) >= fault_at) ? 1U : 0U); in.maxc_v = (float)maxc; in.hw_cap_ticks = hw_cap;
@@ -130,8 +131,11 @@ int main(void)
     { Plant_t q = nominal(); q.isat_k = -1.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U);
       CHECK(r.result == TUNE_R_ABORTED && !r.profile_ok && r.last.dv_dv == -1 && r.max_inj < 0.5, "no converter-current reading: the sweep does NOT run (ABORTED at the end of the baseline, no duty applied, the frame says -1): result %u, frame %d", r.result, (int)r.last.dv_dv); }
     /* the source starts to swing late, at high duty (a toroid, a soft variac): the duty must not be held for long (it was 30 s) */
-    { Plant_t q = nominal(); q.k = 1.0; q.wob = 6.0; q.wob_from = 15000.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U);
-      CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.ms <= 15000U + 15000U, "the input starts to swing 18 V peak to peak after 15 s: the sweep gives up within 15 s of that (it took up to 30), at %u ms", (unsigned)r.ms); }
+    { Plant_t q = nominal(); TuneProfile_t pf; q.k = 1.0; q.wob = 6.0; q.wob_from = 15000.0; r = sim(q, 60.0, 2752U, 0U, 0U, 200000U); (void)Tune_GetProfile(&pf);
+      /* v0.9.77: windows whose halves agree are used (the swing is common to input and output, the injection does not move), so it steps on: it either gives up within 30 s
+       * of the swing, or finishes with a CORRECT gain; each step still holds its duty at most TUNE_STEP_WAIT_MS */
+      CHECK((r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.ms <= 15000U + 30000U) || (r.result == TUNE_R_FINISHED && r.profile_ok && pf.kib_m >= 900U && pf.kib_m <= 1100U),
+            "the input starts to swing 18 V peak to peak after 15 s: gives up within 30 s, or finishes with the right gain (result %u at %u ms, %u thousandths)", r.result, (unsigned)r.ms, (unsigned)pf.kib_m); }
     /* ---- YOUR PROFILE (v0.9.38 and earlier): "Cap 64 ticks, Knee, n04" at 234 V in with 36 V of headroom: readings of about 0.7, 1.9, 4.4 V and then only 1.5 V more at 128 ticks (twice the reference gain, then a slope of a third).
      *      A slope that changes at 4 V of injection is noise and the converter's low-duty region, not a saturation knee: it must not become the cap (with SLAVE_TUNE_APPLY on it held the regulator to 4 V of correction) ---- */
     { Plant_t q = nominal(); TuneProfile_t pf; q.vin = 234.0; q.dead = 0.0; q.k = 2.2; q.knee = 64.0; q.knee_slope = 0.3; q.noise = 0.25;
@@ -166,6 +170,14 @@ int main(void)
     CHECK(r.result == TUNE_R_FINISHED && r.profile_ok, "0.6 V of noise on the difference: accepted (result %u)", r.result);
     p = nominal(); p.noise = 4.0; r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
     CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv <= -10, "4 V of noise on the difference: UNSTEADY and the frame says the reading is noisy (%.1f V of spread), nothing stored", (double)r.last.dv_dv / 10.0);
+    {   /* v0.9.77: the toroid again, "Input moved 8.1 V": the input ripples with the converter's own current from step 5 on (common to input and output: the injection does
+         * not move). Judged by the DRIFT between the window's halves, not by the spread of the 10 ms readings, it finishes */
+        TuneProfile_t pf;
+        p = nominal(); p.crip = 4.5; p.crip_from = 256.0; r = sim(p, 60.0, 2752U, 0U, 0U, 600000U); (void)Tune_GetProfile(&pf);
+        CHECK(r.result == TUNE_R_FINISHED && r.profile_ok && pf.kib_m >= 950U && pf.kib_m <= 1050U, "an input rippling 9 V peak to peak from step 5 (a soft supply): finishes, the gain scale right (result %u, frame %d, %u thousandths)", r.result, (int)r.last.dv_dv, (unsigned)pf.kib_m);
+        p = nominal(); p.crip = 11.0; p.crip_from = 256.0; r = sim(p, 60.0, 2752U, 0U, 0U, 600000U);
+        CHECK(r.result == TUNE_R_UNSTEADY && !r.profile_ok && r.last.dv_dv > 200, "a ripple of 22 V peak to peak: beyond the hard 20 V limit, still 'input moved' (frame %d)", (int)r.last.dv_dv);
+    }
     {   /* v0.9.73: a toroid gave up at step 5 or 7 with "Reading spread 2.3 V": a step that stays noisy or drifting (not an input jump) for the whole wait is accepted
          * with its average if the spread is within the hard limit */
         TuneProfile_t pf; uint32_t clean_ms;
@@ -192,6 +204,18 @@ int main(void)
             for (k = 0; k < 150; k++) w[k] = 10.0f + 0.3f * (float)sin((double)k);
             c = Tune_TestWindow(w, 150U, 0.0f, &un, &ac);
             CHECK(c == 0U, "a clean window: good (%u)", c);
+            {   /* v0.9.77: the input itself: a step between the halves is a move, ripple is not */
+                float vi[150];
+                for (k = 0; k < 150; k++) { w[k] = 10.0f; vi[k] = (k < 75) ? 230.0f : 237.0f; }
+                c = Tune_TestWindowVin(w, vi, 150U, 0.0f, &un, &ac);
+                CHECK(c == 1U && un >= 65 && un <= 75 && ac == 0U, "the input steps 7 V between the halves: 'input moved' %d (tenths), measured again", (int)un);
+                for (k = 0; k < 150; k++) vi[k] = 230.0f + 4.5f * (float)sin(6.2831853 * (double)k * 10.0 / 150.0);
+                c = Tune_TestWindowVin(w, vi, 150U, 0.0f, &un, &ac);
+                CHECK(c == 0U, "the input ripples 9 V peak to peak, both halves alike: good (%u, %d)", c, (int)un);
+                for (k = 0; k < 150; k++) vi[k] = 230.0f + 10.5f * (float)sin(6.2831853 * (double)k * 10.0 / 150.0);
+                c = Tune_TestWindowVin(w, vi, 150U, 0.0f, &un, &ac);
+                CHECK(c == 1U && un > 200, "a 21 V peak to peak ripple: beyond the hard limit (%d)", (int)un);
+            }
         }
         p = nominal(); r = sim(p, 60.0, 2752U, 0U, 0U, 300000U);
         CHECK(r.result == TUNE_R_FINISHED && Tune_SpreadAccepts() == 0U, "a clean plant: no step needs that (%u)", (unsigned)Tune_SpreadAccepts());

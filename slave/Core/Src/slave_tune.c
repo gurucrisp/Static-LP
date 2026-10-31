@@ -10,7 +10,7 @@ static struct
     TuneSt_t st;
     uint32_t t0, wait_t0, t_valid;
     float    maxc, base, vin_ref;
-    float    sum, sumsq, sum1, sum2, vin_sum, vin_min, vin_max; uint32_t n, n1, n2;
+    float    sum, sumsq, sum1, sum2, vin_sum, vin_min, vin_max, vin1, vin2; uint32_t n, n1, n2;
     float    i_sum, i_base; uint32_t i_n; uint8_t i_strikes; int16_t abort_detail;     /* the converter-current guard: the baseline RMS, the strikes, and what an ABORTED frame says (tenths of an ampere, -1 = no reading) */
     int16_t  unst;                            /* why the window was refused, tenths of a volt: > 0 the input moved by that much (peak to peak), < 0 the difference was noisy or had not settled (its spread) */
     uint8_t  step_i, last_step;               /* index in S_TICKS; the current step is the last one (shortened to the limit) */
@@ -43,13 +43,13 @@ static void push_frame(uint8_t step, uint16_t ticks, float vin, float dv, uint8_
     f->result = result;
 }
 
-static void reset_accum(uint32_t now) { s.t0 = now; s.i_sum = 0.0f; s.i_n = 0U; s.sum = 0.0f; s.sumsq = 0.0f; s.sum1 = 0.0f; s.sum2 = 0.0f; s.n1 = 0U; s.n2 = 0U; s.vin_sum = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
+static void reset_accum(uint32_t now) { s.t0 = now; s.i_sum = 0.0f; s.i_n = 0U; s.sum = 0.0f; s.sumsq = 0.0f; s.sum1 = 0.0f; s.sum2 = 0.0f; s.n1 = 0U; s.n2 = 0U; s.vin_sum = 0.0f; s.vin1 = 0.0f; s.vin2 = 0.0f; s.n = 0U; s.vin_min = 1.0e9f; s.vin_max = -1.0e9f; }
 static float fsqrt(float x) { float g; uint8_t k; if (x <= 0.0f) return 0.0f; g = (x > 1.0f) ? (0.5f * x) : 1.0f; for (k = 0U; k < 12U; k++) g = 0.5f * (g + x / g); return g; }       /* no math library in this module */
 static int16_t tenths(float v) { float t = v * 10.0f + 0.5f; if (t > 999.0f) t = 999.0f; if (t < -999.0f) t = -999.0f; return (int16_t)t; }
 /* one sample into the window; `el` = ms since the window's reference time, `half` = where the window's second half begins */
 static void acc_sample(float d, float vin, uint32_t el, uint32_t half)
 {
-    s.sum += d; s.sumsq += d * d; if (el < half) { s.sum1 += d; s.n1++; } else { s.sum2 += d; s.n2++; }
+    s.sum += d; s.sumsq += d * d; if (el < half) { s.sum1 += d; s.vin1 += vin; s.n1++; } else { s.sum2 += d; s.vin2 += vin; s.n2++; }
     s.vin_sum += vin; s.n++; if (vin < s.vin_min) s.vin_min = vin; if (vin > s.vin_max) s.vin_max = vin;
 }
 /* 0 = the window is good, 1 = the input moved (a real jump), 2 = the difference is noisy or has not settled. `ref` is the baseline the injection is measured from. Sets s.unst. */
@@ -57,8 +57,18 @@ static uint8_t window_check(float ref, uint8_t at_end)
 {
     float n = (float)s.n, mean, var, m1, m2, inj, d;
     if (s.n < 3U) return 0U;
-    if ((s.vin_max - s.vin_min) > TUNE_STEADY_PP_V) { s.unst = tenths(s.vin_max - s.vin_min); return 1U; }
+    if ((s.vin_max - s.vin_min) > TUNE_VIN_PP_HARD_V) { s.unst = tenths(s.vin_max - s.vin_min); return 1U; }      /* a gross swing, at once */
     if ((at_end == 0U) || (s.n < 20U)) return 0U;
+    if ((s.n1 > 0U) && (s.n2 > 0U))
+    {   /* v0.9.77: the input MOVED = its two halves differ (a step, a turned dial); ripple common to input and output does not count (the injection is output - input) */
+        float dv = (s.vin1 / (float)s.n1) - (s.vin2 / (float)s.n2); if (dv < 0.0f) dv = -dv;
+        if (dv > TUNE_VIN_DRIFT_V) { s.unst = tenths(dv); if (s.unst < 1) s.unst = 1; return 1U; }
+    }
+    if (s.st == TS_STEP)
+    {   /* ... or it has wandered away from the input the baseline was measured at */
+        float dr = (s.vin_sum / n) - s.vin_ref; if (dr < 0.0f) dr = -dr;
+        if (dr > TUNE_VIN_FROM_REF_V) { s.unst = tenths(dr); return 1U; }
+    }
     mean = s.sum / n; var = (s.sumsq / n) - (mean * mean); if (var < 0.0f) var = 0.0f;
     m1 = (s.n1 > 0U) ? (s.sum1 / (float)s.n1) : mean; m2 = (s.n2 > 0U) ? (s.sum2 / (float)s.n2) : mean;
     inj = mean - ref; if (inj < 0.0f) inj = -inj;
@@ -81,11 +91,12 @@ static uint8_t spread_acceptable(void)
 #if defined(TUNE_TEST_HOOKS)
 /* PC tests only: one measuring window of n differences d[] (1.5 s of 10 ms readings, the input steady at 230 V) judged against the baseline ref. Returns window_check()'s
  * code; *unst its reason; *accept whether a step would be accepted on it after the wait. Leaves no sweep running. */
-uint8_t Tune_TestWindow(const float *d, uint32_t n, float ref, int16_t *unst, uint8_t *accept)
+uint8_t Tune_TestWindow(const float *d, uint32_t n, float ref, int16_t *unst, uint8_t *accept) { return Tune_TestWindowVin(d, (const float *)0, n, ref, unst, accept); }
+uint8_t Tune_TestWindowVin(const float *d, const float *vin, uint32_t n, float ref, int16_t *unst, uint8_t *accept)
 {
     uint32_t k; uint8_t c;
     reset_accum(0U); s.base = ref; s.unst = 0;
-    for (k = 0U; k < n; k++) acc_sample(d[k], 230.0f, (uint32_t)(k * 10U), (uint32_t)((n * 10U) / 2U));
+    for (k = 0U; k < n; k++) acc_sample(d[k], (vin != (const float *)0) ? vin[k] : 230.0f, (uint32_t)(k * 10U), (uint32_t)((n * 10U) / 2U));
     c = window_check(ref, 1U); *unst = s.unst; *accept = (uint8_t)((c == 2U) && (spread_acceptable() != 0U));
     return c;
 }

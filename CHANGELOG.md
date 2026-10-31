@@ -2,7 +2,25 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.76 — 40 to 60 Hz mains (current)
+## v0.9.77 — autotune: input ripple no longer reads as "input moved" (current)
+* **Reported:** the toroid autotune failed again with "Input Not Steady / Input moved 8.1 V".
+* **Cause:** the input check was the spread of every 10 ms input reading in the 1.5 s window, at 8 V. On a soft supply (a variac) the converter's own current makes the input ripple as the steps grow, and the output with it: the transformer is in series, so the measured injection (output - input) does not move. 8.1 V of ripple was judged an input jump, measured again for the whole 9 s, and the sweep ended. Reproduced in the simulator: a 9 V peak-to-peak common ripple from step 5 ends v0.9.76's sweep with "Input moved 8.9 V".
+* **Change (slave):** the input has MOVED, and the window is measured again, when any of these holds:
+  * the means of the window's two halves differ by more than 4 V (`TUNE_VIN_DRIFT_V`): a step, a turned dial;
+  * a step's window average is more than 12 V from the input the baseline was measured at (`TUNE_VIN_FROM_REF_V`), since the gain depends on the input voltage;
+  * the readings spread more than 20 V at all (`TUNE_VIN_PP_HARD_V`).
+  * Ripple below that, common to input and output, is no longer refused. `TUNE_STEADY_PP_V` is gone.
+* **Tests:**
+  * the 9 V ripple from step 5 finishes with the gain scale within 5 %;
+  * a 22 V ripple still gives up, saying "input moved";
+  * the window judge directly: a 7 V step between the halves is "input moved", 9 V of ripple is good, 21 V of ripple is beyond the limit;
+  * a mains wandering 200 V/s still gives up (the 12 V rule);
+  * **changed expectation:** an input that starts to swing 18 V peak to peak (2.3 s period) after 15 s now either gives up within 30 s or finishes with the right gain (it finishes, gain right). Before, it gave up within 15 s. Each step still holds its duty for at most 9 s, and the overshoot guard is unchanged.
+* **Mutations:** 6, all caught. One (no drift check) only after the direct window test: in the simulator the output follows the input instantly, so an input step never shows in the sweep.
+* Full runner: ALL TESTS PASSED, 0 warnings. **Slave only.**
+* **Not proven on hardware:** re-run the toroid autotune. A soft variac is the likely source of the ripple; a stiffer supply helps in any case.
+
+## v0.9.76 — 40 to 60 Hz mains
 * **Your request:** check from 40 to 60 Hz. The simulator had only ever run at 50 Hz. Run at 40, 45, 55 and 60 Hz, it found two firmware limits:
   1. **40 Hz did not start.** The half-cycle (12.5 ms) was exactly the firmware's limit for a valid zero-cross spacing (`CTRL_EVENT_MAX_US` 12500), so the slightest edge jitter rejected every half-cycle and the slave waited in SYNC for ever. The frequency measurement had the same edge (25 000 us = exactly 40 Hz); outside it the RMS window falls back to 50 Hz, which is not a whole cycle at 40 Hz.
   2. **60 Hz: an early zero-cross signal tripped F16.** At 300 V a signal 120 us before the true zero tripped F16 at 60 Hz but not at 50 Hz, because the line passes the 30 V last-moment check sooner. In production (glitch skip, ride-through) every such half-cycle would be skipped and the unit would trip within about 0.5 s.
