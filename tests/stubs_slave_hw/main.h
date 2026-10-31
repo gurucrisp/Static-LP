@@ -15,8 +15,8 @@ extern FLASH_TypeDef flash_m;
 HAL_StatusTypeDef HAL_FLASH_Unlock(void); HAL_StatusTypeDef HAL_FLASH_Lock(void); uint32_t HAL_FLASH_GetError(void);
 /* v0.9.79: the user option byte and the reset flags (the BOR check) */
 #define FLASH_OPTR_BOR_EN   (0x1UL << 8U)
-#define FLASH_OPTR_BORF_LEV (0x3UL << 9U)
-#define FLASH_OPTR_BORR_LEV (0x3UL << 11U)
+#define FLASH_OPTR_BORR_LEV (0x3UL << 9U)       /* as ST's stm32g0b1xx.h: rising [10:9], falling [12:11] */
+#define FLASH_OPTR_BORF_LEV (0x3UL << 11U)
 typedef struct { volatile uint32_t CSR; } RCC_TypeDef;
 extern RCC_TypeDef rcc_m;
 #define RCC (&rcc_m)

@@ -17,10 +17,12 @@
 
 #include <stdint.h>
 
-/* FLASH_OPTR of the STM32G0 (RM0444): RDP [7:0], BOR_EN bit 8, BORF_LEV [10:9] (falling), BORR_LEV [12:11] (rising) */
+/* FLASH_OPTR of the STM32G0B1 (ST's stm32g0b1xx.h): RDP [7:0], BOR_EN bit 8, BORR_LEV [10:9] (RISING), BORF_LEV [12:11] (FALLING).
+ * v0.9.80: v0.9.79 had the two level fields the other way round; the build guard in slave_flash.c refused it on the real headers (both are written to the same
+ * level, so the bits written would have been the same) */
 #define BOR_OPTR_EN        (1UL << 8)
-#define BOR_OPTR_F_POS     9U
-#define BOR_OPTR_R_POS     11U
+#define BOR_OPTR_R_POS     9U
+#define BOR_OPTR_F_POS     11U
 #define BOR_OPTR_MASK      (BOR_OPTR_EN | (3UL << BOR_OPTR_F_POS) | (3UL << BOR_OPTR_R_POS))
 #ifndef SLAVE_BOR_LEVEL
 #define SLAVE_BOR_LEVEL    3U          /* 0..3: falling about 2.0 / 2.2 / 2.5 / 2.8 V, rising about 2.1 / 2.3 / 2.6 / 2.9 V */

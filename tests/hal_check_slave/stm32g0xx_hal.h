@@ -162,8 +162,8 @@ HAL_StatusTypeDef HAL_TIMEx_ConfigBreakDeadTime(TIM_HandleTypeDef *htim, TIM_Bre
 typedef struct { volatile uint32_t ACR, RES0, KEYR, OPTKEYR, SR, CR, ECCR, ECC2R, OPTR; } FLASH_TypeDef;
 #define FLASH ((FLASH_TypeDef *)0x40022000UL)
 #define FLASH_OPTR_BOR_EN   (0x1UL << 8U)
-#define FLASH_OPTR_BORF_LEV (0x3UL << 9U)
-#define FLASH_OPTR_BORR_LEV (0x3UL << 11U)
+#define FLASH_OPTR_BORR_LEV (0x3UL << 9U)       /* as ST's stm32g0b1xx.h: rising [10:9], falling [12:11] */
+#define FLASH_OPTR_BORF_LEV (0x3UL << 11U)
 #define FLASH_OPTR_DBANK    (0x1UL << 21U)
 #define RCC_CSR_OBLRSTF     0x02000000U
 typedef struct { uint32_t TypeErase, Banks, Page, NbPages; } FLASH_EraseInitTypeDef;

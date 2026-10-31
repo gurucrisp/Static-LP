@@ -2,7 +2,19 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.79 — the start check tolerates a small output wobble; the brown-out reset is switched on at power-up (current)
+## v0.9.80 — v0.9.79's BOR check builds on the real STM32G0B1 headers (current)
+* **Reported:** the slave build stopped in slave_flash.c with `#error "slave_bor.h: the BOR bit positions do not match this device's FLASH_OPTR"`.
+* **My mistake:** slave_bor.h had the two BOR level fields swapped. ST's stm32g0b1xx.h has BORR_LEV (rising) at bits 10:9 and BORF_LEV (falling) at 12:11. The PC's HAL stand-in carried the same wrong assumption, so the PC compile check could not see it; the guard I had put in for exactly this refused it on your build. No wrong bits would have been written (both fields are set to level 3, the same four bits), but the names were wrong.
+* **Fix:** the positions are taken from ST's header (fetched and read), in slave_bor.h and in both PC stand-ins. Checked on the PC against ST's actual defines:
+  * the guard passes;
+  * `RCC_CSR_OBLRSTF` is bit 25, as used;
+  * the HAL calls and fields exist with these names in ST's G0 HAL;
+  * `HAL_FLASHEx_OBProgram` with `OPTIONBYTE_USER` keeps the current read protection and changes only the `USERType` bits;
+  * our mask (0x1F00) equals ST's `OB_USER_BOR_EN | OB_USER_BOR_LEV`.
+* **Tests:** the BOR test now also checks the field positions against ST's layout, that a falling-only or rising-only level 3 is not enough, and that the wanted value is 0x1F00 on top of the rest. Full runner: ALL TESTS PASSED, 0 warnings.
+* Everything else as v0.9.79 (the in-band average and hysteresis, the BOR check at power-up, NOBOR on the master). **Flash the master and the slaves.**
+
+## v0.9.79 — the start check tolerates a small output wobble; the brown-out reset is switched on at power-up (does NOT build: use v0.9.80)
 ### 1. In band: averaged, with hysteresis (slave)
 * **Reported (video):** with a toroid the output wandered 227 to 231 V at 213 V in, the display flipped between "At Setpoint" and "To 230 V (227)", and the unit never turned on.
 * **Cause:** the master closes the contactor only after the slave has reported IN_BAND for 1 s without a break, and the slave judged it on every 10 ms output reading at +-2 V. Each touch of 227 or 231 V started the second again.

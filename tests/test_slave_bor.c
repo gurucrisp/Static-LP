@@ -30,6 +30,12 @@ int main(void)
         o = (factory & ~BOR_OPTR_MASK) | (3UL << BOR_OPTR_F_POS) | (3UL << BOR_OPTR_R_POS);
         CHECK(Bor_Decide(o, 0U) == BOR_PROGRAM, "levels 3 but BOR_EN off: programmed");
     }
+    {   /* v0.9.80: the real STM32G0B1 positions (ST's header): rising [10:9], falling [12:11]; a falling level 3 with rising 0 (0x1900) is not enough, and the wanted
+         * value sets exactly 0x1F00 on top of the rest */
+        CHECK(BOR_OPTR_R_POS == 9U && BOR_OPTR_F_POS == 11U && BOR_OPTR_MASK == 0x1F00UL, "the BOR fields sit where ST's header puts them (mask 0x%04lX)", (unsigned long)BOR_OPTR_MASK);
+        CHECK(Bor_IsSet(0x1900UL) == 0U && Bor_IsSet(0x0700UL) == 0U && Bor_IsSet(0x1F00UL) == 1U, "falling-only or rising-only at level 3: not enough; both: set");
+        CHECK((Bor_Wanted(0UL) & BOR_OPTR_MASK) == 0x1F00UL, "the wanted value is BOR_EN + both levels 3 (0x%04lX)", (unsigned long)(Bor_Wanted(0UL) & BOR_OPTR_MASK));
+    }
     {   /* a read-protected chip (RDP level 1, 0xBB): the byte must survive */
         uint32_t o = (factory & ~0xFFUL) | 0xBBUL;
         CHECK((Bor_Wanted(o) & 0xFFUL) == 0xBBUL, "RDP level 1 is kept as it is (0x%02X)", (unsigned)(Bor_Wanted(o) & 0xFFUL));
