@@ -74,7 +74,7 @@ extern "C" {
 
 /* Inrush and power-stage trips (the slave's hardware break / FLT, its power-stage codes, the CT peak): how many times the master RETRIES, 30 s apart, before it latches until power off and on.
  * 3 = the approved rule (D27). 0 = latch at the FIRST trip: use 0 while a repaired power stage is being commissioned, so that no retry ever re-energises a stage that may still be faulty. */
-#define MASTER_INRUSH_RETRIES   3        /* v0.9.47: 3 (the approved rule): an inrush or power-stage trip is retried after the Restart Time (at least 30 s) up to 3 times, then a 5 minute wait and ONE more attempt, then it latches. 0 = latch at the first trip (commissioning, a stage under repair). */
+#define MASTER_INRUSH_RETRIES   1        /* v0.9.75: 1 in the final code (your choice; v0.9.47-v0.9.74: 3, the approved rule): an inrush or power-stage trip is retried ONCE after the Restart Time (at least 30 s), then a 5 minute wait and ONE more attempt, then it latches (two automatic restarts in all). With SLAVE_FLT_CBC 1 an F02 that gets through is almost always real, and the gate drivers have no desaturation protection. 0 = latch at the first trip (commissioning, a stage under repair). */
 
 /* The real-time clock (STM32G070 RTC, 32.768 kHz crystal, backup battery on VBAT) for the fault-log time stamps and the Date / Time items in Set-Mode. 1 = on. The driver (master_rtc.c) uses direct register access: it does NOT need the HAL RTC
  * module or a CubeMX RTC configuration, but the board must have the crystal on PC14/PC15 and a battery on VBAT. If the crystal does not start within 3 s the internal LSI (inaccurate) is used. 0 = no clock: the log shows the running time. */

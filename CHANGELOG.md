@@ -2,7 +2,17 @@
 
 Each entry is a git tag. One tag = one delivered package. `python tools/which_version.py slave <your Core folder>` tells you which tag a folder on your PC matches.
 
-## v0.9.74 — the converter-current burden is 120 ohm in the final code (current)
+## v0.9.75 — final protection settings: cycle-by-cycle limit on, one inrush retry (current)
+* **Your choice:**
+  * `SLAVE_FLT_CBC` **1** in the production slave config (was 0).
+  * `MASTER_INRUSH_RETRIES` **1** in master_monitor.h (was 3).
+* **CBC 1:** the boards see comparator noise pulses (F counts while running with nothing switching), and with 0 each one was an F02 trip. With 1 a pulse in RUN only cuts the PWM until the next PWM period. FLT held 1 ms, or more than 40 pulses in 10 ms, is still the full F02 shutdown with the low sides on. `SLAVE_FLT_FILTER_US` stays 0. Go back to 0 once the comparator input is filtered and F stays near 0 in ageing.
+* **Retries 1:** an F01 / F02 / power-stage trip is retried once after the Restart Time (at least 30 s). If that trips too, the unit waits 5 minutes and makes ONE final attempt, then latches until START: two automatic restarts in all (the existing engine rule; the test "1 retry: one retry, the long wait, one extra attempt, then the latch" covers it). With CBC on, an F02 that gets through is almost always real, and the gate drivers have no desaturation protection. Use 0 while commissioning a repaired stage.
+* **New runner check:** the production slave config must have `SLAVE_FLT_CBC 1` and `SLAVE_FLT_FILTER_US 0U`, and master_monitor.h `MASTER_INRUSH_RETRIES 1`. It was checked to fail with the retries set back to 3.
+* The production config with CBC on compiles cleanly in the glue check. The cycle-by-cycle limit itself has run through the whole harness since v0.9.66 (`s3_flt_cbc`). Full runner: ALL TESTS PASSED, 0 warnings. **Flash the master and the slaves.**
+* **Not proven on hardware:** scope one leg's gates on a FLT pulse (high side off at once, low side on after the dead time, PWM back at the next period) before shipping with CBC on.
+
+## v0.9.74 — the converter-current burden is 120 ohm in the final code
 * **Your request:** the final code has the burden at 120.0. `IOUT_BURDEN_R_EACH_OHM` is now 120.0f in slave_iout.h (the default) and in the production slave_config.h (and its identical copy in configs/). 120 ohm x 3 = 40 ohm gives:
   * 0.1088 V per ampere;
   * 7.4 mA per count;
